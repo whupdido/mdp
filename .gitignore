@@ -1,0 +1,24 @@
+# Build output
+Debug/
+Release/
+*.o
+*.d
+*.su
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# CubeIDE / Eclipse workspace state
+.metadata/
+.settings/
+*.launch
+RemoteSystemsTempFiles/
+
+# CubeMX
+.mxproject
+
+# OS
+Thumbs.db
+.DS_Store
