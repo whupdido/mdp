@@ -10,7 +10,12 @@ void servo_init(void)
 
 void servo_us(uint16_t us)
 {
-    if (us < 900u)  us = 900u;
+    /* Clamp to the verified mechanical range. Commanding outside this does
+       not steer any further -- it just stalls the servo against its stop
+       for the whole duration of the move. Keep these in step with
+       SERVO_LEFT / SERVO_RIGHT in calib.h. */
+    if (us < 1000u) us = 1000u;
     if (us > 2100u) us = 2100u;
+
     __HAL_TIM_SET_COMPARE(&htim12, TIM_CHANNEL_2, us);
 }

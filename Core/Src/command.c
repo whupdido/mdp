@@ -68,10 +68,23 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     }
 }
 
-/* Protocol:  FW090  forward 90 cm      BW050  back 50 cm
-              FL000  fwd-left 90 deg    FR000  fwd-right 90 deg
-              BL000  rev-left 90 deg    BR000  rev-right 90 deg
-              STOP                                             */
+/* Protocol
+ *   FWxxx   forward xxx cm          BWxxx   backward xxx cm
+ *   FLxxx   forward-left  xxx deg   FRxxx   forward-right  xxx deg
+ *   BLxxx   reverse-left  xxx deg   BRxxx   reverse-right  xxx deg
+ *   STOP    abort the current move
+ *
+ * Turn angle is 1..360 degrees; xxx = 000 means 90 for backwards
+ * compatibility, so FL000 still turns 90 degrees.
+ *
+ * Replies
+ *   DONE      move completed normally
+ *   STALL     aborted: both wheels stopped turning for 1 s
+ *   TIMEOUT   aborted: exceeded 20 s
+ *   ACK       STOP acknowledged
+ *   BUSY      a move was already running; this command was DISCARDED
+ *   ERR       unrecognised command
+ */
 static void dispatch(const char *cmd)
 {
     if (strncmp(cmd, "STOP", 4) == 0) { motion_stop(); command_send("ACK\r\n"); return; }
@@ -82,15 +95,15 @@ static void dispatch(const char *cmd)
 
     if      (!strncmp(cmd, "FW", 2)) move_straight_mm( arg * 10);
     else if (!strncmp(cmd, "BW", 2)) move_straight_mm(-arg * 10);
-    else if (!strncmp(cmd, "FL", 2)) move_turn(1, 1, TURN_COUNTS_FL);
-    else if (!strncmp(cmd, "FR", 2)) move_turn(0, 1, TURN_COUNTS_FR);
-    else if (!strncmp(cmd, "BL", 2)) move_turn(1, 0, TURN_COUNTS_BL);
-    else if (!strncmp(cmd, "BR", 2)) move_turn(0, 0, TURN_COUNTS_BR);
+    else if (!strncmp(cmd, "FL", 2)) move_turn_deg(1, 1, arg);
+    else if (!strncmp(cmd, "FR", 2)) move_turn_deg(0, 1, arg);
+    else if (!strncmp(cmd, "BL", 2)) move_turn_deg(1, 0, arg);
+    else if (!strncmp(cmd, "BR", 2)) move_turn_deg(0, 0, arg);
     else { command_send("ERR\r\n"); return; }
 
     /* A zero-length move (e.g. FW000) never arms the state machine, so it
        would otherwise sit here waiting for a motion that never starts. */
-    if (!motion_busy()) { command_send("ACK\r\n"); return; }
+    if (!motion_busy()) { command_send("DONE\r\n"); return; }
 
     awaiting_ack = 1u;
 }
@@ -103,9 +116,18 @@ void command_poll(void)
         line_ready = 0u;              /* release the buffer before dispatch */
         dispatch(local);
     }
-    /* Only ACK once the movement has genuinely finished. */
+
+    /* Report only once the movement has genuinely finished, and say HOW it
+       finished. A stalled move used to be indistinguishable from a completed
+       one, so the Pi would keep dead-reckoning from a position the robot
+       never reached. */
     if (awaiting_ack && !motion_busy()) {
         awaiting_ack = 0u;
-        command_send("ACK\r\n");
+        switch (motion_result()) {
+            case MOVE_DONE:    command_send("DONE\r\n");    break;
+            case MOVE_STALL:   command_send("STALL\r\n");   break;
+            case MOVE_TIMEOUT: command_send("TIMEOUT\r\n"); break;
+            default:           command_send("ACK\r\n");     break;
+        }
     }
 }

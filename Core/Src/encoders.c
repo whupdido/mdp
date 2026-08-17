@@ -33,7 +33,7 @@ void encoders_sample(void)
 
     /* Unsigned subtract then cast to signed handles wraparound. */
     enc_left_delta  = (int32_t)(now_l - last_l);
-    enc_right_delta = -(int32_t)(int16_t)(now_r - last_r);
+    enc_right_delta = -(int32_t)(int16_t)(now_r - last_r);  /* verified: right encoder counts backwards */
 
     last_l = now_l;
     last_r = now_r;
