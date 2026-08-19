@@ -490,12 +490,12 @@ class ArenaView @JvmOverloads constructor(
         const val COLOR_FRAME = 0xFF44555F.toInt()
         const val COLOR_START = 0x24F0A82E
         const val COLOR_AXIS = 0xFF7B8A93.toInt()
-        const val COLOR_OBSTACLE = 0xFF232B33.toInt()
-        const val COLOR_OBSTACLE_EDGE = 0xFF4A5A66.toInt()
+        const val COLOR_OBSTACLE = 0xFF3C4A55.toInt()
+        const val COLOR_OBSTACLE_EDGE = 0xFF7B8F9E.toInt()
         const val COLOR_TARGET_FACE = 0xFFFF5A3C.toInt()
-        const val COLOR_ROBOT = 0xFF1D6F94.toInt()
+        const val COLOR_ROBOT = 0xFF2489B8.toInt()
         const val COLOR_ROBOT_EDGE = 0xFF3FA8DE.toInt()
-        const val COLOR_ROBOT_NOSE = 0xFF9BE0FF.toInt()
+        const val COLOR_ROBOT_NOSE = 0xFFEAF8FF.toInt()
         const val COLOR_TRAIL = 0x552FA8DE
         const val COLOR_HIGHLIGHT = 0xFFF0A82E.toInt()
         const val COLOR_DANGER = 0xCCB0402A.toInt()

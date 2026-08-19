@@ -42,7 +42,7 @@
             android:resizeableActivity="true"
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.AndroidApp.NoActionBar"
-            android:windowSoftInputMode="adjustResize"
+            android:windowSoftInputMode="adjustNothing"
             tools:ignore="DiscouragedApi,LockedOrientationActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

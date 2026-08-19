@@ -1,6 +1,7 @@
 package com.example.androidapp
 
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -214,15 +215,33 @@ class MainActivity : AppCompatActivity() {
     private fun wireTrafficDrawer() {
         ui.btnTraffic.setOnClickListener { toggleTraffic() }
         ui.btnInject.setOnClickListener { injectTyped() }
-        ui.injectField.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_SEND) { injectTyped(); true } else false
+        // Soft keyboards disagree about which action a plain Enter reports, and
+        // some report none at all, so accept the lot rather than only SEND.
+        ui.injectField.setOnEditorActionListener { _, actionId, event ->
+            val enterPressed = event?.keyCode == KeyEvent.KEYCODE_ENTER &&
+                event.action == KeyEvent.ACTION_DOWN
+            when (actionId) {
+                EditorInfo.IME_ACTION_SEND,
+                EditorInfo.IME_ACTION_DONE,
+                EditorInfo.IME_ACTION_GO,
+                EditorInfo.IME_ACTION_NEXT,
+                EditorInfo.IME_ACTION_UNSPECIFIED -> { injectTyped(); true }
+                else -> if (enterPressed) { injectTyped(); true } else false
+            }
         }
     }
 
+    /**
+     * Status and Traffic occupy the same slot. The side column on a Tab A7
+     * Lite is only about 600dp tall and the panels above and below it are
+     * fixed, so showing both text panels at once leaves neither with room for
+     * any text.
+     */
     private fun toggleTraffic() {
-        val showing = ui.trafficPanel.visibility == View.VISIBLE
-        ui.trafficPanel.visibility = if (showing) View.GONE else View.VISIBLE
-        ui.btnTraffic.text = if (showing) "⌄" else "⌃"
+        val showingTraffic = ui.trafficPanel.visibility == View.VISIBLE
+        ui.trafficPanel.visibility = if (showingTraffic) View.GONE else View.VISIBLE
+        ui.statusPanel.visibility = if (showingTraffic) View.VISIBLE else View.GONE
+        ui.btnTraffic.text = if (showingTraffic) "⌄" else "⌃"
     }
 
     private fun injectTyped() {

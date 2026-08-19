@@ -23,7 +23,7 @@
             android:id="@+id/arena"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_gravity="center"
+            android:layout_gravity="center_vertical|start"
             android:contentDescription="@string/arena_description" />
 
         <TextView
@@ -143,8 +143,15 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
+        <!--
+          Status and Traffic share this one slot rather than stacking. The Tab
+          A7 Lite only gives the side column about 600dp, and the fixed panels
+          above and below already claim most of it — showing both text panels
+          at once left each with no room for any text at all.
+        -->
         <!-- ====================== Status box, C.4 ====================== -->
         <LinearLayout
+            android:id="@+id/statusPanel"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_marginTop="10dp"
@@ -177,6 +184,83 @@
                     android:textSize="12sp"
                     tools:text="10:02:11  Connected to raspberrypi." />
             </ScrollView>
+        </LinearLayout>
+
+        <!-- ====================== Traffic drawer ====================== -->
+        <!--
+          Shares the flexible space with the status box rather than taking a
+          fixed height. On the Tab A7 Lite the side column only has about
+          600dp to work with, and a fixed drawer pushed the drive pad off the
+          bottom the moment it opened.
+        -->
+        <LinearLayout
+            android:id="@+id/trafficPanel"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:minHeight="90dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_panel"
+            android:orientation="vertical"
+            android:padding="12dp"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/section_debug"
+                style="@style/Caption" />
+
+            <ScrollView
+                android:id="@+id/logScroll"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="6dp"
+                android:layout_weight="1"
+                android:scrollbars="vertical">
+
+                <TextView
+                    android:id="@+id/logBox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/arena_text_muted"
+                    android:textSize="11sp"
+                    tools:text="10:02:14  RX  ROBOT,7,2,W" />
+            </ScrollView>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal">
+
+                <EditText
+                    android:id="@+id/injectField"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:autofillHints="off"
+                    android:background="@drawable/bg_field"
+                    android:fontFamily="monospace"
+                    android:hint="@string/inject_hint"
+                    android:imeOptions="actionSend"
+                    android:inputType="textCapCharacters|textNoSuggestions"
+                    android:paddingHorizontal="10dp"
+                    android:textColor="@color/arena_text"
+                    android:textColorHint="@color/arena_text_faint"
+                    android:textSize="11sp" />
+
+                <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnInject"
+                    style="@style/PadButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="38dp"
+                    android:text="@string/inject" />
+            </LinearLayout>
         </LinearLayout>
 
         <!-- ====================== Drive pad, C.3 ====================== -->
@@ -289,19 +373,25 @@
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnDistDown"
+                    android:insetLeft="0dp"
+                    android:insetRight="0dp"
                     style="@style/PadButton"
                     android:layout_width="44dp"
                     android:layout_height="40dp"
-                    android:text="−10" />
+                    android:maxLines="1"
+                    android:text="−" />
 
                 <Space android:layout_width="6dp" android:layout_height="1dp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnDistUp"
+                    android:insetLeft="0dp"
+                    android:insetRight="0dp"
                     style="@style/PadButton"
                     android:layout_width="44dp"
                     android:layout_height="40dp"
-                    android:text="+10" />
+                    android:maxLines="1"
+                    android:text="+" />
 
                 <Space android:layout_width="6dp" android:layout_height="1dp" />
 
@@ -360,73 +450,5 @@
                 android:text="⌄" />
         </LinearLayout>
 
-        <!-- ====================== Traffic drawer ====================== -->
-        <LinearLayout
-            android:id="@+id/trafficPanel"
-            android:layout_width="match_parent"
-            android:layout_height="176dp"
-            android:layout_marginTop="10dp"
-            android:background="@drawable/bg_panel"
-            android:orientation="vertical"
-            android:padding="12dp"
-            android:visibility="gone"
-            tools:visibility="visible">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/section_debug"
-                style="@style/Caption" />
-
-            <ScrollView
-                android:id="@+id/logScroll"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_marginTop="6dp"
-                android:layout_weight="1"
-                android:scrollbars="vertical">
-
-                <TextView
-                    android:id="@+id/logBox"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:textColor="@color/arena_text_muted"
-                    android:textSize="11sp"
-                    tools:text="10:02:14  RX  ROBOT,7,2,W" />
-            </ScrollView>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="horizontal">
-
-                <EditText
-                    android:id="@+id/injectField"
-                    android:layout_width="0dp"
-                    android:layout_height="38dp"
-                    android:layout_weight="1"
-                    android:autofillHints="off"
-                    android:background="@drawable/bg_field"
-                    android:fontFamily="monospace"
-                    android:hint="@string/inject_hint"
-                    android:imeOptions="actionSend"
-                    android:inputType="textCapCharacters|textNoSuggestions"
-                    android:paddingHorizontal="10dp"
-                    android:textColor="@color/arena_text"
-                    android:textColorHint="@color/arena_text_faint"
-                    android:textSize="11sp" />
-
-                <Space android:layout_width="6dp" android:layout_height="1dp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnInject"
-                    style="@style/PadButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="38dp"
-                    android:text="@string/inject" />
-            </LinearLayout>
-        </LinearLayout>
     </LinearLayout>
 </LinearLayout>
