@@ -1,23 +1,432 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-Wrap the DrawerLayout with FrameLayout to use the same View type for the same view ID
-across the layout configurations
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One screen, landscape, tablet-first. The arena takes as much room as it can
+  and stays square; everything Peter's half needs sits in a fixed column beside
+  it. No drawer and no tabs: during a timed run nobody should have to navigate.
 -->
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/activity_container"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/arena_ground"
+    android:orientation="horizontal"
+    android:padding="10dp"
+    tools:context=".MainActivity">
 
-    <androidx.drawerlayout.widget.DrawerLayout
-        android:id="@+id/drawer_layout"
-        android:layout_width="match_parent"
+    <!-- ============================ ARENA ============================ -->
+    <FrameLayout
+        android:layout_width="0dp"
         android:layout_height="match_parent"
-        android:fitsSystemWindows="true">
+        android:layout_weight="1">
 
-        <include
-            android:id="@+id/app_bar_main"
-            layout="@layout/app_bar_main"
+        <com.example.androidapp.arena.ArenaView
+            android:id="@+id/arena"
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
+            android:layout_height="match_parent"
+            android:layout_gravity="center"
+            android:contentDescription="@string/arena_description" />
 
-    </androidx.drawerlayout.widget.DrawerLayout>
-</FrameLayout>
+        <TextView
+            android:id="@+id/hoverChip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_margin="8dp"
+            android:background="@drawable/bg_chip"
+            android:fontFamily="monospace"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="5dp"
+            android:textColor="@color/arena_accent"
+            android:textSize="12sp"
+            android:visibility="invisible"
+            tools:text="(12, 15)  ·  120,150 cm"
+            tools:visibility="visible" />
+
+        <TextView
+            android:id="@+id/robotChip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="8dp"
+            android:background="@drawable/bg_chip"
+            android:fontFamily="monospace"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="5dp"
+            android:textColor="@color/arena_robot"
+            android:textSize="12sp"
+            tools:text="ROBOT (1, 1) N" />
+    </FrameLayout>
+
+    <!-- =========================== SIDE PANEL ========================= -->
+    <LinearLayout
+        android:layout_width="332dp"
+        android:layout_height="match_parent"
+        android:layout_marginStart="10dp"
+        android:orientation="vertical">
+
+        <!-- ====================== Robot link, C.1/C.2/C.8 ====================== -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_panel"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/section_link"
+                style="@style/Caption" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <View
+                    android:id="@+id/statusDot"
+                    android:layout_width="9dp"
+                    android:layout_height="9dp"
+                    android:background="@drawable/bg_dot"
+                    android:backgroundTint="@color/arena_text_faint" />
+
+                <TextView
+                    android:id="@+id/linkStateText"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@color/arena_text"
+                    android:textSize="13sp"
+                    tools:text="Connected to raspberrypi" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnConnect"
+                    style="@style/PadButton.Accent"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="@string/connect" />
+
+                <Space
+                    android:layout_width="8dp"
+                    android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDisconnect"
+                    style="@style/PadButton"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="@string/disconnect" />
+            </LinearLayout>
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/switchSimulator"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:minHeight="36dp"
+                android:text="@string/simulator_mode"
+                android:textColor="@color/arena_text_muted"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- ====================== Status box, C.4 ====================== -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="10dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_panel"
+            android:minHeight="90dp"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/section_status"
+                style="@style/Caption" />
+
+            <ScrollView
+                android:id="@+id/statusScroll"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="6dp"
+                android:layout_weight="1"
+                android:scrollbars="vertical">
+
+                <TextView
+                    android:id="@+id/statusBox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:lineSpacingExtra="2dp"
+                    android:textColor="@color/arena_text"
+                    android:textSize="12sp"
+                    tools:text="10:02:11  Connected to raspberrypi." />
+            </ScrollView>
+        </LinearLayout>
+
+        <!-- ====================== Drive pad, C.3 ====================== -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_panel"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/section_drive"
+                    style="@style/Caption" />
+
+                <TextView
+                    android:id="@+id/stepReadout"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/arena_text_muted"
+                    android:textSize="11sp"
+                    tools:text="10 cm · 90°" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnFwdLeft"
+                    style="@style/PadButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="@string/drive_fwd_left" />
+
+                <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnForward"
+                    style="@style/PadButton.Accent"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="@string/drive_forward" />
+
+                <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnFwdRight"
+                    style="@style/PadButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="@string/drive_fwd_right" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnBackLeft"
+                    style="@style/PadButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="@string/drive_back_left" />
+
+                <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnBackward"
+                    style="@style/PadButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="@string/drive_back" />
+
+                <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnBackRight"
+                    style="@style/PadButton"
+                    android:layout_width="0dp"
+                    android:layout_height="44dp"
+                    android:layout_weight="1"
+                    android:text="@string/drive_back_right" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDistDown"
+                    style="@style/PadButton"
+                    android:layout_width="44dp"
+                    android:layout_height="40dp"
+                    android:text="−10" />
+
+                <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDistUp"
+                    style="@style/PadButton"
+                    android:layout_width="44dp"
+                    android:layout_height="40dp"
+                    android:text="+10" />
+
+                <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnStop"
+                    style="@style/PadButton.Danger"
+                    android:layout_width="0dp"
+                    android:layout_height="40dp"
+                    android:layout_weight="1"
+                    android:text="@string/drive_stop" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ====================== Map actions ====================== -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnUndo"
+                style="@style/PadButton"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="@string/undo" />
+
+            <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnClear"
+                style="@style/PadButton"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="@string/clear" />
+
+            <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnDemo"
+                style="@style/PadButton"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:text="@string/demo_layout" />
+
+            <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnTraffic"
+                style="@style/PadButton"
+                android:layout_width="44dp"
+                android:layout_height="40dp"
+                android:text="⌄" />
+        </LinearLayout>
+
+        <!-- ====================== Traffic drawer ====================== -->
+        <LinearLayout
+            android:id="@+id/trafficPanel"
+            android:layout_width="match_parent"
+            android:layout_height="176dp"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/bg_panel"
+            android:orientation="vertical"
+            android:padding="12dp"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/section_debug"
+                style="@style/Caption" />
+
+            <ScrollView
+                android:id="@+id/logScroll"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="6dp"
+                android:layout_weight="1"
+                android:scrollbars="vertical">
+
+                <TextView
+                    android:id="@+id/logBox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/arena_text_muted"
+                    android:textSize="11sp"
+                    tools:text="10:02:14  RX  ROBOT,7,2,W" />
+            </ScrollView>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal">
+
+                <EditText
+                    android:id="@+id/injectField"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:autofillHints="off"
+                    android:background="@drawable/bg_field"
+                    android:fontFamily="monospace"
+                    android:hint="@string/inject_hint"
+                    android:imeOptions="actionSend"
+                    android:inputType="textCapCharacters|textNoSuggestions"
+                    android:paddingHorizontal="10dp"
+                    android:textColor="@color/arena_text"
+                    android:textColorHint="@color/arena_text_faint"
+                    android:textSize="11sp" />
+
+                <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnInject"
+                    style="@style/PadButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="38dp"
+                    android:text="@string/inject" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>
