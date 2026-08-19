@@ -1,25 +1,51 @@
 <resources>
-    <string name="app_name">AndroidApp</string>
-    <string name="navigation_drawer_open">Open navigation drawer</string>
-    <string name="navigation_drawer_close">Close navigation drawer</string>
-    <string name="nav_header_title">Android Studio</string>
-    <string name="nav_header_subtitle">android.studio@android.com</string>
-    <string name="nav_header_desc">Navigation header</string>
-    <string name="action_settings">Settings</string>
+    <string name="app_name">MDP Arena</string>
 
-    <string name="menu_transform">Transform</string>
-    <string name="menu_reflow">Reflow</string>
-    <string name="menu_slideshow">Slideshow</string>
-    <string name="menu_settings">Settings</string>
+    <!-- Connection -->
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="scan">Scan</string>
+    <string name="stop_scan">Stop</string>
+    <string name="choose_device">Choose a device</string>
+    <string name="paired_devices">Paired</string>
+    <string name="nearby_devices">Nearby</string>
+    <string name="no_devices">No devices yet. Touch Scan.</string>
+    <string name="simulator_mode">Simulator</string>
 
-    <string name="lorem_ipsum_title">Lorem Ipsum"</string>
-    <string name="lorem_ipsum">Lorem Ipsum is simply placeholder text of the printing and
-        typesetting industry. Lorem Ipsum has been the industry\'s standard placeholder text ever
-        since the 1500s, when an unknown printer took a galley of type and scrambled it to make a
-        type specimen book"
-    </string>
-    <string name="fab_content_description">Represents a view to invoke an action</string>
-    <string name="image_view_item_transform_content_description">Represents an image view in the
-        item
-    </string>
+    <!-- Panels -->
+    <string name="section_link">Robot link</string>
+    <string name="section_status">Status</string>
+    <string name="section_drive">Drive</string>
+    <string name="section_map">Map</string>
+    <string name="section_debug">Traffic</string>
+
+    <!-- Drive -->
+    <string name="drive_forward">Forward</string>
+    <string name="drive_back">Back</string>
+    <string name="drive_fwd_left">Fwd-left</string>
+    <string name="drive_fwd_right">Fwd-right</string>
+    <string name="drive_back_left">Back-left</string>
+    <string name="drive_back_right">Back-right</string>
+    <string name="drive_stop">Stop</string>
+
+    <!-- Map actions -->
+    <string name="undo">Undo</string>
+    <string name="clear">Clear</string>
+    <string name="demo_layout">Demo</string>
+
+    <!-- Debug -->
+    <string name="inject_hint">Inject an inbound line, e.g. ROBOT,7,2,W</string>
+    <string name="inject">Inject</string>
+    <string name="clear_log">Clear</string>
+
+    <string name="permission_needed">Bluetooth permission is needed to scan and connect.</string>
+    <string name="bluetooth_off">Turn Bluetooth on to connect.</string>
+    <string name="arena_description">Arena map. Touch an empty cell to add an obstacle, drag to move it, drag it off the map to delete it, and touch an obstacle to set its target face.</string>
+
+    <!-- Formats -->
+    <string name="hover_format" translatable="false">(%1$d, %2$d)  ·  %3$d,%4$d cm</string>
+    <string name="robot_format" translatable="false">ROBOT (%1$d, %2$d) %3$c</string>
+    <string name="step_format" translatable="false">%1$d cm · %2$d°</string>
+    <string name="device_meta_paired" translatable="false">%1$s  ·  paired</string>
+    <string name="device_meta_nearby" translatable="false">%1$s  ·  nearby</string>
 </resources>
