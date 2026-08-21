@@ -125,9 +125,7 @@ int main(void)
   servo_init();
   control_init();
   command_init();
-  HAL_TIM_Base_Start_IT(&htim6);       /* starts the 100 Hz control loop */
-  HAL_Delay(2000);
-  move_turn(0, 0, TURN_COUNTS_BR);            /* forward-left,   expect 90 deg */   /* look at the wheels, then change to 2500 and look again */
+  HAL_TIM_Base_Start_IT(&htim6);       /* starts the 100 Hz control loop */     
 #if SELFTEST
   selftest();
 #endif
