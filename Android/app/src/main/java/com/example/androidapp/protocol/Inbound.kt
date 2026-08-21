@@ -20,8 +20,21 @@ sealed class Inbound {
     /** TARGET,<n>,<id> or TARGET,<n>,<id>,<dir> — C.9 */
     data class Target(val obstacleId: Int, val targetId: Int, val face: Facing?) : Inbound()
 
-    /** MSG,[text] — C.4, the status box. The map ignores these. */
+    /** MSG,[text] or STATUS,<text> — C.4, the status box. The map ignores these. */
     data class Message(val text: String) : Inbound()
+
+    /**
+     * STM,<reply> — the Pi bridge relaying whatever the STM board said, one of
+     * READY, DONE, STALL, TIMEOUT, ACK, BUSY, ERR, or NO_REPLY when the bridge
+     * gave up waiting. See rpi/a1_bridge.py.
+     */
+    data class StmReply(val reply: String) : Inbound()
+
+    /** STATUS,SENT,<command> — the bridge confirming it forwarded a command. */
+    data class Forwarded(val command: String) : Inbound()
+
+    /** ERR,<reason> — the bridge refused something we sent. */
+    data class Rejected(val reason: String) : Inbound()
 
     /** Anything we did not recognise. Logged to the debug drawer, never thrown. */
     data class Unknown(val raw: String) : Inbound()
@@ -45,8 +58,27 @@ fun parseInbound(raw: String): Inbound {
     return when (head) {
         "ROBOT" -> parseRobot(tail) ?: Inbound.Unknown(raw)
         "TARGET" -> parseTarget(tail) ?: Inbound.Unknown(raw)
-        "MSG", "STATUS" -> Inbound.Message(unwrapBrackets(tail))
+        "MSG" -> Inbound.Message(unwrapBrackets(tail))
+        "STATUS" -> parseStatus(tail)
+        "STM" -> tail.trim().uppercase()
+            .takeIf { it.isNotEmpty() }
+            ?.let { Inbound.StmReply(it) }
+            ?: Inbound.Unknown(raw)
+        "ERR" -> Inbound.Rejected(tail.trim().ifEmpty { "unspecified" })
         else -> Inbound.Unknown(raw)
+    }
+}
+
+/**
+ * The Pi bridge sends both plain notices ("STATUS,RPi bridge ready") and a
+ * forwarding receipt ("STATUS,SENT,FW010") down the same keyword.
+ */
+private fun parseStatus(tail: String): Inbound {
+    val f = fields(tail)
+    return if (f.size >= 2 && f[0].equals("SENT", ignoreCase = true)) {
+        Inbound.Forwarded(f[1].uppercase())
+    } else {
+        Inbound.Message(unwrapBrackets(tail))
     }
 }
 

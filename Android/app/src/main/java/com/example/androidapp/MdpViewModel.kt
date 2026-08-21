@@ -173,8 +173,34 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
             is Inbound.Message -> say(msg.text)
 
+            is Inbound.Forwarded -> say("Sent ${msg.command} to the robot.")
+
+            is Inbound.Rejected -> warn("Robot rejected our message: ${msg.reason}")
+
+            is Inbound.StmReply -> onStmReply(msg.reply)
+
             is Inbound.Unknown -> Unit // logged above, never surfaced, never thrown
         }
+    }
+
+    /**
+     * Replies relayed by the Pi bridge from the STM board.
+     *
+     * STALL and TIMEOUT both mean the board gave up mid-move, and its own spec
+     * says position is unknown afterwards. That makes the robot drawn on the
+     * map a lie until someone re-references it, so those two get a toast rather
+     * than a quiet line in the status box.
+     */
+    private fun onStmReply(reply: String) = when (reply) {
+        "READY" -> say("Robot ready.")
+        "DONE" -> say("Move complete.")
+        "ACK" -> say("Stop acknowledged.")
+        "BUSY" -> warn("Robot was still moving — that command was discarded.")
+        "STALL" -> warn("Robot stalled. Its position on the map is no longer trustworthy.")
+        "TIMEOUT" -> warn("Move timed out. Its position on the map is no longer trustworthy.")
+        "ERR" -> warn("Robot did not recognise that command.")
+        "NO_REPLY" -> warn("No reply from the robot within 25 s.")
+        else -> say("Robot: $reply")
     }
 
     // -----------------------------------------------------------------

@@ -74,6 +74,34 @@ class ProtocolTest {
         assertEquals(Inbound.Message("looking for target 2"), parseInbound("MSG,looking for target 2"))
     }
 
+    // --- the Pi bridge's own vocabulary, from rpi/a1_bridge.py -----------
+
+    @Test fun `bridge greeting is a plain message`() {
+        assertEquals(Inbound.Message("RPi bridge ready"), parseInbound("STATUS,RPi bridge ready"))
+    }
+
+    @Test fun `bridge forwarding receipt is not a plain message`() {
+        assertEquals(Inbound.Forwarded("FW010"), parseInbound("STATUS,SENT,FW010"))
+    }
+
+    @Test fun `stm replies come through as stm replies`() {
+        listOf("READY", "DONE", "STALL", "TIMEOUT", "ACK", "BUSY", "ERR", "NO_REPLY").forEach {
+            assertEquals("failed on $it", Inbound.StmReply(it), parseInbound("STM,$it"))
+        }
+    }
+
+    @Test fun `stm reply is upper cased so the view model can match on it`() {
+        assertEquals(Inbound.StmReply("DONE"), parseInbound("stm,done"))
+    }
+
+    @Test fun `bridge rejection is surfaced, not swallowed`() {
+        assertEquals(Inbound.Rejected("INVALID_COMMAND"), parseInbound("ERR,INVALID_COMMAND"))
+    }
+
+    @Test fun `bare STM with no reply is not mistaken for a reply`() {
+        assertTrue(parseInbound("STM,") is Inbound.Unknown)
+    }
+
     // --- junk ------------------------------------------------------------
 
     @Test fun `garbage never throws`() {
