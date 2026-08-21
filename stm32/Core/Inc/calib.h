@@ -36,10 +36,10 @@
 /* Encoder counts to complete a 90 degree change of heading.
    Four separate values -- they are NOT symmetric. All verified on hardware.
    move_turn_deg() scales these linearly for other angles.                  */
-#define TURN_COUNTS_FL      3000   /* forward-left  90 deg */
-#define TURN_COUNTS_FR      3650   /* forward-right 90 deg */
-#define TURN_COUNTS_BL      2830   /* reverse-left  90 deg */
-#define TURN_COUNTS_BR      3480   /* reverse-right 90 deg */
+#define TURN_COUNTS_FL      3350   /* forward-left  90 deg */
+#define TURN_COUNTS_FR      4150   /* forward-right 90 deg */
+#define TURN_COUNTS_BL      3300   /* reverse-left  90 deg */
+#define TURN_COUNTS_BR      4100   /* reverse-right 90 deg */
 
 /* Target speeds in ENCODER COUNTS PER 10 ms CONTROL TICK.
    A physical quantity, independent of PWM_MAX -- do NOT rescale these
