@@ -1,0 +1,54 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <style name="Theme.AndroidApp" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="colorPrimary">@color/arena_accent</item>
+        <item name="colorPrimaryVariant">@color/arena_accent_press</item>
+        <item name="colorOnPrimary">@color/arena_on_accent</item>
+        <item name="colorSecondary">@color/arena_robot</item>
+        <item name="colorSecondaryVariant">@color/arena_robot</item>
+        <item name="colorOnSecondary">@color/arena_on_accent</item>
+        <item name="android:colorBackground">@color/arena_ground</item>
+        <item name="colorSurface">@color/arena_panel</item>
+        <item name="colorOnSurface">@color/arena_text</item>
+        <item name="android:textColorPrimary">@color/arena_text</item>
+        <item name="android:textColorSecondary">@color/arena_text_muted</item>
+        <item name="android:statusBarColor">@color/arena_ground</item>
+        <item name="android:navigationBarColor">@color/arena_ground</item>
+        <item name="android:windowBackground">@color/arena_ground</item>
+    </style>
+
+    <style name="Theme.AndroidApp.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+
+    <!-- Sectional caption above each panel block. -->
+    <style name="Caption">
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.12</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:textColor">@color/arena_text_faint</item>
+    </style>
+
+    <style name="PadButton" parent="Widget.MaterialComponents.Button">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="cornerRadius">8dp</item>
+        <item name="backgroundTint">@color/arena_panel_raised</item>
+        <item name="android:textColor">@color/arena_text</item>
+        <item name="android:minHeight">0dp</item>
+    </style>
+
+    <style name="PadButton.Accent">
+        <item name="backgroundTint">@color/arena_accent</item>
+        <item name="android:textColor">@color/arena_on_accent</item>
+    </style>
+
+    <style name="PadButton.Danger">
+        <item name="backgroundTint">@color/arena_bad</item>
+        <item name="android:textColor">@color/arena_on_accent</item>
+    </style>
+</resources>
