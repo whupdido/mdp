@@ -175,6 +175,11 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
             is Inbound.Forwarded -> say("Sent ${msg.command} to the robot.")
 
+            // A receipt for our own map edit. Already in the traffic log from
+            // the note() above; keeping it out of the status box is the point
+            // of C.4.
+            is Inbound.MapAck -> Unit
+
             is Inbound.Rejected -> warn("Robot rejected our message: ${msg.reason}")
 
             is Inbound.StmReply -> onStmReply(msg.reply)

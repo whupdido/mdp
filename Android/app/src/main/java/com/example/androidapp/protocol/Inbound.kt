@@ -33,6 +33,14 @@ sealed class Inbound {
     /** STATUS,SENT,<command> — the bridge confirming it forwarded a command. */
     data class Forwarded(val command: String) : Inbound()
 
+    /**
+     * STATUS,MAP,<message> — the bridge acknowledging one of our own obstacle
+     * edits. A receipt for something we sent, so it belongs in the traffic log
+     * and not in the status box: C.4 is explicit that the box shows selected
+     * information rather than everything on the wire.
+     */
+    data class MapAck(val message: String) : Inbound()
+
     /** ERR,<reason> — the bridge refused something we sent. */
     data class Rejected(val reason: String) : Inbound()
 
@@ -75,10 +83,15 @@ fun parseInbound(raw: String): Inbound {
  */
 private fun parseStatus(tail: String): Inbound {
     val f = fields(tail)
-    return if (f.size >= 2 && f[0].equals("SENT", ignoreCase = true)) {
-        Inbound.Forwarded(f[1].uppercase())
-    } else {
-        Inbound.Message(unwrapBrackets(tail))
+    val kind = f.firstOrNull().orEmpty()
+    return when {
+        f.size >= 2 && kind.equals("SENT", ignoreCase = true) ->
+            Inbound.Forwarded(f[1].uppercase())
+
+        f.size >= 2 && kind.equals("MAP", ignoreCase = true) ->
+            Inbound.MapAck(tail.trim().substringAfter(',').trim())
+
+        else -> Inbound.Message(unwrapBrackets(tail))
     }
 }
 

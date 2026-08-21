@@ -94,6 +94,13 @@ class ProtocolTest {
         assertEquals(Inbound.StmReply("DONE"), parseInbound("stm,done"))
     }
 
+    @Test fun `map acknowledgement is a receipt, not a status line`() {
+        assertEquals(
+            Inbound.MapAck("ADD,B1,(10,6)"),
+            parseInbound("STATUS,MAP,ADD,B1,(10,6)"),
+        )
+    }
+
     @Test fun `bridge rejection is surfaced, not swallowed`() {
         assertEquals(Inbound.Rejected("INVALID_COMMAND"), parseInbound("ERR,INVALID_COMMAND"))
     }
