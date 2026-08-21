@@ -3,8 +3,16 @@
 Owner: Zhenxi (map) and Peter (transport). Anyone changing this file tells the
 other five people in the team, because every module carries these coordinates.
 
-Status: **proposed** — needs agreeing at the whiteboard, then this line becomes
-"agreed <date>".
+Status: **in use by the Android module.** C.1 – C.10 are signed off against
+these formats, so the app will not change them casually.
+
+That is not the same as the team having agreed the *coordinate convention*.
+A supervisor signing C.10 means the app moves its robot correctly when it
+receives `ROBOT,x,y,D`; it says nothing about whether path planning means the
+same thing by `x,y`. **Path planning and the Pi still need to confirm the
+coordinate section below** — particularly that the robot's position is the
+centre of its 3 × 3 footprint and not a corner. If that is wrong, both modules
+look correct in isolation and the error only appears once they are connected.
 
 ## Coordinate convention
 
