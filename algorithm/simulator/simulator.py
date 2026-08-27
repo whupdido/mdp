@@ -1,3 +1,5 @@
+# To run from root directory /mdp : python3 -m algorithm.simulator.simulator
+
 import pygame
 
 from algorithm.constants import (
@@ -19,7 +21,6 @@ def load_asset(path, size):
     image = pygame.image.load(path).convert_alpha()
     return pygame.transform.scale(image, size)
 
-
 def draw_grid(screen):
     for i in range(GRID_SIZE + 1):
         position = LABEL_SIZE_PX + i * CELL_SIZE_PX
@@ -37,7 +38,6 @@ def draw_grid(screen):
             (LABEL_SIZE_PX, position),
             (WINDOW_SIZE_PX, position)
         )
-
 
 def draw_labels(screen, font):
     # X-axis
@@ -70,7 +70,6 @@ def draw_labels(screen, font):
 
         screen.blit(text, text_rect)
 
-
 def draw_start_zone(screen, start_image):
     start_x = LABEL_SIZE_PX + START_X * CELL_SIZE_PX
     start_y = LABEL_SIZE_PX + START_Y * CELL_SIZE_PX
@@ -79,7 +78,6 @@ def draw_start_zone(screen, start_image):
         start_image,
         (start_x, start_y)
     )
-
 
 def draw_robot(screen, robot, robot_images):
     robot_image = robot_images[robot.heading]
@@ -92,8 +90,7 @@ def draw_robot(screen, robot, robot_images):
         (robot_x, robot_y)
     )
 
-
-def move_robot(robot, direction):
+def move_robot(robot, direction, obstacles, path):
     # Turning is always allowed
     robot.heading = direction
 
@@ -123,6 +120,36 @@ def move_robot(robot, direction):
         
     robot.x = new_x
     robot.y = new_y
+    path.append((robot.x, robot.y))
+
+def draw_path(screen, path):
+    if len(path) < 2:
+        return
+
+    points = []
+
+    for x, y in path:
+        pixel_x = (
+            LABEL_SIZE_PX
+            + x * CELL_SIZE_PX
+            + CELL_SIZE_PX // 2
+        )
+
+        pixel_y = (
+            LABEL_SIZE_PX
+            + y * CELL_SIZE_PX
+            + CELL_SIZE_PX // 2
+        )
+
+        points.append((pixel_x, pixel_y))
+
+    pygame.draw.lines(
+        screen,
+        "blue",
+        False,
+        points,
+        4
+    )
 
 def draw_obstacle(screen, obstacle, obstacle_images):
     obstacle_image = obstacle_images[obstacle.face]
@@ -135,6 +162,15 @@ def draw_obstacle(screen, obstacle, obstacle_images):
         (obstacle_x, obstacle_y)
     )
 
+def reset_robot(robot, path):
+    robot.x = START_X
+    robot.y = START_Y
+    robot.heading = Direction.NORTH
+
+    path.clear()
+    path.append((START_X, START_Y))
+
+path = [(START_X, START_Y)]
 
 robot = Robot(
     x=START_X,
@@ -246,6 +282,9 @@ while running:
             if event.key == pygame.K_ESCAPE:
                 running = False
 
+            elif event.key == pygame.K_r:
+                reset_robot(arena.robot, path)
+
     # Handle keyboard movement
     keys = pygame.key.get_pressed()
     current_time = pygame.time.get_ticks()
@@ -253,38 +292,50 @@ while running:
     if current_time - last_move_time >= MOVE_DELAY:
 
         if keys[pygame.K_UP]:
-            move_robot(arena.robot, Direction.NORTH)
+            move_robot(
+                arena.robot,
+                Direction.NORTH,
+                arena.obstacles,
+                path
+            )
             last_move_time = current_time
 
         elif keys[pygame.K_DOWN]:
-            move_robot(arena.robot, Direction.SOUTH)
+            move_robot(
+                arena.robot,
+                Direction.SOUTH,
+                arena.obstacles,
+                path
+            )
             last_move_time = current_time
 
         elif keys[pygame.K_LEFT]:
-            move_robot(arena.robot, Direction.WEST)
+            move_robot(
+                arena.robot,
+                Direction.WEST,
+                arena.obstacles,
+                path
+            )
             last_move_time = current_time
 
         elif keys[pygame.K_RIGHT]:
-            move_robot(arena.robot, Direction.EAST)
+            move_robot(
+                arena.robot,
+                Direction.EAST,
+                arena.obstacles,
+                path
+            )
             last_move_time = current_time
 
     # Clear screen
     screen.fill("white")
 
-    # Draw start zone first
     draw_start_zone(screen, start_image)
-
-    # Draw obstacles
     for obstacle in arena.obstacles:
         draw_obstacle(screen, obstacle, obstacle_images)
-
-    # Draw grid over start zone
     draw_grid(screen)
-
-    # Draw coordinate labels
     draw_labels(screen, font)
-
-    # Draw robot last so it appears on top
+    draw_path(screen, path)
     draw_robot(screen, arena.robot, robot_images)
 
     # Display frame
