@@ -1,8 +1,17 @@
-from algorithm.enums import Direction 
+from algorithm.enums import Direction
+
 
 class Obstacle:
-    obstacle_id: int       # Obstacle number
-    x: int                 # Grid x-coordinate
-    y: int                 # Grid y-coordinate
-    face: Direction        # Which side contains the image
-    image_id: int          # Recognised image ID
+    def __init__(
+        self,
+        obstacle_id: int,
+        x: int,
+        y: int,
+        face: Direction,
+        image_id: int
+    ):
+        self.obstacle_id = obstacle_id
+        self.x = x
+        self.y = y
+        self.face = face
+        self.image_id = image_id
