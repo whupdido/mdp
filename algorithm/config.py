@@ -124,6 +124,7 @@ class PlanningConfig:
     guaranteed_max_targets: int = 8
     guaranteed_max_candidates_per_target: int = 3
     physically_calibrated: bool = False
+    max_expanded_nodes: int = 50_000
 
     def __post_init__(self) -> None:
         offsets = tuple(self.observation_lateral_offsets_cm)
@@ -148,6 +149,12 @@ class PlanningConfig:
             raise ValueError("observation offsets must be finite")
         if self.guaranteed_max_targets <= 0 or self.guaranteed_max_candidates_per_target <= 0:
             raise ValueError("performance bounds must be positive")
+        if (
+            isinstance(self.max_expanded_nodes, bool)
+            or not isinstance(self.max_expanded_nodes, int)
+            or self.max_expanded_nodes <= 0
+        ):
+            raise ValueError("max_expanded_nodes must be a positive integer")
 
 
 def _simulation_motion_model() -> MotionModel:

@@ -6,20 +6,20 @@ control, Android, or image recognition.
 
 ## Status
 
-Phases 1 through 4 are implemented: validated immutable models, coordinate
+Phases 1 through 5 are implemented: validated immutable models, coordinate
 transforms, physical/planner configuration, configurable motion primitives,
 structured planning results, oriented footprint geometry, pose collision, and
 swept-motion validation, plus grouped observation-pose generation with camera
 line-of-sight checks, deterministic headless playback, and an optional Pygame
-visualizer.
+visualizer, followed by configurable command-aligned Hybrid A* local planning.
 
 Phase 4.1 adds presentation polish and manual B.1 verification guidance without
 changing simulator state, geometry, collision, target generation, coordinates,
 or motion semantics.
 
-The following phases remain incomplete: Hybrid A*, pairwise planning, global
-routing, route serialization, and transport adapters. `pathfinding` remains
-reserved for Phase 5.
+The following phases remain incomplete: directed pairwise planning and caching,
+global routing, route serialization, and transport adapters. Phase 5 solves
+only one directed local `start -> goal` query at a time.
 
 ## Architecture
 
@@ -45,7 +45,7 @@ Current package responsibilities:
 - `coordinates.py`: Android cell/body-center to rear-axle transformations.
 - `geometry/`: Pygame-free footprint, obstacle, collision, and swept-motion logic.
 - `models/`: input, pose, motion, path, route, and result contracts.
-- `pathfinding/`: reserved for the configurable command-aligned Hybrid A*.
+- `pathfinding/`: configurable command-aligned Hybrid A* and local path costs.
 - `simulator/`: deterministic headless playback and its optional Pygame UI.
 - `targets/`: camera transforms, image-face geometry, line of sight, and
   grouped observation candidates.
@@ -89,6 +89,12 @@ The reverse convention currently assumes BL turns the nose right and BR turns
 it left. Their semantics and radii must be floor-tested before routes depending
 on them are considered physically ready.
 
+The initial search bookkeeping uses 5 cm position bins, cardinal heading bins,
+a 5 cm goal-position tolerance, exact cardinal goal heading within numerical
+tolerance, and a 50,000-expanded-node safeguard. These are replaceable
+configuration values suitable for the 200 cm development arena; they are not a
+claim of physically optimal resolution.
+
 ## Observation Pose Generation
 
 Each annotated obstacle produces ordered nominal, robot-left, and robot-right
@@ -113,8 +119,104 @@ own face endpoint does not reject the ray. Invalid candidates remain grouped
 with their rejection reason for later simulation/debugging; routing will
 receive only geometrically valid alternatives.
 
-Geometric validity does not imply Hybrid A* reachability. Reachability remains
-the responsibility of the later local-planning phase.
+Geometric validity does not imply Hybrid A* reachability. Reachability is
+evaluated separately by the Phase 5 local planner described below.
+
+## Hybrid A* Local Planning
+
+`HybridAStarPlanner` accepts a continuous start pose, continuous requested goal
+pose, `ArenaInput`, configured physical/motion model, cost objective, and an
+optional debug-data flag. It returns `LocalPlanningResult`, whose status is one
+of `SUCCESS`, `NO_PATH`, `INVALID_START`, `INVALID_GOAL`, or
+`SEARCH_LIMIT_REACHED`. Normal infeasibility is returned as data rather than a
+generic exception.
+
+The planner state retains continuous `(x, y, heading)` values. Every successor
+is produced by the existing Phase 2 motion propagation and remains continuous;
+it is never snapped to a grid. Closed-set bookkeeping uses a separate
+`HybridSearchKey` containing position bins, a heading bin, and the previous
+gear/steering state needed by configured transition penalties.
+
+The successor set comes directly from `PlanningConfig.motion.primitives` in its
+configured deterministic order. The initial profile therefore uses:
+
+- FW and BW: 10 cm forward and reverse straights.
+- FL and FR: 90-degree forward arcs with 26.1 and 31.8 cm radii.
+- BL and BR: 90-degree reverse arcs with 24.6 and 30.3 cm radii.
+
+These are command-aligned v1 hardware constraints, not inherent Hybrid A*
+restrictions. A calibrated configuration can supply different distances,
+angles, or radii without rewriting the search. Every attempted transition is
+validated by the authoritative Phase 2 swept-footprint collision check; valid
+endpoints with colliding intermediate motion are rejected.
+
+The search uses a standard-library priority queue and conventional A* values:
+
+```text
+f(n) = g(n) + h(n)
+```
+
+`g(n)` is actual accumulated selected-objective cost. For distance search,
+`h(n)` is Euclidean position distance. For provisional-time search, it is
+Euclidean distance divided by the configured maximum speed bound, which is the
+documented 27.3 cm/s straight speed in the initial profile. Neither heuristic
+adds a heading penalty. Since any physical path is at least the Euclidean
+distance and configured change penalties are non-negative, these are
+conservative lower bounds. Standard symmetric Reeds-Shepp is deferred because
+the configured radii are asymmetric and BL/BR semantics remain physically
+unverified.
+
+A state reaches the requested goal when position and heading are within the
+configured tolerances and the reached pose remains collision free. The goal is
+not forced to exact floating-point equality. The default 5 cm positional
+tolerance matches the current observation-planning contract; the default
+heading tolerance preserves the cardinal camera-facing direction.
+
+Distance and provisional execution time remain separate. Distance cost uses
+primitive geometric length. Provisional time uses:
+
+```text
+straight fixed time
+    + max(0, length - deceleration distance) / straight speed
+    + straight settle time
+    + serial command overhead
+```
+
+Turns use their configured primitive duration plus command overhead. Configured
+direction-change and steering-change penalties are added consistently and are
+zero by default. These are uncoalesced local-search estimates, not final STM
+serialization or a physical timing guarantee.
+
+On success, `HybridPath` contains the requested and reached poses, original
+generating `MotionPrimitive` objects, ordered `MotionSegment` objects, key
+poses, the complete sampled path, monotonic cumulative objective costs, and
+`PathMetrics`. Metrics include geometric distance, provisional time,
+forward/reverse distance, turns, direction/steering changes, command count,
+expanded/generated nodes, collision checks, and runtime. Parent links preserve
+the actual generating primitive rather than inferring commands from pose
+differences.
+
+Optional `HybridSearchDebug` contains plain tuples of expanded and generated
+continuous poses. It has no Pygame dependency and can feed the simulator's
+existing debug-node overlay. Equal-priority heap entries use an insertion
+counter, configured primitives are expanded in tuple order, and states reopen
+only for a strictly lower cost, making path and search counts deterministic for
+identical inputs.
+
+A collision-free Phase 3 candidate can still be unreachable under these
+command-aligned motions. Phase 5 reports that as local planning failure without
+altering Phase 3 candidate validity or selecting a different candidate.
+
+Run the Phase 5 single-query demonstration from the repository root:
+
+```powershell
+python -m algorithm.simulator --hybrid-demo
+```
+
+It selects a real valid Phase 3 observation candidate, runs estimated-time
+Hybrid A*, prints the local result summary, displays expanded nodes by default,
+and adapts the resulting primitives and sampled path to the unchanged headless
+simulator. The original `--demo` B.1 scenario remains available.
 
 ## Simulator
 
@@ -289,9 +391,9 @@ Development environment: Python 3.11.
 
 Supported Python baseline: Python 3.10+.
 
-The planning core and headless simulator use only the supported standard
+The planning core, Hybrid A*, and headless simulator use only the supported standard
 library. The repository currently has no established Python dependency
-manifest, so Phase 4 does not create one. Code must continue avoiding features
+manifest, so Phases 4 and 5 do not create one. Code must continue avoiding features
 that require a newer baseline unless the team deliberately changes the project
 requirement.
 
@@ -315,13 +417,13 @@ without it. Renderer smoke tests skip cleanly when Pygame is unavailable.
   Pygame renderer showing the full grid, start zone, obstacles, faces, robot,
   movement types, route layers, and target progress. Final integrated-route
   demonstration remains pending later planning phases.
-- **B.2:** will be satisfied by validated viewing poses, swept-footprint
-  collision checking, configurable Hybrid A*, and exactly one capture event per
-  requested target.
-- **B.3:** will be satisfied by provisional execution-time costs, cached
-  directed paths, exhaustive target ordering with observation-pose selection,
-  and nearest-neighbour comparison.
+- **B.2:** Phase 5 now supplies a collision-free local route from one pose to
+  one reachable observation pose. Pairwise candidate planning, global target
+  ordering, route composition, and one capture per target remain incomplete.
+- **B.3:** Phase 5 supplies directed local geometric and provisional-time costs.
+  Directed caching, exhaustive target ordering, observation-pose-chain
+  selection, and nearest-neighbour comparison remain incomplete.
 
-Phases 1 through 4 supply shared contracts, collision validation, observation
-targets, and the B.1 visualization/playback foundation. They do not yet claim
-complete Task 1 planning or physical readiness.
+Phases 1 through 5 supply shared contracts, collision validation, observation
+targets, B.1 visualization/playback, and one-to-one local planning. They do not
+yet claim complete Task 1 routing or physical readiness.

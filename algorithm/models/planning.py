@@ -23,6 +23,7 @@ class PathMetrics:
     nodes_generated: int = 0
     collision_checks: int = 0
     planning_time_s: float = 0.0
+    turn_count: int = 0
 
     def __post_init__(self) -> None:
         distances = (
@@ -35,6 +36,7 @@ class PathMetrics:
         counts = (
             self.direction_changes,
             self.steering_changes,
+            self.turn_count,
             self.command_count,
             self.nodes_expanded,
             self.nodes_generated,

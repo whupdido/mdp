@@ -5,16 +5,23 @@ from __future__ import annotations
 import pygame
 
 from algorithm.config import PlanningConfig
+from algorithm.models.pose import Pose
 
 from .headless import HeadlessSimulator, PlaybackState
 from .renderer import PygameRenderer, RenderOptions
 
 
-def run_simulator(simulator: HeadlessSimulator, config: PlanningConfig) -> None:
+def run_simulator(
+    simulator: HeadlessSimulator,
+    config: PlanningConfig,
+    *,
+    debug_nodes: tuple[Pose, ...] = (),
+    show_debug_nodes: bool = False,
+) -> None:
     renderer = PygameRenderer(config)
     renderer.initialize()
     clock = pygame.time.Clock()
-    options = RenderOptions()
+    options = RenderOptions(show_debug_nodes=show_debug_nodes)
     playback_speed = 1.0
     running = True
     try:
@@ -54,7 +61,12 @@ def run_simulator(simulator: HeadlessSimulator, config: PlanningConfig) -> None:
                     elif event.key == pygame.K_d:
                         options.show_debug_nodes = not options.show_debug_nodes
             simulator.advance(elapsed_s * playback_speed)
-            renderer.render(simulator.state, options, playback_speed=playback_speed)
+            renderer.render(
+                simulator.state,
+                options,
+                playback_speed=playback_speed,
+                debug_nodes=debug_nodes,
+            )
             pygame.display.flip()
     finally:
         renderer.shutdown()
