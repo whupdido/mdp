@@ -190,6 +190,11 @@ def test_viewport_round_trip_and_vertical_axis_inversion():
 
 def test_demo_is_complete_collision_checked_and_exercises_all_commands_and_captures():
     simulator, config = build_demo_simulator()
+    assert all(
+        3 <= coordinate <= 16
+        for obstacle in simulator.state.arena.obstacles
+        for coordinate in (obstacle.cell.x, obstacle.cell.y)
+    )
     assert {step.motion_command for step in simulator.steps if step.motion_command} == {
         "FW", "BW", "FL", "FR", "BL", "BR"
     }
@@ -197,15 +202,16 @@ def test_demo_is_complete_collision_checked_and_exercises_all_commands_and_captu
         step.capture_obstacle_id
         for step in simulator.steps
         if step.capture_obstacle_id is not None
-    ] == [1, 2, 2]
+    ] == [2, 2]
     simulator.play()
     simulator.advance(1000.0)
     assert simulator.state.playback_state is PlaybackState.COMPLETE
-    assert simulator.state.visited_target_ids == (1, 2)
+    assert simulator.state.visited_target_ids == (2,)
+    assert 1 not in simulator.state.visited_target_ids
     assert 3 not in simulator.state.visited_target_ids
     assert all(group.has_valid_candidate for group in simulator.state.candidate_groups)
-    assert any(
-        not candidate.valid
+    assert all(
+        candidate.valid
         for group in simulator.state.candidate_groups
         for candidate in group.candidates
     )

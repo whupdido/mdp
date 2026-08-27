@@ -21,6 +21,7 @@ from algorithm.pathfinding import (
     goal_reached,
     search_key,
 )
+from algorithm.simulator.demo import build_demo_simulator
 from algorithm.simulator.hybrid_demo import build_hybrid_demo
 
 
@@ -392,8 +393,10 @@ def test_optional_debug_data_matches_search_metrics():
 
 def test_hybrid_demo_plans_to_real_phase3_candidate_and_adapts_to_playback():
     scenario = build_hybrid_demo()
+    b1_simulator, _ = build_demo_simulator()
     result = scenario.planning_result
 
+    assert scenario.simulator.state.arena != b1_simulator.state.arena
     assert result.status is LocalPlanningStatus.SUCCESS
     assert result.path is not None
     assert scenario.simulator.state.planned_path == result.path.sampled_poses

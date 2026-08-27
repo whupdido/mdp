@@ -213,10 +213,11 @@ Run the Phase 5 single-query demonstration from the repository root:
 python -m algorithm.simulator --hybrid-demo
 ```
 
-It selects a real valid Phase 3 observation candidate, runs estimated-time
-Hybrid A*, prints the local result summary, displays expanded nodes by default,
-and adapts the resulting primitives and sampled path to the unchanged headless
-simulator. The original `--demo` B.1 scenario remains available.
+It uses a dedicated Phase 5 arena, selects a real valid Phase 3 observation
+candidate, runs estimated-time Hybrid A*, prints the local result summary,
+displays expanded nodes by default, and adapts the resulting primitives and
+sampled path to the unchanged headless simulator. The original `--demo` B.1
+scenario remains deterministic and separate.
 
 ## Simulator
 
@@ -249,6 +250,10 @@ arena remains neutral and uncluttered. Nominal candidates use purple diamonds,
 left fallbacks use blue triangles, and right fallbacks use orange squares.
 Valid candidates are filled; invalid candidates use a red ring and cross.
 Compact labels use `obstacle ID:candidate kind`, such as `2:L`.
+The primary B.1 demo keeps its obstacles comfortably inside the arena and shows
+valid candidates. Near-boundary invalid-candidate behavior remains covered by
+the automated target-generation tests instead of making the main scenario look
+physically suspect.
 
 Clear camera rays are green and blocked rays are red. The planned route is a
 thin dashed blue trail, while the executed route is a solid orange trail that
@@ -271,10 +276,15 @@ The actual deterministic motion sequence is:
 FW -> FW -> FW -> FW -> FW -> FR -> FW -> FW -> FL -> BW -> BL -> BR
 ```
 
-The demo inserts `CAPTURE(1)` after the fifth FW and `CAPTURE(2)` twice after
-FL. The repeated second capture exists solely to demonstrate that duplicate
-capture events do not double-count a visited target. Target 3 remains unvisited
-so both visual states remain available.
+The demo inserts `CAPTURE(2)` twice after FL. The repeated capture exists solely
+to demonstrate that duplicate capture events do not double-count a visited
+target. Targets 1 and 3 remain unvisited so both visual states remain available.
+
+The B.1 demo intentionally demonstrates simulator rendering, deterministic
+playback, controls, movement types, capture state, and diagnostic overlays
+only. It is not expected to visit every target and does not represent globally
+planned Task 1 execution. Global target ordering and complete route composition
+belong to later phases.
 
 - `FW`: forward straight movement.
 - `BW`: reverse straight movement.
@@ -334,7 +344,7 @@ state separation, controls, and diagnostic overlays used to demonstrate them.
 5. Target obstacles clearly show the annotated image-facing side.
 6. Observation candidates can be displayed.
 7. Nominal, left fallback, and right fallback candidates are visually distinguishable.
-8. Valid and invalid candidate states are visually distinguishable.
+8. Main-demo candidates are valid; near-boundary invalid candidates remain verified by automated target tests.
 9. Camera rays can be displayed.
 10. The decorative robot is aligned with the authoritative oriented rectangular footprint.
 11. Robot heading is visually identifiable.
@@ -354,7 +364,7 @@ state separation, controls, and diagnostic overlays used to demonstrate them.
 25. R restores the simulation to its initial state while retaining the planned trail.
 26. + increases playback speed, up to 8x.
 27. - decreases playback speed, down to 0.25x.
-28. `CAPTURE(1)` and the first `CAPTURE(2)` mark their targets visited.
+28. The first `CAPTURE(2)` marks target 2 visited while targets 1 and 3 remain unvisited.
 29. Single-step the repeated `CAPTURE(2)` and confirm the visited count does not increase.
 30. R clears all visited-target state.
 31. G toggles grid labels.

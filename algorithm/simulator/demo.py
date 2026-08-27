@@ -40,13 +40,11 @@ def build_demo_simulator() -> tuple[HeadlessSimulator, PlanningConfig]:
     arena = ArenaInput(
         start_pose=start,
         obstacles=(
-            # The first two capture markers occur within the configured 5 cm
-            # goal tolerance of generated candidates for these faces.
-            Obstacle(1, GridCell(0, 10), Direction.SOUTH),
+            # Keep the primary visual scenario comfortably inside the arena;
+            # boundary-rejection cases belong to geometry/target tests.
+            Obstacle(1, GridCell(14, 4), Direction.WEST),
             Obstacle(2, GridCell(9, 15), Direction.SOUTH),
-            # Its upper fallback exceeds the footprint boundary, deliberately
-            # giving the renderer both valid and invalid Phase 3 candidates.
-            Obstacle(3, GridCell(17, 18), Direction.WEST),
+            Obstacle(3, GridCell(14, 11), Direction.WEST),
         ),
     )
     if not is_pose_collision_free(start, arena, config):
@@ -55,7 +53,7 @@ def build_demo_simulator() -> tuple[HeadlessSimulator, PlanningConfig]:
     # The repeated second capture is deliberate: primitive/event stepping can
     # visibly verify that duplicate capture events do not increase visited
     # target count.
-    captures_after_command = {4: (1,), 8: (2, 2)}
+    captures_after_command = {8: (2, 2)}
     current = start
     steps: list[SimulationStep] = []
     for index, command in enumerate(DEMO_COMMAND_SEQUENCE):

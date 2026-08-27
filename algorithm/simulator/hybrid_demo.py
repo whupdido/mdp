@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from algorithm.config import PlanningConfig
-from algorithm.enums import CostMetric
+from algorithm.config import PlanningConfig, UNCALIBRATED_SIMULATION_CONFIG
+from algorithm.enums import CostMetric, Direction
+from algorithm.models.arena import ArenaInput
+from algorithm.models.obstacle import Obstacle
+from algorithm.models.pose import GridCell, Pose
 from algorithm.pathfinding import LocalPlanningResult, LocalPlanningStatus
 from algorithm.pathfinding.hybrid_astar import HybridAStarPlanner
+from algorithm.targets import generate_arena_observation_candidates
 
-from .demo import build_demo_simulator
 from .headless import HeadlessSimulator, simulation_steps_from_primitives
 
 
@@ -21,10 +24,14 @@ class HybridDemoScenario:
 
 
 def build_hybrid_demo() -> HybridDemoScenario:
-    """Plan to one real Phase 3 candidate in the established demo arena."""
-    source_simulator, config = build_demo_simulator()
-    arena = source_simulator.state.arena
-    candidate_groups = source_simulator.state.candidate_groups
+    """Plan to one real Phase 3 candidate in a dedicated Phase 5 arena."""
+    config = UNCALIBRATED_SIMULATION_CONFIG
+    start = Pose.from_direction(95.0, 50.0, Direction.NORTH)
+    arena = ArenaInput(
+        start_pose=start,
+        obstacles=(Obstacle(1, GridCell(9, 11), Direction.SOUTH),),
+    )
+    candidate_groups = generate_arena_observation_candidates(arena, config)
     goal = candidate_groups[0].valid_candidates[0].pose
     result = HybridAStarPlanner(config).plan(
         arena.start_pose,
