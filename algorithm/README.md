@@ -6,15 +6,15 @@ control, Android, or image recognition.
 
 ## Status
 
-Phases 1 and 2 are implemented: validated immutable models, coordinate
+Phases 1 through 3 are implemented: validated immutable models, coordinate
 transforms, physical/planner configuration, configurable motion primitives,
 structured planning results, oriented footprint geometry, pose collision, and
-swept-motion validation.
+swept-motion validation, plus grouped observation-pose generation with camera
+line-of-sight checks.
 
-The following phases remain incomplete: observation-pose generation, the
-simulator, Hybrid A*, pairwise planning, global routing, route serialization,
-and transport adapters. Empty `pathfinding` and `simulator` packages are
-retained for those phases.
+The following phases remain incomplete: the simulator, Hybrid A*, pairwise
+planning, global routing, route serialization, and transport adapters. Empty
+`pathfinding` and `simulator` packages are retained for those phases.
 
 ## Architecture
 
@@ -42,6 +42,8 @@ Current package responsibilities:
 - `models/`: input, pose, motion, path, route, and result contracts.
 - `pathfinding/`: reserved for the configurable command-aligned Hybrid A*.
 - `simulator/`: reserved for headless playback and its optional Pygame UI.
+- `targets/`: camera transforms, image-face geometry, line of sight, and
+  grouped observation candidates.
 
 ## Coordinate System and Units
 
@@ -82,6 +84,33 @@ The reverse convention currently assumes BL turns the nose right and BR turns
 it left. Their semantics and radii must be floor-tested before routes depending
 on them are considered physically ready.
 
+## Observation Pose Generation
+
+Each annotated obstacle produces ordered nominal, robot-left, and robot-right
+candidates from the configured lateral offsets. The image target is the center
+of the annotated 10 cm obstacle face. Candidate camera position is calculated
+as:
+
+```text
+face center + outward normal * image gap + face tangent * lateral offset
+```
+
+The generator then inverts the configured rear-axle-to-camera transform to
+obtain the rear-axle `Pose`. The robot heading is the opposite of the image
+face, so it faces the obstacle side. The configured image gap is the
+perpendicular distance from the face plane; fallback viewing rays may be
+diagonal because of their lateral displacement.
+
+Every candidate uses the Phase 2 authoritative pose collision check and a
+continuous camera-to-face-center segment test against all other obstacle
+rectangles. The target obstacle is excluded from line-of-sight blockers so its
+own face endpoint does not reject the ray. Invalid candidates remain grouped
+with their rejection reason for later simulation/debugging; routing will
+receive only geometrically valid alternatives.
+
+Geometric validity does not imply Hybrid A* reachability. Reachability remains
+the responsibility of the later local-planning phase.
+
 ## Models and Validation
 
 Inputs use `ArenaInput`, `Pose`, `GridCell`, and `Obstacle`. An arena rejects
@@ -100,7 +129,7 @@ Development environment: Python 3.11.
 
 Supported Python baseline: Python 3.10+.
 
-Phases 1 and 2 use only the supported standard library. The repository
+Phases 1 through 3 use only the supported standard library. The repository
 currently has no established Python dependency manifest, so these phases do
 not create one. Code must continue avoiding features that require a newer
 baseline unless the team deliberately changes the project requirement.
@@ -131,5 +160,6 @@ run without it.
   directed paths, exhaustive target ordering with observation-pose selection,
   and nearest-neighbour comparison.
 
-Phases 1 and 2 supply the shared contracts and collision validation needed by
-all three requirements but do not claim that any requirement is complete yet.
+Phases 1 through 3 supply the shared contracts, collision validation, and
+observation targets needed by all three requirements but do not claim that any
+requirement is complete yet.

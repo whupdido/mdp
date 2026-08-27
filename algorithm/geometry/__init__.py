@@ -2,6 +2,7 @@
 
 from .collision import footprint_within_arena, is_pose_collision_free, polygons_intersect
 from .footprint import obstacle_bounds, robot_footprint
+from .intersection import segment_intersects_rectangle
 from .motion import (
     is_motion_collision_free,
     propagate_motion,
@@ -24,4 +25,5 @@ __all__ = [
     "sample_arc",
     "sample_motion",
     "sample_straight",
+    "segment_intersects_rectangle",
 ]
