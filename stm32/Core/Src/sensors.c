@@ -10,6 +10,7 @@ volatile uint8_t  capture_state = 0;
 volatile uint32_t echo_val1 = 0;
 volatile uint32_t echo_val2 = 0;
 volatile float    ultrasonic_distance_cm = 0.0f;
+volatile uint8_t image_found = 0;
 
 /**
  * @brief Sends the 10us trigger pulse and force-resets the state machine.

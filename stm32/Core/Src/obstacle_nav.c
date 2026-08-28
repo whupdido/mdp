@@ -3,6 +3,8 @@
 #include "calib.h"
 #include "oled.h"
 #include "command.h"
+#include "usart.h"
+#include "sensors.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -85,18 +87,51 @@ static void safe_move_straight_mm(int32_t distance_mm)
 /* ------------------------------------------------------------------------- */
 static uint8_t inspect_current_face(uint8_t face_num)
 {
-    char buf[48];
-    snprintf(buf, sizeof(buf), "[CAM] Scanning Face %u...\r\n", face_num);
+    char buf[64];
+    snprintf(buf, sizeof(buf), ">> [CAM] Scanning Face %u...\r\n", face_num);
     command_send(buf);
 
     OLED_Clear();
-    OLED_ShowString(0, 0, (const uint8_t *)"IMAGE SCANNING");
-    snprintf(buf, sizeof(buf), "Checking Face %u", face_num);
-    OLED_ShowString(0, 20, (const uint8_t *)buf);
+    OLED_ShowString(0, 0, (const uint8_t *)"SCANNING...");
     OLED_Refresh_Gram();
 
-    HAL_Delay(1500); /* Simulate processing delay */
-    return 0;
+    /* 1. Reset the flag before we start waiting */
+    image_found = 0;
+
+    uint32_t start_time = HAL_GetTick();
+    const uint32_t TIMEOUT_MS = 3000; /* Wait up to 3 seconds */
+
+    /* 2. Non-blocking timeout loop */
+    while ((HAL_GetTick() - start_time) < TIMEOUT_MS)
+    {
+        /* CRITICAL: We must poll the UART buffer while waiting.
+         * This allows dispatch() to run and change image_found to 1! */
+        command_poll();
+
+        if (image_found > 0)
+        {
+            snprintf(buf, sizeof(buf), "Found ID: %u   ", image_found);
+            OLED_ShowString(0, 20, (const uint8_t *)buf);
+            OLED_Refresh_Gram();
+
+            command_send(">> Target Matched!\r\n");
+
+            HAL_Delay(1000); /* Pause so you can read OLED before driving away */
+            return 1; /* Success */
+        }
+
+        HAL_Delay(5); /* Yield to prevent CPU lockup */
+    }
+
+    /* 3. Timeout reached */
+    OLED_ShowString(0, 20, (const uint8_t *)"NO TARGET     ");
+    OLED_Refresh_Gram();
+    command_send(">> Scan Timeout. No image detected.\r\n");
+
+    // Reset Image
+    image_found = 0;
+
+    return 0; /* Target not found, continue to next face */
 }
 
 /* ------------------------------------------------------------------------- */

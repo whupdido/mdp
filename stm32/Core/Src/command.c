@@ -10,6 +10,7 @@
 #include "control.h"
 #include "calib.h"
 #include "usart.h"
+#include "sensors.h"
 #include <string.h>
 #include <stdlib.h>
 #include "oled.h"
@@ -119,6 +120,7 @@ static void dispatch(const char *cmd)
     else if (!strncmp(cmd, "FR", 2)) move_turn_deg(0, 1, arg);
     else if (!strncmp(cmd, "BL", 2)) move_turn_deg(1, 0, arg);
     else if (!strncmp(cmd, "BR", 2)) move_turn_deg(0, 0, arg);
+    else if (!strncmp(cmd, "IM", 2)) image_found = (uint8_t)arg;
     else { command_send("ERR\r\n"); return; }
 
     /* A zero-length move (e.g. FW000) never arms the state machine, so it

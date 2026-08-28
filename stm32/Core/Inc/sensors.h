@@ -44,4 +44,6 @@ float get_sharp_ir_right_cm(void);
  */
 void test_ultrasonic_oled(void);
 
+extern volatile uint8_t image_found;
+
 #endif /* SENSORS_H */
