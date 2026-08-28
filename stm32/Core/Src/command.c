@@ -12,6 +12,7 @@
 #include "usart.h"
 #include <string.h>
 #include <stdlib.h>
+#include "oled.h"
 
 #define LINE_MAX 16
 
@@ -21,6 +22,25 @@ static uint8_t idx = 0;
 static volatile uint8_t line_ready = 0;
 static char    pending[LINE_MAX];
 static uint8_t awaiting_ack = 0;
+
+void oled_countdown(){
+	OLED_ShowString(10,0,(const uint8_t* )"Get Ready...");
+	OLED_ShowString(10,10,(const uint8_t* )"In 5...");
+	OLED_Refresh_Gram();
+	HAL_Delay(1000);
+	OLED_ShowString(10,20,(const uint8_t* )"4...");
+	OLED_Refresh_Gram();
+	HAL_Delay(1000);
+	OLED_ShowString(10,30,(const uint8_t* )"3...");
+	OLED_Refresh_Gram();
+	HAL_Delay(1000);
+	OLED_ShowString(10,40,(const uint8_t* )"2...");
+	OLED_Refresh_Gram();
+	HAL_Delay(1000);
+	OLED_ShowString(10,50,(const uint8_t* )"1...");
+	OLED_Refresh_Gram();
+	HAL_Delay(1000);
+}
 
 void command_send(const char *s)
 {

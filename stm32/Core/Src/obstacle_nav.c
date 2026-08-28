@@ -102,36 +102,70 @@ static uint8_t inspect_current_face(uint8_t face_num)
 /* ------------------------------------------------------------------------- */
 /* Circum-Navigation (Back-Out and Box Strategy)                          */
 /* ------------------------------------------------------------------------- */
+//static void transition_to_next_face(void)
+//{
+//    /* 1. Reverse to gain a 350mm safe orbit clearance from the pillar center */
+//    /* Math: 150mm (current standoff) + 50mm (half-width) + 150mm (reverse) = 350mm */
+//    move_straight_mm(-150);
+//    HAL_Delay(250);
+//
+//    /* 2. Rotate 90 Deg left to face parallel to the current face */
+//    move_kturn_90(1);
+//    HAL_Delay(250);
+//
+//    /* 3. Drive straight to the corner of the 350mm orbit box */
+//    safe_move_straight_mm(350);
+//    HAL_Delay(250);
+//
+//    /* 4. Rotate 90 Deg right to face parallel to the NEXT face */
+//    move_kturn_90(0);
+//    HAL_Delay(250);
+//
+//    /* 5. Drive straight to align with the center of the next face */
+//    safe_move_straight_mm(350);
+//    HAL_Delay(250);
+//
+//    /* 6. Rotate 90 Deg right to turn INWARD and point the camera at the face */
+//    move_kturn_90(0);
+//    HAL_Delay(250);
+//
+//    /* 7. Drive forward to re-establish the exact 15cm focal standoff */
+//    safe_move_straight_mm(150);
+//    HAL_Delay(250);
+//}
+
 static void transition_to_next_face(void)
 {
-    /* 1. Reverse to gain a 350mm safe orbit clearance from the pillar center */
-    /* Math: 150mm (current standoff) + 50mm (half-width) + 150mm (reverse) = 350mm */
-    move_straight_mm(-150);
-    HAL_Delay(250);
+    command_send(">> Transitioning: S-Curve & Reverse maneuver\r\n");
 
-    /* 2. Rotate 90 Deg left to face parallel to the current face */
-    move_kturn_90(1);
-    HAL_Delay(250);
+    move_straight_mm(-50);
+	HAL_Delay(100);
 
-    /* 3. Drive straight to the corner of the 350mm orbit box */
-    safe_move_straight_mm(350);
-    HAL_Delay(250);
+    /* 1. S-Curve Right to change lanes (Clears the pillar's width) */
+    move_turn_deg(0, 1, 45); /* Steer Right, Forward */
+    HAL_Delay(100);
+    move_turn_deg(1, 1, 45); /* Steer Left, Forward (Straightens out) */
+    HAL_Delay(150);
 
-    /* 4. Rotate 90 Deg right to face parallel to the NEXT face */
-    move_kturn_90(0);
-    HAL_Delay(250);
+    /* 2. Drive Forward (Overshoot the center of the next face) */
+    /* You must overshoot by roughly the radius of your reverse turn (e.g., 250mm) */
+    safe_move_straight_mm(400);
+    HAL_Delay(100);
 
-    /* 5. Drive straight to align with the center of the next face */
-    safe_move_straight_mm(350);
-    HAL_Delay(250);
+    /* 3. The 90-Degree Reverse Arc */
+    /* Steer Right (0), Drive Reverse (0). Nose swings 90 degrees Left! */
+    uint8_t safe = move_turn_deg(0, 0, 90);
+    //move_pivot_deg(1,90);
+    HAL_Delay(100);
 
-    /* 6. Rotate 90 Deg right to turn INWARD and point the camera at the face */
-    move_kturn_90(0);
-    HAL_Delay(250);
+    if (!safe) {
+        command_send("[WARN] Reverse arc blocked!\r\n");
+    }
 
-    /* 7. Drive forward to re-establish the exact 15cm focal standoff */
-    safe_move_straight_mm(150);
-    HAL_Delay(250);
+    /* 4. Optional: Small straight adjustment to lock in the exact 15cm standoff */
+    /* If the reverse arc left you at 20cm away, drive 5cm forward to correct */
+    safe_move_straight_mm(230);
+    HAL_Delay(100);
 }
 
 /* ------------------------------------------------------------------------- */

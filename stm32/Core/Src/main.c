@@ -36,6 +36,7 @@
 #include "icm20948.h"
 #include "flash_storage.h"
 #include "obstacle_nav.h"
+#include "sensors.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -229,18 +230,23 @@ int main(void)
 			command_send("[IMU] Gyro bias locked.\r\n");
 			calibrated = 1;
 		}
-		OLED_Clear();
-		OLED_ShowString(10,0,(const uint8_t* )"Starting Test...");
-		OLED_ShowString(10,10,(const uint8_t* )"In 3...");
-		OLED_Refresh_Gram();
+//		OLED_Clear();
+//		OLED_ShowString(10,0,(const uint8_t* )"Starting Test...");
+//		OLED_ShowString(10,10,(const uint8_t* )"In 3...");
+//		OLED_Refresh_Gram();
+//		HAL_Delay(1000);
+//		OLED_ShowString(10,20,(const uint8_t* )"2...");
+//		OLED_Refresh_Gram();
+//		HAL_Delay(1000);
+//		OLED_ShowString(10,30,(const uint8_t* )"1...");
+//		OLED_Refresh_Gram();
 		HAL_Delay(1000);
-		OLED_ShowString(10,20,(const uint8_t* )"2...");
-		OLED_Refresh_Gram();
-		HAL_Delay(1000);
-		OLED_ShowString(10,30,(const uint8_t* )"1...");
-		OLED_Refresh_Gram();
-		HAL_Delay(1000);
-		navigate_and_inspect_obstacle(0, 300);
+		test_ultrasonic_oled();
+		//move_straight_mm(800);
+		//HAL_Delay(150);
+		//move_straight_mm(-800);
+		//navigate_and_inspect_obstacle(0, 300);
+
 		//testMaxSpeed();
 		//testSequence();
 //		move_pivot_deg(0, 90);

@@ -378,7 +378,7 @@ void control_tick(void)
 
 			/* Controller gains (Servo us per tick difference) */
 			const float ENC_KP = 6.0f;   /* Proportional: restores straight track */
-			const float ENC_KD = 0.0f;   /* Derivative: damps oscillation */
+			const float ENC_KD = 1.5f;   /* Derivative: damps oscillation */
 			const int16_t MAX_STEER_TRIM = 220; /* Increased to overcome linkage play */
 
 			/* Calculate dynamic steering correction */
@@ -389,13 +389,12 @@ void control_tick(void)
 			if (steer_correction < -MAX_STEER_TRIM) steer_correction = -MAX_STEER_TRIM;
 
 			/* Apply to servo (>1500 = Right, <1500 = Left) */
-			uint16_t commanded_servo = (uint16_t)(SERVO_CENTRE + (dir_forward * steer_correction));
+			uint16_t commanded_servo = (uint16_t)(SERVO_CENTRE + steer_correction);
 			safe_servo_us(commanded_servo);
 
 			/* 3. Velocity PI Controller */
-			target_speed = (float)(dir_forward * SPEED_STRAIGHT);
-			float err_l = target_speed - (float)left_delta;
-			float err_r = target_speed - (float)right_delta;
+			float err_l = current_speed_ramp - (float)left_delta;
+			float err_r = current_speed_ramp - (float)right_delta;
 
 			left_pid_integral  += err_l * dt;
 			right_pid_integral += err_r * dt;

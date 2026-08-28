@@ -1,5 +1,6 @@
 /*
  * calib_servo.h -- safe steering servo & 90-degree turn calibration
+ * NOT USED ANYMORE
  */
 
 #ifndef CALIB_SERVO_H

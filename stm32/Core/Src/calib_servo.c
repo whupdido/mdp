@@ -1,5 +1,6 @@
 /*
  * calib_servo.c -- safe automated steering & turn calibration
+ * NOT USED ANYMORE
  */
 
 #include "calib_servo.h"
