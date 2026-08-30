@@ -311,9 +311,15 @@ jobs:
           or numerical diff statistics unless necessary to explain the change.
           Those are displayed separately by the Telegram bot.
 
-          9. Use 2 to 5 short sentences.
+          9. Write a concise but informative summary of up to 200 words. Less is better. Avoid verbosity. Avoid filler words. Avoid repeating the same information in multiple ways.
 
-          10. Return only the summary. Do not add a heading.
+          10. Prefer complete paragraphs and complete sentences.
+
+          11. Explain the important functional changes, not just filenames.
+
+          12. Always finish the final sentence. Never end mid-sentence.
+
+          13. Return only the summary. Do not add a heading.
           """
 
               request_body = {
@@ -329,7 +335,7 @@ jobs:
                       }
                   ],
                   "temperature": 0.2,
-                  "max_tokens": 300
+                  "max_tokens": 800
               }
 
               request = urllib.request.Request(
@@ -388,7 +394,7 @@ jobs:
           # Prevent an unexpectedly verbose model response from
           # consuming the Telegram message limit.
 
-          if len(ai_summary) > 1200:
+          if len(ai_summary) > 1800:
               ai_summary = (
                   ai_summary[:1200].rstrip()
                   + "..."
