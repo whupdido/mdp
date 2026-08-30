@@ -13,18 +13,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Build Telegram message
+      - name: Analyse push and build AI summary
         env:
           GITHUB_EVENT_PATH_ENV: ${{ github.event_path }}
           GITHUB_REPOSITORY_NAME: ${{ github.repository }}
           GITHUB_REF_NAME_ENV: ${{ github.ref_name }}
           GITHUB_ACTOR_ENV: ${{ github.actor }}
           GITHUB_SHA_ENV: ${{ github.sha }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           python <<'PY'
           import json
           import os
           import subprocess
+          import urllib.error
+          import urllib.request
+
+          # ---------------------------------------------------------
+          # 1. Read GitHub push information
+          # ---------------------------------------------------------
 
           event_path = os.environ["GITHUB_EVENT_PATH_ENV"]
 
@@ -50,21 +57,57 @@ jobs:
               except subprocess.CalledProcessError:
                   before = after
 
-          try:
-              numstat = subprocess.check_output(
-                  ["git", "diff", "--numstat", before, after],
-                  text=True
-              )
-          except subprocess.CalledProcessError:
-              numstat = ""
+          # ---------------------------------------------------------
+          # 2. Determine the ACTUAL resulting Git changes
+          # ---------------------------------------------------------
 
-          try:
-              status_output = subprocess.check_output(
-                  ["git", "diff", "--name-status", before, after],
-                  text=True
+          def run_git(args):
+              try:
+                  return subprocess.check_output(
+                      ["git"] + args,
+                      text=True,
+                      stderr=subprocess.DEVNULL
+                  ).strip()
+              except subprocess.CalledProcessError:
+                  return ""
+
+          numstat = run_git([
+              "diff",
+              "--numstat",
+              before,
+              after
+          ])
+
+          status_output = run_git([
+              "diff",
+              "--name-status",
+              before,
+              after
+          ])
+
+          shortstat = run_git([
+              "diff",
+              "--shortstat",
+              before,
+              after
+          ])
+
+          # A bounded patch is provided to the LLM.
+          # Git facts remain authoritative.
+          patch = run_git([
+              "diff",
+              "--unified=1",
+              before,
+              after
+          ])
+
+          MAX_PATCH_CHARS = 14000
+
+          if len(patch) > MAX_PATCH_CHARS:
+              patch = (
+                  patch[:MAX_PATCH_CHARS]
+                  + "\n\n[Diff truncated before sending to AI]"
               )
-          except subprocess.CalledProcessError:
-              status_output = ""
 
           additions = 0
           deletions = 0
@@ -82,8 +125,6 @@ jobs:
                   if deleted.isdigit():
                       deletions += int(deleted)
 
-          changed_files = []
-
           status_names = {
               "A": "Added",
               "M": "Modified",
@@ -92,78 +133,345 @@ jobs:
               "C": "Copied"
           }
 
+          changed_files = []
+
           for line in status_output.splitlines():
               parts = line.split("\t")
 
               if len(parts) >= 2:
                   raw_status = parts[0]
-                  status = status_names.get(raw_status[0], raw_status)
+                  status = status_names.get(
+                      raw_status[0],
+                      raw_status
+                  )
 
                   if raw_status.startswith("R") and len(parts) >= 3:
-                      filename = f"{parts[1]} → {parts[2]}"
+                      filename = (
+                          f"{parts[1]} -> {parts[2]}"
+                      )
                   else:
                       filename = parts[1]
 
-                  changed_files.append((status, filename))
+                  changed_files.append(
+                      (status, filename)
+                  )
+
+          # ---------------------------------------------------------
+          # 3. Analyse commits separately from resulting file changes
+          # ---------------------------------------------------------
 
           commit_lines = []
 
           for commit in commits:
               commit_id = commit.get("id", "")[:7]
-              message = commit.get("message", "").splitlines()[0]
-              author = commit.get("author", {}).get("name", "Unknown")
+              commit_message = (
+                  commit.get("message", "")
+                  .splitlines()[0]
+              )
+              author = (
+                  commit.get("author", {})
+                  .get("name", "Unknown")
+              )
 
               commit_lines.append(
-                  f"• {commit_id}  {message} ({author})"
+                  f"• {commit_id}  "
+                  f"{commit_message} "
+                  f"({author})"
               )
 
           if not commit_lines:
-              commit_lines.append("• No commit information available")
+              commit_lines.append(
+                  "• No commit information available"
+              )
+
+          # ---------------------------------------------------------
+          # 4. Detect whether the final pushed commit is a merge
+          # ---------------------------------------------------------
+
+          parent_output = run_git([
+              "rev-list",
+              "--parents",
+              "-n",
+              "1",
+              after
+          ])
+
+          parent_parts = parent_output.split()
+
+          is_merge_commit = len(parent_parts) > 2
+
+          head_subject = run_git([
+              "log",
+              "-1",
+              "--pretty=%s",
+              after
+          ])
+
+          merge_description = ""
+
+          if is_merge_commit:
+              merge_description = head_subject
+
+          # ---------------------------------------------------------
+          # 5. Prepare deterministic Git facts for the AI
+          # ---------------------------------------------------------
+
+          file_fact_lines = []
+
+          for status, filename in changed_files:
+              file_fact_lines.append(
+                  f"{status}: {filename}"
+              )
+
+          if not file_fact_lines:
+              file_fact_lines.append(
+                  "No resulting file changes detected."
+              )
+
+          ai_input = f"""
+          Repository: {repo}
+          Branch updated: {branch}
+          Push performed by: {actor}
+
+          Before commit:
+          {before}
+
+          After commit:
+          {after}
+
+          Is final commit a merge commit:
+          {is_merge_commit}
+
+          Final commit subject:
+          {head_subject}
+
+          Merge description:
+          {merge_description or "Not applicable"}
+
+          Push event commits:
+          {chr(10).join(commit_lines)}
+
+          ACTUAL RESULTING FILE CHANGES:
+          {chr(10).join(file_fact_lines)}
+
+          Diff statistics:
+          {shortstat or "No textual diff statistics available"}
+
+          Text additions:
+          {additions}
+
+          Text deletions:
+          {deletions}
+
+          BOUNDED ACTUAL DIFF:
+          {patch or "No textual patch available. Files may be binary."}
+          """
+
+          # ---------------------------------------------------------
+          # 6. Ask OpenRouter to explain the Git facts
+          # ---------------------------------------------------------
+
+          ai_summary = ""
+
+          api_key = os.environ.get(
+              "OPENROUTER_API_KEY",
+              ""
+          ).strip()
+
+          if api_key:
+              system_prompt = """
+          You explain GitHub repository updates to a university
+          software development team.
+
+          Write a concise plain-English explanation of what actually
+          changed as a result of this push.
+
+          Important rules:
+
+          1. The Git diff and resulting file list are the source of truth.
+
+          2. Do not claim that every listed commit changed the final files.
+          Commits may merely have entered the branch history through a merge.
+
+          3. Clearly distinguish incorporated commit history from actual
+          resulting file changes when this distinction matters.
+
+          4. If this is primarily a synchronization or merge, say so.
+
+          5. Explain the purpose or effect of code changes when the supplied
+          diff provides enough evidence.
+
+          6. Do not invent motivations, functionality, bugs, fixes, or
+          implementation details that are not supported by the supplied data.
+
+          7. If binary files changed and their contents cannot be inspected,
+          describe them only using their filenames and statuses.
+
+          8. Do not repeat repository name, branch name, author, commit hashes,
+          or numerical diff statistics unless necessary to explain the change.
+          Those are displayed separately by the Telegram bot.
+
+          9. Write a concise but informative summary of up to 200 words. Less is better. Avoid verbosity. Avoid filler words. Avoid repeating the same information in multiple ways.
+
+          10. Prefer complete paragraphs and complete sentences.
+
+          11. Explain the important functional changes, not just filenames.
+
+          12. Always finish the final sentence. Never end mid-sentence.
+
+          13. Return only the summary. Do not add a heading.
+          """
+
+              request_body = {
+                  "model": "openrouter/free",
+                  "messages": [
+                      {
+                          "role": "system",
+                          "content": system_prompt
+                      },
+                      {
+                          "role": "user",
+                          "content": ai_input
+                      }
+                  ],
+                  "temperature": 0.2,
+                  "max_tokens": 800
+              }
+
+              request = urllib.request.Request(
+                  "https://openrouter.ai/api/v1/chat/completions",
+                  data=json.dumps(
+                      request_body
+                  ).encode("utf-8"),
+                  headers={
+                      "Authorization": (
+                          "Bearer " + api_key
+                      ),
+                      "Content-Type": "application/json",
+                      "HTTP-Referer": (
+                          "https://github.com/" + repo
+                      ),
+                      "X-Title": "MDP Telegram GitHub Bot"
+                  },
+                  method="POST"
+              )
+
+              try:
+                  with urllib.request.urlopen(
+                      request,
+                      timeout=45
+                  ) as response:
+                      result = json.loads(
+                          response.read().decode("utf-8")
+                      )
+
+                  choices = result.get(
+                      "choices",
+                      []
+                  )
+
+                  if choices:
+                      ai_summary = (
+                          choices[0]
+                          .get("message", {})
+                          .get("content", "")
+                          .strip()
+                      )
+
+              except Exception as exc:
+                  print(
+                      "OpenRouter summary unavailable:",
+                      type(exc).__name__,
+                      str(exc)[:300]
+                  )
+
+          if not ai_summary:
+              ai_summary = (
+                  "AI summary unavailable for this push. "
+                  "The Git change information below is still authoritative."
+              )
+
+          # Prevent an unexpectedly verbose model response from
+          # consuming the Telegram message limit.
+
+          if len(ai_summary) > 1800:
+              ai_summary = (
+                  ai_summary[:1200].rstrip()
+                  + "..."
+              )
+
+          # ---------------------------------------------------------
+          # 7. Build Telegram file list
+          # ---------------------------------------------------------
 
           file_lines = []
 
           for status, filename in changed_files[:25]:
-              file_lines.append(f"• [{status}] {filename}")
+              file_lines.append(
+                  f"• [{status}] {filename}"
+              )
 
           if not file_lines:
-              file_lines.append("• No file information available")
+              file_lines.append(
+                  "• No resulting file changes"
+              )
 
           if len(changed_files) > 25:
               file_lines.append(
-                  f"• ... and {len(changed_files) - 25} more files"
+                  f"• ... and "
+                  f"{len(changed_files) - 25} more files"
               )
 
-          compare_url = event.get("compare", "")
+          # ---------------------------------------------------------
+          # 8. Build improved Telegram message
+          # ---------------------------------------------------------
+
+          compare_url = event.get(
+              "compare",
+              ""
+          )
 
           if not compare_url:
               compare_url = (
-                  f"https://github.com/{repo}/commit/{after}"
+                  f"https://github.com/"
+                  f"{repo}/commit/{after}"
               )
+
+          merge_text = (
+              "Yes"
+              if is_merge_commit
+              else "No"
+          )
 
           message = f"""🤖 MDP Repository Update
 
           📦 Repository
           {repo}
 
-          🌿 Branch
+          🌴 Branch Updated
           {branch}
 
-          👤 Pushed by
+          👤 Push Performed By
           {actor}
 
-          📌 Push Summary
-          {len(commits)} commit(s)
-          {len(changed_files)} file(s) changed
-          +{additions} additions
-          -{deletions} deletions
+          🔀 Final Commit Is Merge
+          {merge_text}
 
-          💬 Commits
+          ✨ AI Change Summary
+          {ai_summary}
+
+          📊 Actual Net Changes
+          {len(changed_files)} file(s) changed
+          +{additions} text additions
+          -{deletions} text deletions
+
+          💬 Commits Incorporated In This Push
           {chr(10).join(commit_lines)}
 
-          📁 Files Changed
+          📁 Actual Resulting File Changes
           {chr(10).join(file_lines)}
 
-          🔗 View Changes
+          🔍 View Changes
           {compare_url}
           """
 
@@ -172,10 +480,21 @@ jobs:
               for line in message.splitlines()
           ).strip()
 
-          if len(message) > 4000:
-              message = message[:3950] + "\n\n[Message shortened]\n" + compare_url
+          # Telegram sendMessage has a message size limit.
+          # Keep some room for the comparison link.
 
-          with open("/tmp/telegram_message.txt", "w", encoding="utf-8") as f:
+          if len(message) > 4000:
+              message = (
+                  message[:3900]
+                  + "\n\n[Message shortened]\n"
+                  + compare_url
+              )
+
+          with open(
+              "/tmp/telegram_message.txt",
+              "w",
+              encoding="utf-8"
+          ) as f:
               f.write(message)
 
           print(message)
@@ -193,7 +512,11 @@ jobs:
           import urllib.parse
           import urllib.request
 
-          with open("/tmp/telegram_message.txt", "r", encoding="utf-8") as f:
+          with open(
+              "/tmp/telegram_message.txt",
+              "r",
+              encoding="utf-8"
+          ) as f:
               message = f.read()
 
           token = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -205,8 +528,12 @@ jobs:
           )
 
           payload = urllib.parse.urlencode({
-              "chat_id": os.environ["TELEGRAM_CHAT_ID"],
-              "message_thread_id": os.environ["TELEGRAM_TOPIC_ID"],
+              "chat_id": os.environ[
+                  "TELEGRAM_CHAT_ID"
+              ],
+              "message_thread_id": os.environ[
+                  "TELEGRAM_TOPIC_ID"
+              ],
               "text": message,
               "disable_web_page_preview": "true"
           }).encode("utf-8")
@@ -217,11 +544,18 @@ jobs:
               method="POST"
           )
 
-          with urllib.request.urlopen(request) as response:
-              result = json.loads(response.read().decode("utf-8"))
+          with urllib.request.urlopen(
+              request,
+              timeout=30
+          ) as response:
+              result = json.loads(
+                  response.read().decode("utf-8")
+              )
 
           if not result.get("ok"):
               raise RuntimeError(result)
 
-          print("Telegram notification sent successfully")
+          print(
+              "Telegram notification sent successfully"
+          )
           PY
