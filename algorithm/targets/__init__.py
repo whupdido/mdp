@@ -8,12 +8,18 @@ from .geometry import (
     image_face_target_point,
     rear_axle_pose_for_camera,
 )
-from .models import ObservationCandidate, ObservationCandidateGroup, ObservationCandidateKind
+from .models import (
+    ObservationCandidate,
+    ObservationCandidateGroup,
+    ObservationCandidateKind,
+    ObservationLateralClass,
+)
 
 __all__ = [
     "ObservationCandidate",
     "ObservationCandidateGroup",
     "ObservationCandidateKind",
+    "ObservationLateralClass",
     "camera_world_position",
     "desired_camera_position",
     "generate_arena_observation_candidates",

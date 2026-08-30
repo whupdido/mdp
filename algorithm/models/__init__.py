@@ -11,6 +11,7 @@ from .planning import (
     PlanningMetrics,
     PlanningResult,
     RoutePlan,
+    TargetReachability,
 )
 from .pose import GridCell, Pose, normalize_heading
 from .robot import Robot, RobotState
@@ -35,5 +36,6 @@ __all__ = [
     "Robot",
     "RobotState",
     "RoutePlan",
+    "TargetReachability",
     "normalize_heading",
 ]

@@ -93,6 +93,8 @@ class HybridAStarPlanner:
         *,
         objective: CostMetric = CostMetric.ESTIMATED_TIME,
         collect_debug: bool = False,
+        max_expanded_nodes: int | None = None,
+        max_planning_time_s: float | None = None,
     ) -> LocalPlanningResult:
         if not isinstance(start, Pose) or not isinstance(goal, Pose):
             raise TypeError("start and goal must be Pose instances")
@@ -102,6 +104,11 @@ class HybridAStarPlanner:
             raise TypeError("objective must be a CostMetric")
 
         started_at = time.perf_counter()
+        expansion_limit = max_expanded_nodes or self.config.max_expanded_nodes
+        if expansion_limit <= 0:
+            raise ValueError("max_expanded_nodes must be positive")
+        if max_planning_time_s is not None and max_planning_time_s <= 0.0:
+            raise ValueError("max_planning_time_s must be positive")
         collision_checks = 1
         if not is_pose_collision_free(start, arena, self.config):
             return self._failure(
@@ -128,23 +135,24 @@ class HybridAStarPlanner:
         nodes: list[_SearchNode] = [start_node]
         tie_breaker = itertools.count()
         start_h = self._heuristic(start, goal, objective)
-        frontier: list[tuple[float, float, int, int]] = [
-            (start_h, start_h, next(tie_breaker), 0)
+        frontier: list[tuple[float, float, float, int, int]] = [
+            (start_h, angular_distance(start.heading_rad, goal.heading_rad), start_h, next(tie_breaker), 0)
         ]
         best_cost: dict[HybridSearchKey, float] = {
-            search_key(start, self.config): 0.0
+            self._dominance_key(start, None, None): 0.0
         }
         expanded_states: list[Pose] = []
         generated_states: list[Pose] = []
         nodes_expanded = 0
         nodes_generated = 0
+        collision_rejected = 0
+        dominated = 0
 
         while frontier:
-            _, _, _, node_index = heapq.heappop(frontier)
+            _, _, _, _, node_index = heapq.heappop(frontier)
             node = nodes[node_index]
-            node_key = search_key(
+            node_key = self._dominance_key(
                 node.pose,
-                self.config,
                 node.previous_gear,
                 node.previous_steering,
             )
@@ -165,14 +173,22 @@ class HybridAStarPlanner:
                     expanded_states,
                     generated_states,
                     collect_debug,
+                    collision_rejected=collision_rejected,
+                    dominated=dominated,
                 )
 
-            if nodes_expanded >= self.config.max_expanded_nodes:
+            timed_out = (
+                max_planning_time_s is not None
+                and time.perf_counter() - started_at >= max_planning_time_s
+            )
+            if timed_out:
                 return self._failure(
-                    LocalPlanningStatus.SEARCH_LIMIT_REACHED,
+                    LocalPlanningStatus.PLANNING_TIMEOUT,
                     start,
                     goal,
-                    f"search reached the configured {self.config.max_expanded_nodes}-node expansion limit",
+                    (
+                        f"search reached the configured {max_planning_time_s:.3f}s timeout"
+                    ),
                     started_at,
                     nodes_expanded=nodes_expanded,
                     nodes_generated=nodes_generated,
@@ -180,19 +196,40 @@ class HybridAStarPlanner:
                     expanded_states=expanded_states,
                     generated_states=generated_states,
                     collect_debug=collect_debug,
+                    collision_rejected=collision_rejected,
+                    dominated=dominated,
+                )
+            if nodes_expanded >= expansion_limit:
+                return self._failure(
+                    LocalPlanningStatus.SEARCH_LIMIT_REACHED,
+                    start,
+                    goal,
+                    f"search reached the configured {expansion_limit}-node expansion limit",
+                    started_at,
+                    nodes_expanded=nodes_expanded,
+                    nodes_generated=nodes_generated,
+                    collision_checks=collision_checks,
+                    expanded_states=expanded_states,
+                    generated_states=generated_states,
+                    collect_debug=collect_debug,
+                    collision_rejected=collision_rejected,
+                    dominated=dominated,
                 )
 
             nodes_expanded += 1
             if collect_debug:
                 expanded_states.append(node.pose)
 
-            for primitive in self.config.motion.primitives:
+            for primitive in self._successor_primitives():
+                if self._is_redundant_immediate_inverse(node.primitive, primitive):
+                    continue
                 successor_pose = propagate_motion(node.pose, primitive, self.config)
                 nodes_generated += 1
                 if collect_debug:
                     generated_states.append(successor_pose)
                 collision_checks += 1
                 if not is_motion_collision_free(node.pose, primitive, arena, self.config):
+                    collision_rejected += 1
                     continue
 
                 edge_cost = transition_cost(
@@ -203,13 +240,13 @@ class HybridAStarPlanner:
                     node.previous_steering,
                 )
                 successor_g = node.g_cost + edge_cost
-                successor_key = search_key(
+                successor_key = self._dominance_key(
                     successor_pose,
-                    self.config,
                     primitive.gear,
                     primitive.steering,
                 )
                 if successor_g >= best_cost.get(successor_key, math.inf) - _COST_EPSILON:
+                    dominated += 1
                     continue
 
                 best_cost[successor_key] = successor_g
@@ -229,6 +266,7 @@ class HybridAStarPlanner:
                     frontier,
                     (
                         successor_g + heuristic,
+                        angular_distance(successor_pose.heading_rad, goal.heading_rad),
                         heuristic,
                         next(tie_breaker),
                         successor_index,
@@ -246,7 +284,63 @@ class HybridAStarPlanner:
             collision_checks=collision_checks,
             expanded_states=expanded_states,
             generated_states=generated_states,
+            collision_rejected=collision_rejected,
+            dominated=dominated,
             collect_debug=collect_debug,
+        )
+
+    def _is_redundant_immediate_inverse(
+        self,
+        previous: MotionPrimitive | None,
+        candidate: MotionPrimitive,
+    ) -> bool:
+        """Prune only equal-length opposite straight commands that return to the parent pose."""
+        return (
+            previous is not None
+            and self.config.motion.direction_change_penalty_s == 0.0
+            and self.config.motion.steering_change_penalty_s == 0.0
+            and previous.steering is Steering.STRAIGHT
+            and candidate.steering is Steering.STRAIGHT
+            and previous.gear is not candidate.gear
+            and math.isclose(previous.travel_cm, candidate.travel_cm, abs_tol=1e-12)
+        )
+
+    def _successor_primitives(self) -> tuple[MotionPrimitive, ...]:
+        """Expand configured turn-angle data while retaining legacy 90-degree verbs."""
+        expanded: list[MotionPrimitive] = []
+        angles = self.config.search_turn_angles_deg or self.config.turn_angles_deg
+        for primitive in self.config.motion.primitives:
+            if primitive.steering is Steering.STRAIGHT or primitive.radius_cm is None:
+                expanded.append(primitive)
+                continue
+            for angle in angles:
+                sign = 1.0 if primitive.turn_angle_rad > 0 else -1.0
+                expanded.append(
+                    MotionPrimitive(
+                        primitive.command,
+                        primitive.gear,
+                        primitive.steering,
+                        turn_angle_rad=sign * math.radians(angle),
+                        radius_cm=primitive.radius_cm,
+                        estimated_duration_s=primitive.estimated_duration_s * angle / 90.0,
+                        physically_calibrated=primitive.physically_calibrated,
+                    )
+                )
+        return tuple(expanded)
+
+    def _dominance_key(
+        self,
+        pose: Pose,
+        previous_gear: Gear | None,
+        previous_steering: Steering | None,
+    ) -> HybridSearchKey:
+        """Retain history only when it can change a future transition cost."""
+        motion = self.config.motion
+        return search_key(
+            pose,
+            self.config,
+            previous_gear if motion.direction_change_penalty_s > 0.0 else None,
+            previous_steering if motion.steering_change_penalty_s > 0.0 else None,
         )
 
     def _heuristic(self, current: Pose, goal: Pose, objective: CostMetric) -> float:
@@ -257,7 +351,7 @@ class HybridAStarPlanner:
         # future provisional primitive duration implies a still higher speed,
         # include it so this remains a lower bound under that configuration.
         effective_speeds: list[float] = [self.config.motion.straight_speed_cm_s]
-        for primitive in self.config.motion.primitives:
+        for primitive in self._successor_primitives():
             duration = primitive_execution_time_s(primitive, self.config.motion)
             if duration <= 0.0:
                 return 0.0
@@ -278,6 +372,8 @@ class HybridAStarPlanner:
         expanded_states: list[Pose],
         generated_states: list[Pose],
         collect_debug: bool,
+        collision_rejected: int = 0,
+        dominated: int = 0,
     ) -> LocalPlanningResult:
         chain_indices: list[int] = []
         current_index: int | None = goal_index
@@ -301,6 +397,8 @@ class HybridAStarPlanner:
             nodes_generated,
             collision_checks,
             time.perf_counter() - started_at,
+            collision_rejected,
+            dominated,
         )
         path = HybridPath(
             start=start,
@@ -333,6 +431,8 @@ class HybridAStarPlanner:
         nodes_generated: int,
         collision_checks: int,
         planning_time_s: float,
+        collision_rejected: int = 0,
+        dominated: int = 0,
     ) -> PathMetrics:
         forward_distance = sum(
             primitive.geometric_length_cm
@@ -371,6 +471,8 @@ class HybridAStarPlanner:
             nodes_generated=nodes_generated,
             collision_checks=collision_checks,
             planning_time_s=planning_time_s,
+            collision_rejected_successors=collision_rejected,
+            dominated_successors=dominated,
         )
 
     @staticmethod
@@ -387,12 +489,16 @@ class HybridAStarPlanner:
         expanded_states: list[Pose] | None = None,
         generated_states: list[Pose] | None = None,
         collect_debug: bool = False,
+        collision_rejected: int = 0,
+        dominated: int = 0,
     ) -> LocalPlanningResult:
         metrics = PathMetrics(
             nodes_expanded=nodes_expanded,
             nodes_generated=nodes_generated,
             collision_checks=collision_checks,
             planning_time_s=time.perf_counter() - started_at,
+            collision_rejected_successors=collision_rejected,
+            dominated_successors=dominated,
         )
         debug = HybridSearchDebug(
             tuple(expanded_states or ()) if collect_debug else (),

@@ -78,6 +78,8 @@ class SimulationState:
     visited_target_ids: tuple[int, ...]
     simulation_time_s: float
     playback_state: PlaybackState
+    target_order: tuple[int, ...]
+    selected_candidates: tuple[tuple[int, str], ...]
 
 
 def _motion_duration(primitive: MotionPrimitive, config: PlanningConfig) -> float:
@@ -171,6 +173,8 @@ class HeadlessSimulator:
         steps: tuple[SimulationStep, ...],
         *,
         planned_path: tuple[Pose, ...] | None = None,
+        target_order: tuple[int, ...] = (),
+        selected_candidates: tuple[tuple[int, str], ...] = (),
     ) -> None:
         self._arena = arena
         self._candidate_groups = tuple(candidate_groups)
@@ -183,6 +187,14 @@ class HeadlessSimulator:
         }
         if unknown_captures:
             raise ValueError(f"capture events reference unknown obstacles: {sorted(unknown_captures)}")
+        self._target_order = tuple(target_order)
+        self._selected_candidates = tuple(selected_candidates)
+        if len(set(self._target_order)) != len(self._target_order):
+            raise ValueError("target_order cannot contain duplicates")
+        if any(obstacle_id not in obstacle_ids for obstacle_id in self._target_order):
+            raise ValueError("target_order references unknown obstacles")
+        if any(obstacle_id not in obstacle_ids for obstacle_id, _ in self._selected_candidates):
+            raise ValueError("selected candidates reference unknown obstacles")
         self._planned_path = (
             tuple(planned_path)
             if planned_path is not None
@@ -207,6 +219,8 @@ class HeadlessSimulator:
             visited_target_ids=(),
             simulation_time_s=0.0,
             playback_state=PlaybackState.READY,
+            target_order=self._target_order,
+            selected_candidates=self._selected_candidates,
         )
 
     @property

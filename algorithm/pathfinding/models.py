@@ -19,6 +19,7 @@ class LocalPlanningStatus(Enum):
     INVALID_START = "invalid_start"
     INVALID_GOAL = "invalid_goal"
     SEARCH_LIMIT_REACHED = "search_limit_reached"
+    PLANNING_TIMEOUT = "planning_timeout"
 
 
 @dataclass(frozen=True, slots=True)

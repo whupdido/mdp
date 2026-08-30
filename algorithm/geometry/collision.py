@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from collections.abc import Sequence
 
 from algorithm.config import PlanningConfig
 from algorithm.models.arena import ArenaInput
 from algorithm.models.pose import Pose
 
-from .footprint import obstacle_bounds, robot_footprint
+from .footprint import robot_footprint
 from .shapes import NUMERIC_TOLERANCE_CM, Point
 
 
@@ -70,7 +71,27 @@ def is_pose_collision_free(pose: Pose, arena: ArenaInput, config: PlanningConfig
     footprint = robot_footprint(pose, config.robot)
     if not footprint_within_arena(footprint, config.arena_size_cm):
         return False
-    return not any(
-        polygons_intersect(footprint, obstacle_bounds(obstacle, config.cell_size_cm).corners)
-        for obstacle in arena.obstacles
-    )
+    footprint_min_x = min(point.x_cm for point in footprint)
+    footprint_max_x = max(point.x_cm for point in footprint)
+    footprint_min_y = min(point.y_cm for point in footprint)
+    footprint_max_y = max(point.y_cm for point in footprint)
+    for obstacle in arena.obstacles:
+        bounds = _cached_obstacle_bounds(obstacle.cell.x, obstacle.cell.y, config.cell_size_cm)
+        if (bounds[2] < footprint_min_x or bounds[0] > footprint_max_x or
+                bounds[3] < footprint_min_y or bounds[1] > footprint_max_y):
+            continue
+        if polygons_intersect(footprint, bounds[4]):
+            return False
+    return True
+
+
+@lru_cache(maxsize=512)
+def _cached_obstacle_bounds(x: int, y: int, cell_size_cm: float):
+    min_x = x * cell_size_cm
+    min_y = y * cell_size_cm
+    max_x = (x + 1) * cell_size_cm
+    max_y = (y + 1) * cell_size_cm
+    return (min_x, min_y, max_x, max_y, (
+        Point(min_x, min_y), Point(max_x, min_y),
+        Point(max_x, max_y), Point(min_x, max_y),
+    ))

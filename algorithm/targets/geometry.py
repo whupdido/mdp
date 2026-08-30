@@ -33,6 +33,8 @@ def desired_camera_position(
     face: Direction,
     lateral_offset_cm: float,
     config: PlanningConfig,
+    *,
+    standoff_cm: float | None = None,
 ) -> Point:
     """Place the camera at configured normal gap and face-tangent offset.
 
@@ -44,8 +46,10 @@ def desired_camera_position(
     normal_x, normal_y = face.grid_vector
     tangent_x, tangent_y = -normal_y, normal_x
     return Point(
-        target.x_cm + normal_x * config.camera.image_gap_cm + tangent_x * lateral_offset_cm,
-        target.y_cm + normal_y * config.camera.image_gap_cm + tangent_y * lateral_offset_cm,
+        target.x_cm + normal_x * (config.camera.image_gap_cm if standoff_cm is None else standoff_cm)
+        + tangent_x * lateral_offset_cm,
+        target.y_cm + normal_y * (config.camera.image_gap_cm if standoff_cm is None else standoff_cm)
+        + tangent_y * lateral_offset_cm,
     )
 
 

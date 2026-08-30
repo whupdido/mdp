@@ -7,6 +7,7 @@ from algorithm.enums import Direction
 from algorithm.models import ArenaInput, GridCell, Obstacle, Pose
 from algorithm.targets import (
     ObservationCandidateKind,
+    ObservationLateralClass,
     camera_world_position,
     generate_arena_observation_candidates,
     generate_observation_candidates,
@@ -92,17 +93,24 @@ def test_configured_standoff_changes_camera_and_rear_axle_position():
 
 def test_nominal_left_right_candidates_are_ordered_and_configured():
     candidates = group_for(target()).candidates
-    assert tuple(candidate.kind for candidate in candidates) == (
+    assert tuple(candidate.kind for candidate in candidates[:3]) == (
         ObservationCandidateKind.NOMINAL,
         ObservationCandidateKind.LEFT,
         ObservationCandidateKind.RIGHT,
     )
-    assert tuple(candidate.observation_pose.candidate_index for candidate in candidates) == (0, 1, 2)
-    assert tuple(candidate.observation_pose.nominal for candidate in candidates) == (True, False, False)
-    assert tuple(candidate.lateral_offset_cm for candidate in candidates) == (0.0, -10.0, 10.0)
+    assert len(candidates) == 9
+    assert tuple(candidate.observation_pose.candidate_index for candidate in candidates) == tuple(range(9))
+    assert tuple(candidate.observation_pose.nominal for candidate in candidates) == (True,) + (False,) * 8
+    assert tuple(candidate.lateral_offset_cm for candidate in candidates) == (0.0, -10.0, 10.0) * 3
+    assert tuple(candidate.standoff_cm for candidate in candidates) == (20.0,) * 3 + (10.0,) * 3 + (30.0,) * 3
+    assert tuple(candidate.display_label for candidate in candidates) == (
+        "20C", "20L", "20R", "10C", "10L", "10R", "30C", "30L", "30R"
+    )
+    assert tuple(candidate.preference_rank for candidate in candidates) == tuple(range(9))
+    assert candidates[0].lateral_class is ObservationLateralClass.CENTER
     # A south-facing robot's local left is East, so the left fallback has
     # greater x than nominal and the right fallback has smaller x.
-    assert tuple(candidate.camera_position.x_cm for candidate in candidates) == (105.0, 115.0, 95.0)
+    assert tuple(candidate.camera_position.x_cm for candidate in candidates[:3]) == (105.0, 115.0, 95.0)
 
 
 def test_candidate_identity_remains_associated_with_obstacle_and_face():
@@ -141,7 +149,16 @@ def test_blocked_nominal_keeps_valid_fallback():
     assert not group.candidates[0].valid
     assert group.candidates[2].valid
     assert group.has_valid_candidate
-    assert tuple(candidate.candidate_index for candidate in group.valid_candidates) == (2,)
+    assert tuple(candidate.candidate_index for candidate in group.valid_candidates) == (2, 5, 8)
+
+
+def test_alternative_distance_survives_when_all_preferred_distance_candidates_are_invalid():
+    group = group_for(target(cell=(0, 4), face=Direction.SOUTH))
+    assert not any(candidate.valid for candidate in group.candidates[:3])
+    assert tuple(candidate.display_label for candidate in group.candidates if candidate.valid) == ("10R",)
+    selected = next(candidate for candidate in group.candidates if candidate.valid)
+    assert selected.standoff_cm == 10.0
+    assert Direction.from_heading_rad(selected.observation_pose.pose.heading_rad) is Direction.NORTH
 
 
 def test_all_blocked_candidates_produce_structured_issue():
@@ -189,7 +206,7 @@ def test_multiple_obstacles_retain_deterministic_candidate_grouping():
     )
     groups = generate_arena_observation_candidates(arena_with(*obstacles), CONFIG)
     assert tuple(group.obstacle_id for group in groups) == (3, 1, 8)
-    assert all(len(group.candidates) == 3 for group in groups)
+    assert all(len(group.candidates) == 9 for group in groups)
     assert all(
         candidate.observation_pose.obstacle_id == group.obstacle_id
         for group in groups
@@ -201,14 +218,14 @@ def test_zero_targets_returns_no_groups():
     assert generate_arena_observation_candidates(arena_with(), CONFIG) == ()
 
 
-def test_eight_targets_with_three_candidates_each_are_supported():
+def test_eight_targets_with_nine_candidates_each_are_supported():
     obstacles = tuple(
         target(index + 1, (index + 5, 10), Direction.NORTH)
         for index in range(8)
     )
     groups = generate_arena_observation_candidates(arena_with(*obstacles), CONFIG)
     assert len(groups) == CONFIG.guaranteed_max_targets == 8
-    assert all(len(group.candidates) == CONFIG.guaranteed_max_candidates_per_target == 3 for group in groups)
+    assert all(len(group.candidates) == CONFIG.guaranteed_max_candidates_per_target == 9 for group in groups)
 
 
 def test_candidate_generation_is_deterministic():

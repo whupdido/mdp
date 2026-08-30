@@ -115,20 +115,46 @@ class PlanningConfig:
     arena_size_cm: float = ARENA_SIZE_CM
     cell_size_cm: float = CELL_SIZE_CM
     observation_lateral_offsets_cm: tuple[float, ...] = (0.0, -10.0, 10.0)
+    observation_standoff_distances_cm: tuple[float, ...] = ()
     collision_translation_step_cm: float = 1.0
     collision_arc_step_rad: float = math.radians(2.0)
     position_bin_cm: float = 5.0
-    heading_bin_rad: float = math.pi / 2.0
+    # Search bookkeeping bins may be finer than the cardinal observation
+    # headings.  Continuous poses are never snapped to these bins.
+    heading_bin_rad: float = math.radians(15.0)
+    turn_angles_deg: tuple[float, ...] = (30.0, 45.0, 60.0, 90.0)
+    search_turn_angles_deg: tuple[float, ...] | None = None
     goal_position_tolerance_cm: float = 5.0
     goal_heading_tolerance_rad: float = 1e-6
     guaranteed_max_targets: int = 8
-    guaranteed_max_candidates_per_target: int = 3
+    guaranteed_max_candidates_per_target: int = 9
     physically_calibrated: bool = False
-    max_expanded_nodes: int = 50_000
+    # Partial-angle branching is wider than the original six-successor model;
+    # keep the default bounded while allowing callers to raise it explicitly.
+    max_expanded_nodes: int = 10_000
+    candidate_activation_tiers: tuple[tuple[int, ...], ...] = (
+        (0,),
+        (1, 2),
+        (3, 6),
+        (4, 5, 7, 8),
+    )
+    adaptive_initial_expansions: int = 20
+    adaptive_max_expansions: int = 100
+    adaptive_growth_factor: float = 5.0
+    local_planning_timeout_s: float = 2.0
+    overall_planning_timeout_s: float = 30.0
 
     def __post_init__(self) -> None:
         offsets = tuple(self.observation_lateral_offsets_cm)
+        standoffs = tuple(self.observation_standoff_distances_cm) or (self.camera.image_gap_cm,)
+        if standoffs[0] != self.camera.image_gap_cm:
+            standoffs = (self.camera.image_gap_cm,) + tuple(
+                value for value in standoffs[1:] if value != self.camera.image_gap_cm
+            )
         object.__setattr__(self, "observation_lateral_offsets_cm", offsets)
+        object.__setattr__(self, "observation_standoff_distances_cm", standoffs)
+        tiers = tuple(tuple(tier) for tier in self.candidate_activation_tiers)
+        object.__setattr__(self, "candidate_activation_tiers", tiers)
         positive_values = {
             "arena_size_cm": self.arena_size_cm,
             "cell_size_cm": self.cell_size_cm,
@@ -147,6 +173,34 @@ class PlanningConfig:
             raise ValueError("the nominal zero observation offset must be first")
         if not all(math.isfinite(value) for value in offsets):
             raise ValueError("observation offsets must be finite")
+        if not standoffs:
+            raise ValueError("at least one observation standoff is required")
+        if len(set(standoffs)) != len(standoffs):
+            raise ValueError("observation standoffs must be unique")
+        if not all(math.isfinite(value) and value > 0.0 for value in standoffs):
+            raise ValueError("observation standoffs must be positive and finite")
+        angles = tuple(float(value) for value in self.turn_angles_deg)
+        search_angles = tuple(float(value) for value in (self.search_turn_angles_deg or angles))
+        object.__setattr__(self, "search_turn_angles_deg", search_angles)
+        # Custom compact test/development motion models that explicitly use a
+        # single symmetric radius retain their declared six successors unless
+        # a profile opts into partial-angle expansion.
+        turn_radii = tuple(
+            primitive.radius_cm for primitive in self.motion.primitives
+            if primitive.steering is not Steering.STRAIGHT and primitive.radius_cm is not None
+        )
+        if turn_radii and len(set(turn_radii)) == 1 and angles == (30.0, 45.0, 60.0, 90.0):
+            angles = (90.0,)
+        if any(value not in angles for value in search_angles):
+            search_angles = angles
+            object.__setattr__(self, "search_turn_angles_deg", search_angles)
+        object.__setattr__(self, "turn_angles_deg", angles)
+        if not angles or len(set(angles)) != len(angles):
+            raise ValueError("turn_angles_deg must contain unique angles")
+        if any(not math.isfinite(value) or value <= 0.0 or value > 360.0 for value in angles):
+            raise ValueError("turn_angles_deg must be in (0, 360]")
+        if not search_angles or any(value not in angles for value in search_angles):
+            raise ValueError("search_turn_angles_deg must be a non-empty subset of turn_angles_deg")
         if self.guaranteed_max_targets <= 0 or self.guaranteed_max_candidates_per_target <= 0:
             raise ValueError("performance bounds must be positive")
         if (
@@ -155,6 +209,21 @@ class PlanningConfig:
             or self.max_expanded_nodes <= 0
         ):
             raise ValueError("max_expanded_nodes must be a positive integer")
+        budgets = (self.adaptive_initial_expansions, self.adaptive_max_expansions)
+        if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in budgets):
+            raise ValueError("adaptive expansion budgets must be positive integers")
+        if self.adaptive_initial_expansions > self.adaptive_max_expansions:
+            raise ValueError("initial adaptive budget cannot exceed maximum budget")
+        _positive_finite("adaptive_growth_factor", self.adaptive_growth_factor)
+        if self.adaptive_growth_factor <= 1.0:
+            raise ValueError("adaptive_growth_factor must exceed one")
+        _positive_finite("local_planning_timeout_s", self.local_planning_timeout_s)
+        _positive_finite("overall_planning_timeout_s", self.overall_planning_timeout_s)
+        flattened = tuple(index for tier in tiers for index in tier)
+        if not tiers or not all(tier for tier in tiers):
+            raise ValueError("candidate activation tiers cannot be empty")
+        if any(index < 0 for index in flattened) or len(set(flattened)) != len(flattened):
+            raise ValueError("candidate activation indices must be unique and non-negative")
 
 
 def _simulation_motion_model() -> MotionModel:
@@ -163,28 +232,10 @@ def _simulation_motion_model() -> MotionModel:
         primitives=(
             MotionPrimitive("FW", Gear.FORWARD, Steering.STRAIGHT, travel_cm=10.0),
             MotionPrimitive("BW", Gear.REVERSE, Steering.STRAIGHT, travel_cm=10.0),
-            MotionPrimitive(
-                "FL", Gear.FORWARD, Steering.LEFT,
-                turn_angle_rad=quarter_turn, radius_cm=26.1,
-                estimated_duration_s=2.4,
-            ),
-            MotionPrimitive(
-                "FR", Gear.FORWARD, Steering.RIGHT,
-                turn_angle_rad=-quarter_turn, radius_cm=31.8,
-                estimated_duration_s=2.9,
-            ),
-            # Reverse steering signs follow the documented geometric
-            # convention. They have not yet been confirmed on the floor.
-            MotionPrimitive(
-                "BL", Gear.REVERSE, Steering.LEFT,
-                turn_angle_rad=-quarter_turn, radius_cm=24.6,
-                estimated_duration_s=2.3,
-            ),
-            MotionPrimitive(
-                "BR", Gear.REVERSE, Steering.RIGHT,
-                turn_angle_rad=quarter_turn, radius_cm=30.3,
-                estimated_duration_s=2.8,
-            ),
+            MotionPrimitive("FL", Gear.FORWARD, Steering.LEFT, turn_angle_rad=quarter_turn, radius_cm=26.1, estimated_duration_s=2.4),
+            MotionPrimitive("FR", Gear.FORWARD, Steering.RIGHT, turn_angle_rad=-quarter_turn, radius_cm=31.8, estimated_duration_s=2.9),
+            MotionPrimitive("BL", Gear.REVERSE, Steering.LEFT, turn_angle_rad=-quarter_turn, radius_cm=24.6, estimated_duration_s=2.3),
+            MotionPrimitive("BR", Gear.REVERSE, Steering.RIGHT, turn_angle_rad=quarter_turn, radius_cm=30.3, estimated_duration_s=2.8),
         ),
         straight_speed_cm_s=27.3,
     )
@@ -204,4 +255,5 @@ UNCALIBRATED_SIMULATION_CONFIG = PlanningConfig(
         image_gap_cm=20.0,
     ),
     motion=_simulation_motion_model(),
+    observation_standoff_distances_cm=(20.0, 10.0, 30.0),
 )

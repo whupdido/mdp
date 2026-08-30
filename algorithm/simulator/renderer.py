@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 import pygame
 
 from algorithm.config import PlanningConfig
+from algorithm.constants import START_ZONE_SIZE_CM
 from algorithm.enums import Direction
 from algorithm.geometry import obstacle_bounds, robot_footprint
 from algorithm.models.pose import Pose
@@ -195,8 +196,8 @@ class PygameRenderer:
 
     def _draw_start_zone(self) -> None:
         assert self.screen is not None
-        top_left = self._screen_point(0.0, 30.0)
-        bottom_right = self._screen_point(30.0, 0.0)
+        top_left = self._screen_point(0.0, START_ZONE_SIZE_CM)
+        bottom_right = self._screen_point(START_ZONE_SIZE_CM, 0.0)
         rect = pygame.Rect(top_left, (bottom_right[0] - top_left[0], bottom_right[1] - top_left[1]))
         overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
         overlay.fill((54, 177, 112, 52))
@@ -269,20 +270,17 @@ class PygameRenderer:
             ObservationCandidateKind.RIGHT: RIGHT_COLOR,
             ObservationCandidateKind.ALTERNATIVE: (137, 143, 153),
         }
-        abbreviations = {
-            ObservationCandidateKind.NOMINAL: "N",
-            ObservationCandidateKind.LEFT: "L",
-            ObservationCandidateKind.RIGHT: "R",
-            ObservationCandidateKind.ALTERNATIVE: "A",
-        }
+        selected = set(state.selected_candidates)
         for group in state.candidate_groups:
             for candidate in group.candidates:
+                if selected and (group.obstacle_id, candidate.display_label) not in selected:
+                    continue
                 pose = candidate.observation_pose.pose
                 center = self._screen_point(pose.x_cm, pose.y_cm)
                 color = kind_colors[candidate.kind] if candidate.valid else INVALID_COLOR
                 self._draw_candidate_marker(center, candidate.kind, color, candidate.valid)
                 pygame.draw.line(self.screen, color, center, self._heading_endpoint(pose, 8.0), 2)
-                label = f"{group.obstacle_id}:{abbreviations[candidate.kind]}"
+                label = f"{group.obstacle_id}:{candidate.display_label}"
                 self._blit_text(label, (center[0] + 7, center[1] - 14), self.DARK_TEXT, tiny=True)
 
     def _draw_candidate_marker(
@@ -504,14 +502,25 @@ class PygameRenderer:
         heading_degrees = math.degrees(pose.heading_rad) % 360.0
         total_targets = len(state.arena.obstacles)
         visited_text = ", ".join(str(item) for item in state.visited_target_ids) or "none"
+        target_order = " > ".join(str(item) for item in state.target_order) or "-"
+        selected_candidates = ", ".join(
+            f"{obstacle_id}:{kind.upper()}"
+            for obstacle_id, kind in state.selected_candidates
+        ) or "-"
+        try:
+            heading_cardinal = Direction.from_heading_rad(pose.heading_rad).value
+        except ValueError:
+            heading_cardinal = "NON-CARDINAL"
         status_lines = (
             ("Command", f"{command}  {command_descriptions.get(command, '')}".rstrip()),
             ("Sample", f"{state.current_step_index} / {state.total_steps}"),
             ("Logical time", f"{state.simulation_time_s:.2f} s"),
             ("Playback", f"{playback_speed:g}x"),
             ("Pose", f"({pose.x_cm:.1f}, {pose.y_cm:.1f}) cm"),
-            ("Heading", f"{heading_degrees:.0f} deg"),
+            ("Heading", f"{heading_degrees:.0f} deg ({heading_cardinal})"),
             ("Visited", f"{len(state.visited_target_ids)}/{total_targets}  [{visited_text}]"),
+            ("Order", target_order),
+            ("Selected", selected_candidates),
         )
         y = panel.top + 116
         for label, value in status_lines:
@@ -519,7 +528,7 @@ class PygameRenderer:
             self._blit_text(value, (x + 91, y - 1), self.TEXT, small=True)
             y += 21
 
-        legend_y = y + 8
+        legend_y = y + 5
         self._draw_section_title("LEGEND", x, legend_y, panel.width - 40)
         self._draw_legend(x, legend_y + 23, panel.width - 40)
 

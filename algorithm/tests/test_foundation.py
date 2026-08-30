@@ -206,4 +206,4 @@ def test_configuration_can_replace_the_command_aligned_primitive_set():
     )
     config = replace(UNCALIBRATED_SIMULATION_CONFIG, motion=new_motion)
     assert config.motion.primitives == (fine_arc,)
-    assert config.heading_bin_rad == math.pi / 2.0
+    assert config.heading_bin_rad == pytest.approx(math.radians(15.0))

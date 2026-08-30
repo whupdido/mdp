@@ -17,6 +17,13 @@ class ObservationCandidateKind(Enum):
     ALTERNATIVE = "alternative"
 
 
+class ObservationLateralClass(Enum):
+    CENTER = "center"
+    LEFT = "left"
+    RIGHT = "right"
+    OFFSET = "offset"
+
+
 @dataclass(frozen=True, slots=True)
 class ObservationCandidate:
     observation_pose: ObservationPose
@@ -27,6 +34,26 @@ class ObservationCandidate:
     target_point: Point
     collision_free: bool
     line_of_sight_clear: bool
+    standoff_cm: float = 20.0
+    lateral_class: ObservationLateralClass = ObservationLateralClass.CENTER
+    preference_rank: int = 0
+
+    def __post_init__(self) -> None:
+        if self.standoff_cm <= 0.0:
+            raise ValueError("candidate standoff must be positive")
+        if self.preference_rank < 0:
+            raise ValueError("candidate preference rank cannot be negative")
+
+    @property
+    def display_label(self) -> str:
+        suffix = {
+            ObservationLateralClass.CENTER: "C",
+            ObservationLateralClass.LEFT: "L",
+            ObservationLateralClass.RIGHT: "R",
+            ObservationLateralClass.OFFSET: "O",
+        }[self.lateral_class]
+        distance = int(self.standoff_cm) if float(self.standoff_cm).is_integer() else self.standoff_cm
+        return f"{distance}{suffix}"
 
     @property
     def valid(self) -> bool:

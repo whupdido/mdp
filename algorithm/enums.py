@@ -94,7 +94,15 @@ class CostMetric(Enum):
     ESTIMATED_TIME = "estimated_time"
 
 
+class RoutingMode(Enum):
+    FEASIBILITY = "feasibility"
+    FULL_OPTIMIZATION = "full_optimization"
+
+
 class PlanningStatus(Enum):
     SUCCESS = "success"
     INVALID_INPUT = "invalid_input"
     NO_FEASIBLE_ROUTE = "no_feasible_route"
+    PLANNING_TIMEOUT = "planning_timeout"
+    SEARCH_LIMIT_REACHED = "search_limit_reached"
+    INCONCLUSIVE = "inconclusive"

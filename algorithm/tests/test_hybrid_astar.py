@@ -126,6 +126,41 @@ def test_straight_reachable_goal_and_parent_reconstruction():
     assert result.metrics.reverse_distance_cm == 0.0
 
 
+def test_only_provably_redundant_equal_straight_inverse_is_pruned():
+    planner = HybridAStarPlanner(CONFIG)
+    assert planner._is_redundant_immediate_inverse(primitive("FW"), primitive("BW"))
+    assert planner._is_redundant_immediate_inverse(primitive("BW"), primitive("FW"))
+    assert not planner._is_redundant_immediate_inverse(primitive("FL"), primitive("BR"))
+    assert not planner._is_redundant_immediate_inverse(primitive("FW"), primitive("FL"))
+    penalized = replace(
+        CONFIG,
+        motion=replace(CONFIG.motion, direction_change_penalty_s=100.0),
+    )
+    assert not HybridAStarPlanner(penalized)._is_redundant_immediate_inverse(
+        primitive("FW", penalized), primitive("BW", penalized)
+    )
+
+
+def test_dominance_key_omits_cost_irrelevant_history_but_preserves_penalized_history():
+    pose = Pose(100.0, 100.0, 0.0)
+    planner = HybridAStarPlanner(CONFIG)
+    assert planner._dominance_key(pose, Gear.FORWARD, Steering.LEFT) == planner._dominance_key(
+        pose, Gear.REVERSE, Steering.RIGHT
+    )
+    penalized = replace(
+        CONFIG,
+        motion=replace(
+            CONFIG.motion,
+            direction_change_penalty_s=1.0,
+            steering_change_penalty_s=1.0,
+        ),
+    )
+    penalized_planner = HybridAStarPlanner(penalized)
+    assert penalized_planner._dominance_key(
+        pose, Gear.FORWARD, Steering.LEFT
+    ) != penalized_planner._dominance_key(pose, Gear.REVERSE, Steering.RIGHT)
+
+
 def test_forward_turn_goal_preserves_continuous_arc_endpoint_and_heading():
     start = Pose(80.0, 80.0, 0.0)
     goal = endpoint(start, ("FL",))
@@ -253,7 +288,7 @@ def test_blocked_start_region_returns_no_path_not_exception():
     assert result.status is LocalPlanningStatus.NO_PATH
     assert result.path is None
     assert result.metrics.nodes_expanded == 1
-    assert result.metrics.nodes_generated == len(CONFIG.motion.primitives)
+    assert result.metrics.nodes_generated == 18  # six commands, three active profiles per direction
 
 
 def test_valid_goal_enclosed_by_obstacles_returns_no_path():
