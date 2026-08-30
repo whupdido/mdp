@@ -1,22 +1,24 @@
-"""
-Simulator-wide constants.
+"""Stable arena and protocol constants.
+
+Physical and planner tuning values belong in :mod:`algorithm.config`.  This
+module only contains values fixed by the Android integration contract.
 """
 
 # Arena
 ARENA_SIZE_CM = 200
 GRID_SIZE = 20
 CELL_SIZE_CM = ARENA_SIZE_CM // GRID_SIZE
-START_X=0
-START_Y=19
-
-# Display
-WINDOW_SIZE_PX = 800
-LABEL_SIZE_PX = 40
-ARENA_SIZE_PX = WINDOW_SIZE_PX - LABEL_SIZE_PX
-CELL_SIZE_PX = ARENA_SIZE_PX // GRID_SIZE
+START_CELL_X = 1
+START_CELL_Y = 1
+START_ZONE_SIZE_CM = 40
+START_ZONE_GRID_CELLS = START_ZONE_SIZE_CM // CELL_SIZE_CM
 
 # Robot
 ROBOT_SIZE_CM = 30
 
 # Obstacles
 OBSTACLE_SIZE_CM = 10
+
+# Published image identifier range used by Android.
+MIN_IMAGE_ID = 11
+MAX_IMAGE_ID = 40
