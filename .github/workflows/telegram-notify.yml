@@ -1,0 +1,227 @@
+name: Telegram Push Notification
+
+on:
+  push:
+
+jobs:
+  notify-telegram:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build Telegram message
+        env:
+          GITHUB_EVENT_PATH_ENV: ${{ github.event_path }}
+          GITHUB_REPOSITORY_NAME: ${{ github.repository }}
+          GITHUB_REF_NAME_ENV: ${{ github.ref_name }}
+          GITHUB_ACTOR_ENV: ${{ github.actor }}
+          GITHUB_SHA_ENV: ${{ github.sha }}
+        run: |
+          python <<'PY'
+          import json
+          import os
+          import subprocess
+
+          event_path = os.environ["GITHUB_EVENT_PATH_ENV"]
+
+          with open(event_path, "r", encoding="utf-8") as f:
+              event = json.load(f)
+
+          repo = os.environ["GITHUB_REPOSITORY_NAME"]
+          branch = os.environ["GITHUB_REF_NAME_ENV"]
+          actor = os.environ["GITHUB_ACTOR_ENV"]
+          after = os.environ["GITHUB_SHA_ENV"]
+
+          before = event.get("before", "")
+          commits = event.get("commits", [])
+
+          zero_sha = "0" * 40
+
+          if not before or before == zero_sha:
+              try:
+                  before = subprocess.check_output(
+                      ["git", "rev-parse", after + "^"],
+                      text=True
+                  ).strip()
+              except subprocess.CalledProcessError:
+                  before = after
+
+          try:
+              numstat = subprocess.check_output(
+                  ["git", "diff", "--numstat", before, after],
+                  text=True
+              )
+          except subprocess.CalledProcessError:
+              numstat = ""
+
+          try:
+              status_output = subprocess.check_output(
+                  ["git", "diff", "--name-status", before, after],
+                  text=True
+              )
+          except subprocess.CalledProcessError:
+              status_output = ""
+
+          additions = 0
+          deletions = 0
+
+          for line in numstat.splitlines():
+              parts = line.split("\t")
+
+              if len(parts) >= 3:
+                  added = parts[0]
+                  deleted = parts[1]
+
+                  if added.isdigit():
+                      additions += int(added)
+
+                  if deleted.isdigit():
+                      deletions += int(deleted)
+
+          changed_files = []
+
+          status_names = {
+              "A": "Added",
+              "M": "Modified",
+              "D": "Deleted",
+              "R": "Renamed",
+              "C": "Copied"
+          }
+
+          for line in status_output.splitlines():
+              parts = line.split("\t")
+
+              if len(parts) >= 2:
+                  raw_status = parts[0]
+                  status = status_names.get(raw_status[0], raw_status)
+
+                  if raw_status.startswith("R") and len(parts) >= 3:
+                      filename = f"{parts[1]} → {parts[2]}"
+                  else:
+                      filename = parts[1]
+
+                  changed_files.append((status, filename))
+
+          commit_lines = []
+
+          for commit in commits:
+              commit_id = commit.get("id", "")[:7]
+              message = commit.get("message", "").splitlines()[0]
+              author = commit.get("author", {}).get("name", "Unknown")
+
+              commit_lines.append(
+                  f"• {commit_id}  {message} ({author})"
+              )
+
+          if not commit_lines:
+              commit_lines.append("• No commit information available")
+
+          file_lines = []
+
+          for status, filename in changed_files[:25]:
+              file_lines.append(f"• [{status}] {filename}")
+
+          if not file_lines:
+              file_lines.append("• No file information available")
+
+          if len(changed_files) > 25:
+              file_lines.append(
+                  f"• ... and {len(changed_files) - 25} more files"
+              )
+
+          compare_url = event.get("compare", "")
+
+          if not compare_url:
+              compare_url = (
+                  f"https://github.com/{repo}/commit/{after}"
+              )
+
+          message = f"""🤖 MDP Repository Update
+
+          📦 Repository
+          {repo}
+
+          🌿 Branch
+          {branch}
+
+          👤 Pushed by
+          {actor}
+
+          📌 Push Summary
+          {len(commits)} commit(s)
+          {len(changed_files)} file(s) changed
+          +{additions} additions
+          -{deletions} deletions
+
+          💬 Commits
+          {chr(10).join(commit_lines)}
+
+          📁 Files Changed
+          {chr(10).join(file_lines)}
+
+          🔗 View Changes
+          {compare_url}
+          """
+
+          message = "\n".join(
+              line.strip()
+              for line in message.splitlines()
+          ).strip()
+
+          if len(message) > 4000:
+              message = message[:3950] + "\n\n[Message shortened]\n" + compare_url
+
+          with open("/tmp/telegram_message.txt", "w", encoding="utf-8") as f:
+              f.write(message)
+
+          print(message)
+          PY
+
+      - name: Send Telegram notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOPIC_ID: ${{ secrets.TELEGRAM_TOPIC_ID }}
+        run: |
+          python <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          with open("/tmp/telegram_message.txt", "r", encoding="utf-8") as f:
+              message = f.read()
+
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+
+          url = (
+              "https://api.telegram.org/bot"
+              + token
+              + "/sendMessage"
+          )
+
+          payload = urllib.parse.urlencode({
+              "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+              "message_thread_id": os.environ["TELEGRAM_TOPIC_ID"],
+              "text": message,
+              "disable_web_page_preview": "true"
+          }).encode("utf-8")
+
+          request = urllib.request.Request(
+              url,
+              data=payload,
+              method="POST"
+          )
+
+          with urllib.request.urlopen(request) as response:
+              result = json.loads(response.read().decode("utf-8"))
+
+          if not result.get("ok"):
+              raise RuntimeError(result)
+
+          print("Telegram notification sent successfully")
+          PY
