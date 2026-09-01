@@ -104,7 +104,45 @@ class ArenaModelTest {
         assertEquals(Facing.S, s.obstacle(1)!!.targetFace)
     }
 
+    // --- image pool glyphs ------------------------------------------------
+
+    @Test fun `every id in the pool has a glyph`() {
+        Arena.TARGET_ID_RANGE.forEach {
+            assertNotNull("no glyph for $it", Arena.glyphFor(it))
+        }
+    }
+
+    @Test fun `glyphs match the briefing image pool`() {
+        assertEquals("1", Arena.glyphFor(11))
+        assertEquals("9", Arena.glyphFor(19))
+        assertEquals("A", Arena.glyphFor(20))
+        assertEquals("H", Arena.glyphFor(27))
+        assertEquals("S", Arena.glyphFor(28))
+        assertEquals("Z", Arena.glyphFor(35))
+        assertEquals("↑", Arena.glyphFor(36))
+        assertEquals("←", Arena.glyphFor(39))
+        assertEquals("●", Arena.glyphFor(40))
+    }
+
+    @Test fun `ids outside the pool have no glyph`() {
+        assertNull(Arena.glyphFor(10))
+        assertNull(Arena.glyphFor(41))
+        assertNull(Arena.glyphFor(0))
+    }
+
+    @Test fun `no two ids share a glyph`() {
+        val glyphs = Arena.TARGET_ID_RANGE.mapNotNull { Arena.glyphFor(it) }
+        assertEquals(glyphs.size, glyphs.toSet().size)
+    }
+
     // --- facing ----------------------------------------------------------
+
+    @Test fun `bearings run clockwise from north`() {
+        assertEquals(0f, Facing.N.bearingDeg)
+        assertEquals(90f, Facing.E.bearingDeg)
+        assertEquals(180f, Facing.S.bearingDeg)
+        assertEquals(270f, Facing.W.bearingDeg)
+    }
 
     @Test fun `turning left four times returns to the start`() {
         var f = Facing.N

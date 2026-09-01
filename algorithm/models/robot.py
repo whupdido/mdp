@@ -1,12 +1,17 @@
-from algorithm.enums import Direction
+"""Robot state model.
 
+Physical dimensions live in :class:`algorithm.config.RobotGeometry`; this
+type only carries the robot's current rear-axle pose.
+"""
+
+from dataclasses import dataclass
+
+from algorithm.models.pose import Pose
+
+
+@dataclass(frozen=True, slots=True)
 class Robot:
-    def __init__(
-        self,
-        x: int = 1,     # Default starting
-        y: int = 1,
-        heading: Direction = Direction.NORTH
-    ):
-        self.x = x                  # Grid x-coordinate
-        self.y = y                  # Grid y-coordinate
-        self.heading = heading      # Facing direction
+    pose: Pose
+
+
+RobotState = Robot

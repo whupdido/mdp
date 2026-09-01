@@ -1,0 +1,14 @@
+algo:
+  port: 8000
+yolo:
+  port: 5001
+  stream: true
+  unwanted: [36, 37, 38, 39, 40] # 30, 31, 32 for task 1
+  fail_threshold: 2 # 2 for task 1 if shift left, right during retry
+  num_images: 2
+  models:
+    0:
+      path: "server/best.pt"
+      weight: 1.0
+      mapping: None
+      is_main: true
