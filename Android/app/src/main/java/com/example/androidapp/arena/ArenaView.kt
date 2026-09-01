@@ -239,9 +239,22 @@ class ArenaView @JvmOverloads constructor(
         val b1 = nearestEquivalentAngle(b0, target.facing.bearingDeg)
 
         val distance = hypot(x1 - x0, y1 - y0)
-        // Lead distance ahead of the old heading. No lead for a pure spin or a
-        // move with no turn — a straight line is the honest picture there.
-        val lead = if (distance > 0.01f && abs(b1 - b0) > 1f) distance * 0.55f else 0f
+
+        // Lead distance ahead of the old heading. No lead for a move with no
+        // turn — a straight line is the honest picture there.
+        //
+        // Left and right are not symmetric. Kush re-measured the turn radii on
+        // 31-Aug-2026 (stm32/STM32_motion_spec.md): FL 317 mm against FR
+        // 413 mm, so a right turn genuinely swings about 30 % wider than a
+        // left. Drawing them the same would misrepresent the one asymmetry
+        // that actually costs us space in the arena.
+        val turning = distance > 0.01f && abs(b1 - b0) > 1f
+        val turningRight = b1 > b0
+        val lead = when {
+            !turning -> 0f
+            turningRight -> distance * LEAD_LEFT * (RADIUS_FR_MM / RADIUS_FL_MM)
+            else -> distance * LEAD_LEFT
+        }
         val rad = Math.toRadians(b0.toDouble())
         val ctrlX = x0 + (sin(rad) * lead).toFloat()
         val ctrlY = y0 + (cos(rad) * lead).toFloat()
@@ -661,6 +674,11 @@ class ArenaView @JvmOverloads constructor(
         (color and 0x00FFFFFF) or (alpha.coerceIn(0, 255) shl 24)
 
     private companion object {
+        /** Turn radii measured 31-Aug-2026, stm32/STM32_motion_spec.md. */
+        const val RADIUS_FL_MM = 317f
+        const val RADIUS_FR_MM = 413f
+        const val LEAD_LEFT = 0.48f
+
         const val BOARD = 0xFF080D11.toInt()
         const val VIGNETTE = 0x3A000000
         const val GRID = 0xFF1B2831.toInt()

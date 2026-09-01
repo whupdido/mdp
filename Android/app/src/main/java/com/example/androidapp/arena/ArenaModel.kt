@@ -79,8 +79,15 @@ object Arena {
     /** The robot footprint is 3 x 3 cells (the car is 23.0 x 18.8 cm). */
     const val ROBOT_SPAN = 3
 
-    /** The start zone is the 3 x 3 block at the origin corner. */
-    const val START_ZONE_SPAN = 3
+    /**
+     * The start zone is the 4 x 4 block at the origin corner — 40 cm.
+     *
+     * Matched to algorithm/constants.py START_ZONE_SIZE_CM, which is the
+     * functional definition: the planner refuses to place obstacles inside it.
+     * This end only shades the area, so the planner's number wins. Worth one
+     * person confirming against the physical arena.
+     */
+    const val START_ZONE_SPAN = 4
 
     val START_POSE = RobotPose(1, 1, Facing.N)
 

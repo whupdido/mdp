@@ -382,7 +382,7 @@ the real tablet for anything involving the radio.
   made mid-move queue in the RFCOMM buffer until the move finishes. Fine for a
   demo, worth remembering during a timed run.
 - **The robot cannot turn on the spot.** Ackermann steering: a 90° turn also
-  carries the car 2.5–3.2 cells forward or back. That is why the buttons say
+  carries the car 3.1–4.2 cells forward or back. That is why the buttons say
   "Fwd-left" rather than "Left". If the map ever animates a turn as a pivot in
   place, it is lying about the robot.
 - **`STALL` and `TIMEOUT` invalidate the map.** After either, the robot's real
