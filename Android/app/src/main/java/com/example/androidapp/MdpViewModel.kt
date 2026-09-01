@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.androidapp.arena.Arena
 import com.example.androidapp.arena.ArenaState
 import com.example.androidapp.arena.Facing
+import com.example.androidapp.arena.ReplayState
+import com.example.androidapp.arena.RunFrame
 import com.example.androidapp.arena.cleared
 import com.example.androidapp.arena.withObstacleAdded
 import com.example.androidapp.arena.withObstacleMoved
@@ -24,6 +26,7 @@ import com.example.androidapp.protocol.Outbound
 import com.example.androidapp.protocol.parseInbound
 import com.example.androidapp.protocol.toCommand
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -79,6 +82,21 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val notices: SharedFlow<String> = _notices.asSharedFlow()
+
+    // --- run recording and replay ---------------------------------------
+
+    /**
+     * Every robot pose and target report during a run, so it can be scrubbed
+     * back afterwards. Recording is always on and costs nothing — you never
+     * know a run was worth keeping until after it has happened.
+     */
+    private val recorded = mutableListOf<RunFrame>()
+
+    private val _replay = MutableStateFlow(ReplayState())
+    val replay: StateFlow<ReplayState> = _replay.asStateFlow()
+
+    private var playback: Job? = null
+    private var runStartedAt = 0L
 
     private var collectors: Job? = null
 
@@ -157,6 +175,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
                     warn("Ignored ROBOT (${msg.x},${msg.y}) — outside the arena.")
                 } else {
                     _arena.value = next
+                    record(next, null)
                 }
             }
 
@@ -167,7 +186,9 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     _arena.value = next
                     val where = msg.face?.let { " on its ${it.name} face" } ?: ""
-                    say("Target ${msg.targetId} found at obstacle ${msg.obstacleId}$where.")
+                    val glyph = Arena.glyphFor(msg.targetId)?.let { " ($it)" } ?: ""
+                    say("Target ${msg.targetId}$glyph found at obstacle ${msg.obstacleId}$where.")
+                    record(next, "Target ${msg.targetId}$glyph at obstacle ${msg.obstacleId}")
                 }
             }
 
@@ -263,6 +284,79 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // -----------------------------------------------------------------
+    // Run recording and replay
+    // -----------------------------------------------------------------
+
+    private fun record(state: ArenaState, note: String?) {
+        if (recorded.isEmpty()) runStartedAt = System.currentTimeMillis()
+        recorded += RunFrame(
+            atMs = System.currentTimeMillis() - runStartedAt,
+            robot = state.robot,
+            trail = state.trail,
+            obstacles = state.obstacles,
+            note = note,
+        )
+        if (recorded.size > MAX_FRAMES) recorded.removeAt(0)
+    }
+
+    fun openReplay() {
+        if (recorded.size < 2) {
+            warn("Nothing recorded yet. Drive the robot, then replay it.")
+            return
+        }
+        _replay.value = ReplayState(
+            active = true,
+            frames = recorded.toList(),
+            index = 0,
+        )
+        say("Replaying ${recorded.size} frames.")
+    }
+
+    fun closeReplay() {
+        playback?.cancel()
+        playback = null
+        _replay.value = ReplayState()
+    }
+
+    fun scrubTo(index: Int) {
+        val current = _replay.value
+        if (!current.active) return
+        _replay.value = current.copy(index = index.coerceIn(0, current.frames.lastIndex))
+    }
+
+    fun toggleReplayPlayback() {
+        val current = _replay.value
+        if (!current.active) return
+        if (current.playing) {
+            playback?.cancel()
+            playback = null
+            _replay.value = current.copy(playing = false)
+            return
+        }
+        // Restart from the beginning if we are already parked at the end.
+        val from = if (current.index >= current.frames.lastIndex) 0 else current.index
+        _replay.value = current.copy(playing = true, index = from)
+        playback = viewModelScope.launch {
+            var i = from
+            while (i < _replay.value.frames.lastIndex) {
+                delay(FRAME_MS)
+                i++
+                val live = _replay.value
+                if (!live.active || !live.playing) return@launch
+                _replay.value = live.copy(index = i)
+            }
+            _replay.value = _replay.value.copy(playing = false)
+            playback = null
+        }
+    }
+
+    fun clearRecording() {
+        closeReplay()
+        recorded.clear()
+        say("Recording cleared.")
+    }
+
+    // -----------------------------------------------------------------
     // Editing helpers
     // -----------------------------------------------------------------
 
@@ -336,6 +430,8 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         private const val STATUS_DEPTH = 60
         private const val LOG_DEPTH = 300
         private const val UNDO_DEPTH = 30
+        private const val MAX_FRAMES = 600
+        private const val FRAME_MS = 320L
         private val CLOCK = SimpleDateFormat("HH:mm:ss", Locale.UK)
         private fun stamp(text: String) = "${CLOCK.format(Date())}  $text"
 

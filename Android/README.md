@@ -121,6 +121,42 @@ directions, goes in **Traffic** instead. The `⌄` button swaps between them.
 `BUSY` and discards anything sent while it is already moving. `−`/`+` change
 the distance step; tapping the readout cycles the turn angle.
 
+**Pad / Buttons** swaps the button grid for a gesture control: drag out from
+the centre, the sector under your thumb lights up, release to fire it.
+Releasing in the middle sends `STOP`; releasing outside the ring cancels, so a
+stray touch costs nothing. There is no plain "left" or "right" because the car
+cannot turn on the spot — every turn also carries it forwards or backwards.
+
+**⟲ Replay** scrubs back through the run. Every robot pose and target report is
+recorded automatically, so you never have to decide in advance that a run was
+worth keeping. Useful for the video, and genuinely useful for arguing with the
+path planner about what actually happened.
+
+### Reading the arena
+
+The palette carries meaning, so the screen can be read at a glance mid-run:
+
+| | |
+|---|---|
+| **Amber** | something you did or can do |
+| **Cyan** | something the robot is telling you |
+| **Red** | a target |
+| **Green** | the link is healthy |
+
+Obstacles are drawn as raised blocks with a lit top and a cast shadow, because
+they *are* 10 cm cubes standing on the floor. It stays a true plan view, so
+coordinates still read correctly.
+
+When a target is recognised the block shows the **ID in large white text** — the
+C.9 requirement — and a chip beside it carrying the **character actually printed
+on that image** (`A`, `7`, `↑`). Mapping comes from the briefing's image pool
+and lives in `Arena.glyphFor()`, so there are no image assets to manage.
+
+The robot does not teleport between poses. It travels, and a turn leaves along
+the heading it was already facing before curving into the new one — the
+Ackermann behaviour described in `stm32/STM32_motion_spec.md`. If it ever
+appears to pivot on the spot, the map is lying about the robot.
+
 ---
 
 ## Testing without a robot
@@ -307,7 +343,7 @@ cd Android
 ./gradlew test
 ```
 
-40 JVM tests, no device needed.
+45 JVM tests, no device needed.
 
 - `ProtocolTest` — every inbound format, both `TARGET` spellings, the Pi
   bridge's whole vocabulary, and a pile of garbage that must not crash it.
@@ -346,7 +382,7 @@ the real tablet for anything involving the radio.
   made mid-move queue in the RFCOMM buffer until the move finishes. Fine for a
   demo, worth remembering during a timed run.
 - **The robot cannot turn on the spot.** Ackermann steering: a 90° turn also
-  carries the car 2.5–3.2 cells forward or back. That is why the buttons say
+  carries the car 3.1–4.2 cells forward or back. That is why the buttons say
   "Fwd-left" rather than "Left". If the map ever animates a turn as a pivot in
   place, it is lying about the robot.
 - **`STALL` and `TIMEOUT` invalidate the map.** After either, the robot's real

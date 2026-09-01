@@ -1,21 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The app commits to one dark, landscape, tablet look: it is used in a
-         lab under bright light, and it is filmed for the video report. -->
-    <color name="arena_ground">#FF0B0F13</color>
-    <color name="arena_panel">#FF161C22</color>
-    <color name="arena_panel_raised">#FF1E262D</color>
-    <color name="arena_hairline">#FF2C363E</color>
+    <!--
+      Mission control.
 
-    <color name="arena_text">#FFE6ECEF</color>
-    <color name="arena_text_muted">#FF8B99A2</color>
-    <color name="arena_text_faint">#FF616F78</color>
+      One rule runs through the whole palette and makes the screen readable at a
+      glance during a timed run:
 
+          AMBER  = something you did or can do
+          CYAN   = something the robot is telling you
+          RED    = a target
+          GREEN  = the link is healthy
+
+      Nothing else is allowed to be saturated. Everything structural is a cool
+      near-black so the four signal colours are the only things that carry.
+    -->
+
+    <!-- Ground and surfaces -->
+    <color name="arena_ground">#FF080C10</color>
+    <color name="arena_panel">#FF131A21</color>
+    <color name="arena_panel_raised">#FF1B242D</color>
+    <color name="arena_hairline">#FF24303A</color>
+    <color name="arena_hairline_soft">#FF1A242C</color>
+
+    <!-- Type -->
+    <color name="arena_text">#FFE6EDF2</color>
+    <color name="arena_text_muted">#FF8A9AA6</color>
+    <color name="arena_text_faint">#FF5C6B77</color>
+
+    <!-- Your intent -->
     <color name="arena_accent">#FFF0A82E</color>
-    <color name="arena_accent_press">#FFC98A20</color>
-    <color name="arena_on_accent">#FF14181C</color>
+    <color name="arena_accent_dim">#FF8A6420</color>
+    <color name="arena_accent_press">#FFC8891F</color>
+    <color name="arena_on_accent">#FF0C1116</color>
 
+    <!-- Robot telemetry -->
     <color name="arena_robot">#FF3FA8DE</color>
+    <color name="arena_robot_bright">#FF7FD4FF</color>
+
+    <!-- Targets and state -->
     <color name="arena_target">#FFFF5A3C</color>
     <color name="arena_ok">#FF4ECB8F</color>
     <color name="arena_bad">#FFE0785A</color>
