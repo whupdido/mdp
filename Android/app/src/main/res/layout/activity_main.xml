@@ -55,6 +55,81 @@
             android:textColor="@color/arena_robot"
             android:textSize="12sp"
             tools:text="ROBOT (1, 1) N" />
+
+        <!--
+          Replay scrubber. Sits over the arena rather than stealing a slot in
+          the side column, and only exists while a replay is open.
+        -->
+        <LinearLayout
+            android:id="@+id/replayBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:layout_marginBottom="26dp"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/bg_chip"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="4dp"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnReplayPlay"
+                style="@style/PadButton.Accent"
+                android:layout_width="42dp"
+                android:layout_height="32dp"
+                android:insetLeft="0dp"
+                android:insetRight="0dp"
+                android:minWidth="0dp"
+                android:text="@string/replay_play" />
+
+            <SeekBar
+                android:id="@+id/replaySeek"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_weight="1"
+                android:progressTint="@color/arena_accent"
+                android:thumbTint="@color/arena_accent" />
+
+            <TextView
+                android:id="@+id/replayLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:minWidth="58dp"
+                android:textAlignment="center"
+                android:textColor="@color/arena_text_muted"
+                android:textSize="11sp"
+                tools:text="12/48" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnReplayClose"
+                style="@style/PadButton"
+                android:layout_width="38dp"
+                android:layout_height="32dp"
+                android:insetLeft="0dp"
+                android:insetRight="0dp"
+                android:minWidth="0dp"
+                android:text="@string/replay_close" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/replayNote"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_chip"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="6dp"
+            android:textColor="@color/arena_target"
+            android:textSize="12sp"
+            android:visibility="gone"
+            tools:text="Target 11 (1) at obstacle 2"
+            tools:visibility="visible" />
     </FrameLayout>
 
     <!-- =========================== SIDE PANEL ========================= -->
@@ -293,117 +368,151 @@
                     android:textColor="@color/arena_text_muted"
                     android:textSize="11sp"
                     tools:text="10 cm · 90°" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnDriveMode"
+                    style="@style/PadButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="24dp"
+                    android:layout_marginStart="8dp"
+                    android:insetLeft="0dp"
+                    android:insetRight="0dp"
+                    android:minWidth="0dp"
+                    android:paddingHorizontal="10dp"
+                    android:textSize="10sp"
+                    android:text="@string/mode_pad" />
             </LinearLayout>
 
-            <LinearLayout
+            <!--
+              The gesture control for C.3. Buttons remain the default because
+              that is what the checklist was signed on; this is the faster one
+              to use, and the checklist notes gestures score better.
+            -->
+            <com.example.androidapp.control.GesturePad
+                android:id="@+id/gesturePad"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="136dp"
                 android:layout_marginTop="8dp"
-                android:orientation="horizontal">
+                android:contentDescription="@string/pad_description"
+                android:visibility="gone"
+                tools:visibility="visible" />
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnFwdLeft"
-                    style="@style/PadButton"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:text="@string/drive_fwd_left" />
-
-                <Space android:layout_width="6dp" android:layout_height="1dp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnForward"
-                    style="@style/PadButton.Accent"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:text="@string/drive_forward" />
-
-                <Space android:layout_width="6dp" android:layout_height="1dp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnFwdRight"
-                    style="@style/PadButton"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:text="@string/drive_fwd_right" />
-            </LinearLayout>
 
             <LinearLayout
+                android:id="@+id/buttonGrid"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="horizontal">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnBackLeft"
-                    style="@style/PadButton"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:text="@string/drive_back_left" />
-
-                <Space android:layout_width="6dp" android:layout_height="1dp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnBackward"
-                    style="@style/PadButton"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:text="@string/drive_back" />
-
-                <Space android:layout_width="6dp" android:layout_height="1dp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnBackRight"
-                    style="@style/PadButton"
-                    android:layout_width="0dp"
-                    android:layout_height="44dp"
-                    android:layout_weight="1"
-                    android:text="@string/drive_back_right" />
+                android:orientation="vertical">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="horizontal">
+    
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnFwdLeft"
+                        style="@style/PadButton"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:text="@string/drive_fwd_left" />
+    
+                    <Space android:layout_width="6dp" android:layout_height="1dp" />
+    
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnForward"
+                        style="@style/PadButton.Accent"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:text="@string/drive_forward" />
+    
+                    <Space android:layout_width="6dp" android:layout_height="1dp" />
+    
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnFwdRight"
+                        style="@style/PadButton"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:text="@string/drive_fwd_right" />
+                </LinearLayout>
+    
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="horizontal">
+    
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnBackLeft"
+                        style="@style/PadButton"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:text="@string/drive_back_left" />
+    
+                    <Space android:layout_width="6dp" android:layout_height="1dp" />
+    
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnBackward"
+                        style="@style/PadButton"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:text="@string/drive_back" />
+    
+                    <Space android:layout_width="6dp" android:layout_height="1dp" />
+    
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnBackRight"
+                        style="@style/PadButton"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:text="@string/drive_back_right" />
+                </LinearLayout>
+    
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:orientation="horizontal">
+    
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnDistDown"
+                        android:insetLeft="0dp"
+                        android:insetRight="0dp"
+                        style="@style/PadButton"
+                        android:layout_width="44dp"
+                        android:layout_height="40dp"
+                        android:maxLines="1"
+                        android:text="−" />
+    
+                    <Space android:layout_width="6dp" android:layout_height="1dp" />
+    
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnDistUp"
+                        android:insetLeft="0dp"
+                        android:insetRight="0dp"
+                        style="@style/PadButton"
+                        android:layout_width="44dp"
+                        android:layout_height="40dp"
+                        android:maxLines="1"
+                        android:text="+" />
+    
+                    <Space android:layout_width="6dp" android:layout_height="1dp" />
+    
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnStop"
+                        style="@style/PadButton.Danger"
+                        android:layout_width="0dp"
+                        android:layout_height="40dp"
+                        android:layout_weight="1"
+                        android:text="@string/drive_stop" />
+                </LinearLayout>
             </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:orientation="horizontal">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnDistDown"
-                    android:insetLeft="0dp"
-                    android:insetRight="0dp"
-                    style="@style/PadButton"
-                    android:layout_width="44dp"
-                    android:layout_height="40dp"
-                    android:maxLines="1"
-                    android:text="−" />
-
-                <Space android:layout_width="6dp" android:layout_height="1dp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnDistUp"
-                    android:insetLeft="0dp"
-                    android:insetRight="0dp"
-                    style="@style/PadButton"
-                    android:layout_width="44dp"
-                    android:layout_height="40dp"
-                    android:maxLines="1"
-                    android:text="+" />
-
-                <Space android:layout_width="6dp" android:layout_height="1dp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnStop"
-                    style="@style/PadButton.Danger"
-                    android:layout_width="0dp"
-                    android:layout_height="40dp"
-                    android:layout_weight="1"
-                    android:text="@string/drive_stop" />
             </LinearLayout>
-        </LinearLayout>
 
         <!-- ====================== Map actions ====================== -->
         <LinearLayout
@@ -418,6 +527,10 @@
                 android:layout_width="0dp"
                 android:layout_height="40dp"
                 android:layout_weight="1"
+                android:insetLeft="0dp"
+                android:insetRight="0dp"
+                android:minWidth="0dp"
+                android:textSize="11sp"
                 android:text="@string/undo" />
 
             <Space android:layout_width="6dp" android:layout_height="1dp" />
@@ -428,6 +541,10 @@
                 android:layout_width="0dp"
                 android:layout_height="40dp"
                 android:layout_weight="1"
+                android:insetLeft="0dp"
+                android:insetRight="0dp"
+                android:minWidth="0dp"
+                android:textSize="11sp"
                 android:text="@string/clear" />
 
             <Space android:layout_width="6dp" android:layout_height="1dp" />
@@ -438,7 +555,23 @@
                 android:layout_width="0dp"
                 android:layout_height="40dp"
                 android:layout_weight="1"
+                android:insetLeft="0dp"
+                android:insetRight="0dp"
+                android:minWidth="0dp"
+                android:textSize="11sp"
                 android:text="@string/demo_layout" />
+
+            <Space android:layout_width="6dp" android:layout_height="1dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnReplay"
+                style="@style/PadButton"
+                android:layout_width="44dp"
+                android:layout_height="40dp"
+                android:insetLeft="0dp"
+                android:insetRight="0dp"
+                android:minWidth="0dp"
+                android:text="@string/replay_open" />
 
             <Space android:layout_width="6dp" android:layout_height="1dp" />
 

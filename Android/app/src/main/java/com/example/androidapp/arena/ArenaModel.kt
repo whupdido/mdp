@@ -12,8 +12,9 @@ package com.example.androidapp.arena
  *   - the start zone is x,y in 0..2; the robot starts at (1,1) facing N
  */
 
-enum class Facing(val letter: Char) {
-    N('N'), E('E'), S('S'), W('W');
+/** [bearingDeg] is a compass bearing: 0 is North, increasing clockwise. */
+enum class Facing(val letter: Char, val bearingDeg: Float) {
+    N('N', 0f), E('E', 90f), S('S', 180f), W('W', 270f);
 
     fun turnedLeft(): Facing = entries[(ordinal + 3) % 4]
     fun turnedRight(): Facing = entries[(ordinal + 1) % 4]
@@ -40,6 +41,22 @@ data class Obstacle(
 )
 
 data class RobotPose(val x: Int, val y: Int, val facing: Facing)
+
+/**
+ * One recorded moment of a run, for the replay scrubber.
+ *
+ * Kept as whole snapshots rather than deltas: a run is a few hundred frames at
+ * most, and being able to jump straight to any index without replaying the
+ * history to get there is worth far more than the memory.
+ */
+data class RunFrame(
+    val atMs: Long,
+    val robot: RobotPose,
+    val trail: List<Pair<Int, Int>>,
+    val obstacles: List<Obstacle>,
+    /** What happened at this moment, if anything worth captioning. */
+    val note: String? = null,
+)
 
 data class ArenaState(
     val obstacles: List<Obstacle> = emptyList(),
@@ -69,6 +86,30 @@ object Arena {
 
     /** Valid target IDs from the image pool: 11-19 digits, 20-35 letters, 36-40 arrows/stop. */
     val TARGET_ID_RANGE = 11..40
+
+    /**
+     * The character actually printed on each target image, from the pool table
+     * in the MDP briefing.
+     *
+     * Showing "25" tells you an ID. Showing "F" as well tells you what the
+     * robot's camera was looking at, which is the thing a human in the lab
+     * actually wants to check against the physical block.
+     */
+    private val GLYPHS: Map<Int, String> = buildMap {
+        (11..19).forEach { put(it, (it - 10).toString()) }          // 1 - 9
+        listOf("A", "B", "C", "D", "E", "F", "G", "H")              // 20 - 27
+            .forEachIndexed { i, g -> put(20 + i, g) }
+        listOf("S", "T", "U", "V", "W", "X", "Y", "Z")              // 28 - 35
+            .forEachIndexed { i, g -> put(28 + i, g) }
+        put(36, "↑")                                            // up
+        put(37, "↓")                                            // down
+        put(38, "→")                                            // right
+        put(39, "←")                                            // left
+        put(40, "●")                                            // stop
+    }
+
+    /** The printed character for a target ID, or null if the ID is not in the pool. */
+    fun glyphFor(targetId: Int): String? = GLYPHS[targetId]
 
     fun inBounds(x: Int, y: Int): Boolean = x in 0 until SIZE && y in 0 until SIZE
 
@@ -146,3 +187,16 @@ fun ArenaState.withRobotAt(x: Int, y: Int, facing: Facing): ArenaState? {
 fun ArenaState.cleared(): ArenaState = ArenaState()
 
 private const val MAX_TRAIL = 64
+
+/**
+ * What the replay scrubber is showing. Empty [frames] means nothing recorded.
+ */
+data class ReplayState(
+    val active: Boolean = false,
+    val playing: Boolean = false,
+    val index: Int = 0,
+    val frames: List<RunFrame> = emptyList(),
+) {
+    val total: Int get() = frames.size
+    val current: RunFrame? get() = frames.getOrNull(index)
+}
