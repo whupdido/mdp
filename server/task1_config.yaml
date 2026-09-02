@@ -3,12 +3,12 @@ algo:
 yolo:
   port: 5001
   stream: true
-  unwanted: [36, 37, 38, 39, 40] # 30, 31, 32 for task 1
+  unwanted: [36, 37, 38, 39, 40] # 41 (bullseye/marker) stays reportable -- A.5 needs to know when it's seeing the marker, not just a real face
   fail_threshold: 2 # 2 for task 1 if shift left, right during retry
   num_images: 2
   models:
     0:
       path: "server/best.pt"
       weight: 1.0
-      mapping: None
+      mapping: "server/mapping.json"
       is_main: true
