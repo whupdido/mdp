@@ -23,7 +23,11 @@ def recv_json(conn):
     return json.loads(data.decode("utf-8"))
 
 def send_pickle(conn, arr) -> None:
-    blob = pickle.dumps(arr, protocol=pickle.HIGHEST_PROTOCOL)
+    # Pinned to protocol 4 (not pickle.HIGHEST_PROTOCOL) on purpose -- this
+    # server runs on a modern Python (protocol 5+ by default), but the RPi
+    # client is on an older Python that can't unpickle protocol 5. Protocol 4
+    # (Python 3.4+) is understood by both ends and has no downside here.
+    blob = pickle.dumps(arr, protocol=4)
     conn.sendall(struct.pack(">Q", len(blob)))
     conn.sendall(blob)
 
