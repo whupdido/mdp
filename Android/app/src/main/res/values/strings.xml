@@ -34,7 +34,7 @@
     <string name="demo_layout">Demo</string>
 
     <!-- Debug -->
-    <string name="inject_hint">Inject an inbound line, e.g. ROBOT,7,2,W</string>
+    <string name="inject_hint">e.g. ROBOT,7,2,W</string>
     <string name="inject">Inject</string>
     <string name="clear_log">Clear</string>
 

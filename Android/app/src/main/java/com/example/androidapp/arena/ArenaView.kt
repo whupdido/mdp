@@ -135,6 +135,10 @@ class ArenaView @JvmOverloads constructor(
     private val startHatch = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = START_HATCH; style = Paint.Style.STROKE; strokeWidth = dp(1f)
     }
+    private val bracketPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = BRACKET; style = Paint.Style.STROKE; strokeWidth = dp(2.8f)
+        strokeCap = Paint.Cap.SQUARE
+    }
     private val axisPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = AXIS; textAlign = Paint.Align.CENTER
     }
@@ -336,6 +340,36 @@ class ArenaView @JvmOverloads constructor(
 
         canvas.drawRect(gridLeft, gridTop, right, gridBottom, vignettePaint)
         canvas.drawRect(gridLeft, gridTop, right, gridBottom, framePaint)
+        drawCornerBrackets(canvas, right)
+    }
+
+    /**
+     * Viewfinder brackets at the four corners. They cost nothing, they make the
+     * arena read as something being *observed* rather than a plain rectangle,
+     * and they give the eye a fix on the arena bounds when the grid itself is
+     * deliberately faint.
+     */
+    private fun drawCornerBrackets(canvas: Canvas, right: Float) {
+        // Inset, not outset. The gutter sits on the left and bottom only — the
+        // grid meets the view's top and right edges exactly — so brackets drawn
+        // outside the frame get clipped on two corners out of four.
+        val len = cell * 1.3f
+        val inset = dp(3f)
+        val l = gridLeft + inset
+        val r = right - inset
+        val t = gridTop + inset
+        val b = gridBottom - inset
+
+        path.reset()
+        // top-left
+        path.moveTo(l, t + len); path.lineTo(l, t); path.lineTo(l + len, t)
+        // top-right
+        path.moveTo(r - len, t); path.lineTo(r, t); path.lineTo(r, t + len)
+        // bottom-right
+        path.moveTo(r, b - len); path.lineTo(r, b); path.lineTo(r - len, b)
+        // bottom-left
+        path.moveTo(l + len, b); path.lineTo(l, b); path.lineTo(l, b - len)
+        canvas.drawPath(path, bracketPaint)
     }
 
     private fun drawAxes(canvas: Canvas) {
@@ -684,6 +718,7 @@ class ArenaView @JvmOverloads constructor(
         const val GRID = 0xFF1B2831.toInt()
         const val GRID_MAJOR = 0xFF31454F.toInt()
         const val FRAME = 0xFF2E4150.toInt()
+        const val BRACKET = 0xFF8AA6B8.toInt()
         const val START_FILL = 0x26F0A82E
         const val START_HATCH = 0x3DF0A82E
         const val AXIS = 0xFF6E7F8B.toInt()

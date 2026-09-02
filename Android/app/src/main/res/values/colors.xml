@@ -42,6 +42,20 @@
     <color name="arena_ok">#FF4ECB8F</color>
     <color name="arena_bad">#FFE0785A</color>
 
+    <!-- Key caps: a lit top edge over a darker base, so buttons read as hardware -->
+    <color name="arena_key">#FF232E37</color>
+    <color name="arena_key_edge">#FF0E141A</color>
+    <color name="arena_key_stroke">#FF33424E</color>
+    <color name="arena_panel_edge">#FF090E13</color>
+
+    <color name="arena_danger">#FFC4553A</color>
+    <color name="arena_danger_press">#FF7E3524</color>
+    <color name="arena_danger_lit">#FFE0785A</color>
+    <color name="arena_accent_lit">#FFFFC864</color>
+
+    <color name="arena_ripple">#33FFFFFF</color>
+    <color name="arena_ripple_dark">#33000000</color>
+
     <color name="white">#FFFFFFFF</color>
     <color name="black">#FF000000</color>
 </resources>
