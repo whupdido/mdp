@@ -126,7 +126,7 @@ class Server:
 
                 ts = time.strftime("%Y%m%d-%H%M%S")
                 filename = f"yolo_logs/frame_{ts}_{idx}_{i}.jpg"
-                cv2.imwrite(filename, result)
+                cv2.imwrite(filename, result.plot())
 
                 # Check if this frame produced a detection
                 if len(result.boxes) > 0:

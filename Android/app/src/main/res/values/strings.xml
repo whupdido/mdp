@@ -34,7 +34,7 @@
     <string name="demo_layout">Demo</string>
 
     <!-- Debug -->
-    <string name="inject_hint">Inject an inbound line, e.g. ROBOT,7,2,W</string>
+    <string name="inject_hint">e.g. ROBOT,7,2,W</string>
     <string name="inject">Inject</string>
     <string name="clear_log">Clear</string>
 
@@ -48,4 +48,14 @@
     <string name="step_format" translatable="false">%1$d cm · %2$d°</string>
     <string name="device_meta_paired" translatable="false">%1$s  ·  paired</string>
     <string name="device_meta_nearby" translatable="false">%1$s  ·  nearby</string>
+
+    <!-- Drive mode + replay -->
+    <string name="mode_pad">Pad</string>
+    <string name="mode_buttons">Buttons</string>
+    <string name="pad_description">Gesture drive pad. Drag from the centre towards a direction and release to send that move. Release in the middle to stop.</string>
+    <string name="replay_open" translatable="false">⟲</string>
+    <string name="replay_play" translatable="false">▶</string>
+    <string name="replay_pause" translatable="false">❚❚</string>
+    <string name="replay_close" translatable="false">✕</string>
+    <string name="replay_counter" translatable="false">%1$d/%2$d</string>
 </resources>

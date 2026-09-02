@@ -1,11 +1,14 @@
 package com.example.androidapp
 
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.BaseAdapter
+import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -55,6 +58,7 @@ class MainActivity : AppCompatActivity() {
         wireDrivePad()
         wireMapActions()
         wireTrafficDrawer()
+        wireReplay()
         observe()
     }
 
@@ -122,8 +126,13 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this)
             .setView(content.root)
-            .setNegativeButton(android.R.string.cancel) { d, _ -> vm.stopScan(); d.dismiss() }
             .create()
+
+        // The dialog window's own background is a light, square-cornered
+        // rectangle that shows behind the custom rounded surface. Clearing it
+        // lets the layout be the whole dialog.
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        content.btnCloseDialog.setOnClickListener { vm.stopScan(); dialog.dismiss() }
 
         content.btnScanDialog.setOnClickListener {
             if (vm.scanning.value) vm.stopScan() else vm.startScan()
@@ -187,6 +196,16 @@ class MainActivity : AppCompatActivity() {
         ui.btnBackRight.setOnClickListener { drive(Move.BACK_RIGHT) }
         ui.btnStop.setOnClickListener { drive(Move.STOP) }
 
+        // C.3 gesture control. Buttons stay the default because that is what
+        // the checklist was signed on; the pad is the faster one in practice.
+        ui.gesturePad.onMove = { drive(it) }
+        ui.btnDriveMode.setOnClickListener {
+            val toPad = ui.gesturePad.visibility != View.VISIBLE
+            ui.gesturePad.visibility = if (toPad) View.VISIBLE else View.GONE
+            ui.buttonGrid.visibility = if (toPad) View.GONE else View.VISIBLE
+            ui.btnDriveMode.setText(if (toPad) R.string.mode_buttons else R.string.mode_pad)
+        }
+
         ui.btnDistDown.setOnClickListener { distanceCm = (distanceCm - 10).coerceAtLeast(10); showStep() }
         ui.btnDistUp.setOnClickListener { distanceCm = (distanceCm + 10).coerceAtMost(150); showStep() }
         ui.stepReadout.setOnClickListener {
@@ -210,6 +229,19 @@ class MainActivity : AppCompatActivity() {
         ui.btnUndo.setOnClickListener { vm.undo() }
         ui.btnClear.setOnClickListener { vm.resetArena() }
         ui.btnDemo.setOnClickListener { vm.loadDemoLayout() }
+        ui.btnReplay.setOnClickListener { vm.openReplay() }
+    }
+
+    private fun wireReplay() {
+        ui.btnReplayPlay.setOnClickListener { vm.toggleReplayPlayback() }
+        ui.btnReplayClose.setOnClickListener { vm.closeReplay() }
+        ui.replaySeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, value: Int, fromUser: Boolean) {
+                if (fromUser) vm.scrubTo(value)
+            }
+            override fun onStartTrackingTouch(bar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(bar: SeekBar?) = Unit
+        })
     }
 
     private fun wireTrafficDrawer() {
@@ -295,6 +327,36 @@ class MainActivity : AppCompatActivity() {
                         ui.logScroll.post { ui.logScroll.fullScroll(View.FOCUS_DOWN) }
                     }
                 }
+
+                launch {
+                    vm.replay.collect { r ->
+                        ui.replayBar.visibility = if (r.active) View.VISIBLE else View.GONE
+                        // The live pose chip is wrong during replay, and the
+                        // scrubber sits exactly where it lives.
+                        ui.robotChip.visibility = if (r.active) View.GONE else View.VISIBLE
+                        if (!r.active) {
+                            ui.arena.replayPose = null
+                            ui.arena.replayTrail = null
+                            ui.replayNote.visibility = View.GONE
+                            return@collect
+                        }
+                        val frame = r.current
+                        ui.arena.replayPose = frame?.robot
+                        ui.arena.replayTrail = frame?.trail
+                        ui.replaySeek.max = (r.total - 1).coerceAtLeast(0)
+                        ui.replaySeek.progress = r.index
+                        ui.replayLabel.text =
+                            getString(R.string.replay_counter, r.index + 1, r.total)
+                        ui.btnReplayPlay.setText(
+                            if (r.playing) R.string.replay_pause else R.string.replay_play
+                        )
+                        val note = frame?.note
+                        ui.replayNote.visibility = if (note != null) View.VISIBLE else View.GONE
+                        if (note != null) ui.replayNote.text = note
+                    }
+                }
+
+                launch { vm.runClock.collect { ui.runClock.text = it } }
 
                 launch { vm.notices.collect { toast(it) } }
             }
