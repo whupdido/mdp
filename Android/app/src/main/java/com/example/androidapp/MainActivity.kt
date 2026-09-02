@@ -1,5 +1,7 @@
 package com.example.androidapp
 
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.View
@@ -124,8 +126,13 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this)
             .setView(content.root)
-            .setNegativeButton(android.R.string.cancel) { d, _ -> vm.stopScan(); d.dismiss() }
             .create()
+
+        // The dialog window's own background is a light, square-cornered
+        // rectangle that shows behind the custom rounded surface. Clearing it
+        // lets the layout be the whole dialog.
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        content.btnCloseDialog.setOnClickListener { vm.stopScan(); dialog.dismiss() }
 
         content.btnScanDialog.setOnClickListener {
             if (vm.scanning.value) vm.stopScan() else vm.startScan()
@@ -348,6 +355,8 @@ class MainActivity : AppCompatActivity() {
                         if (note != null) ui.replayNote.text = note
                     }
                 }
+
+                launch { vm.runClock.collect { ui.runClock.text = it } }
 
                 launch { vm.notices.collect { toast(it) } }
             }

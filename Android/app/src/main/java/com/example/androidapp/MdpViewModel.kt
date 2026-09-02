@@ -98,6 +98,19 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
     private var playback: Job? = null
     private var runStartedAt = 0L
 
+    /**
+     * Elapsed time since the robot first moved, as mm:ss.
+     *
+     * Task 1 times out at 6 minutes and the fastest-car run at 3, so during an
+     * attempt this is the number anyone actually wants on screen. It starts
+     * itself on the first ROBOT message rather than needing a button, because
+     * nobody remembers to press start.
+     */
+    private val _runClock = MutableStateFlow("--:--")
+    val runClock: StateFlow<String> = _runClock.asStateFlow()
+
+    private var ticker: Job? = null
+
     private var collectors: Job? = null
 
     init {
@@ -288,7 +301,10 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
     // -----------------------------------------------------------------
 
     private fun record(state: ArenaState, note: String?) {
-        if (recorded.isEmpty()) runStartedAt = System.currentTimeMillis()
+        if (recorded.isEmpty()) {
+            runStartedAt = System.currentTimeMillis()
+            startRunClock()
+        }
         recorded += RunFrame(
             atMs = System.currentTimeMillis() - runStartedAt,
             robot = state.robot,
@@ -350,9 +366,23 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun startRunClock() {
+        ticker?.cancel()
+        ticker = viewModelScope.launch {
+            while (true) {
+                val elapsed = (System.currentTimeMillis() - runStartedAt) / 1000
+                _runClock.value = "%02d:%02d".format(elapsed / 60, elapsed % 60)
+                delay(500)
+            }
+        }
+    }
+
     fun clearRecording() {
         closeReplay()
         recorded.clear()
+        ticker?.cancel()
+        ticker = null
+        _runClock.value = "--:--"
         say("Recording cleared.")
     }
 

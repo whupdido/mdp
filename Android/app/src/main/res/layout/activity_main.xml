@@ -147,11 +147,34 @@
             android:orientation="vertical"
             android:padding="12dp">
 
-            <TextView
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/section_link"
-                style="@style/Caption" />
+                android:baselineAligned="true"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/section_link"
+                    style="@style/Caption" />
+
+                <!--
+                  Run clock. Task 1 times out at 6 min and the fastest-car run
+                  at 3, so during an attempt this is the number anyone actually
+                  wants on screen. Starts itself on the robot's first move.
+                -->
+                <TextView
+                    android:id="@+id/runClock"
+                    style="@style/Readout"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:letterSpacing="0.06"
+                    android:textColor="@color/arena_accent"
+                    android:textSize="13sp"
+                    tools:text="02:41" />
+            </LinearLayout>
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -215,7 +238,9 @@
                 android:minHeight="36dp"
                 android:text="@string/simulator_mode"
                 android:textColor="@color/arena_text_muted"
-                android:textSize="12sp" />
+                android:textSize="12sp"
+                android:thumbTint="@color/switch_thumb"
+                android:trackTint="@color/switch_track" />
         </LinearLayout>
 
         <!--
@@ -255,6 +280,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:lineSpacingExtra="2dp"
+                    android:fontFamily="monospace"
                     android:textColor="@color/arena_text"
                     android:textSize="12sp"
                     tools:text="10:02:11  Connected to raspberrypi." />
