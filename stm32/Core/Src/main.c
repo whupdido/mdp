@@ -31,10 +31,8 @@
 #include "control.h"
 #include "command.h"
 #include "calib.h"
-#include "calib_servo.h"
 #include "oled.h"
 #include "icm20948.h"
-#include "flash_storage.h"
 #include "obstacle_nav.h"
 #include "sensors.h"
 #include <stdio.h>
@@ -192,7 +190,6 @@ int main(void)
   command_init();
   OLED_Init();
   icm20948_init(&hi2c2);
-  flash_calib_init();
   HAL_TIM_Base_Start_IT(&htim6);       /* starts the 100 Hz control loop */     
 #if SELFTEST
   selftest();
@@ -242,11 +239,12 @@ int main(void)
 		OLED_Refresh_Gram();
 		HAL_Delay(1000);
 		//test_ultrasonic_oled();
-		//move_straight_mm(960);
-		//move_turn_deg(1,1,250);
+		move_straight_mm(960);
 		//HAL_Delay(150);
-		//move_straight_mm(-800);
-		navigate_and_inspect_obstacle(0, 300);
+		//move_turn_deg(1,1,90);
+		HAL_Delay(150);
+		move_straight_mm(-960);
+		//navigate_and_inspect_obstacle(0, 300);
 
 		//testMaxSpeed();
 		//testSequence();

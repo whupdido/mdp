@@ -1,7 +1,6 @@
 #include "servo.h"
 #include "calib.h"
 #include "tim.h"
-#include "flash_storage.h"
 
 void servo_init(void)
 {

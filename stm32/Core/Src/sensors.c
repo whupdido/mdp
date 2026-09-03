@@ -23,7 +23,7 @@ void trigger_ultrasonic(void)
     __HAL_TIM_SET_CAPTUREPOLARITY(&htim8, TIM_CHANNEL_2, TIM_INPUTCHANNELPOLARITY_RISING);
 
     /* 2. Send the TRIG pulse */
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8, GPIO_PIN_SET);
 
     /* 'volatile' guarantees the compiler won't delete this delay loop */
     volatile uint32_t delay = 2000;
@@ -31,7 +31,7 @@ void trigger_ultrasonic(void)
         __NOP(); /* No-Operation command to kill clock cycles */
     }
 
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8, GPIO_PIN_RESET);
 
     /* 3. Start listening for the returning sound wave */
     HAL_TIM_IC_Start_IT(&htim8, TIM_CHANNEL_2);

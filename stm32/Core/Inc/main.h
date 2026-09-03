@@ -73,10 +73,10 @@ void Error_Handler(void);
 #define OLED_SDA_GPIO_Port GPIOD
 #define OLED_SCL_Pin GPIO_PIN_14
 #define OLED_SCL_GPIO_Port GPIOD
-#define ULTRA_TRIG_Pin GPIO_PIN_6
-#define ULTRA_TRIG_GPIO_Port GPIOC
 #define ULTRA_ECHO_Pin GPIO_PIN_7
 #define ULTRA_ECHO_GPIO_Port GPIOC
+#define ULTRA_TRIG_Pin GPIO_PIN_8
+#define ULTRA_TRIG_GPIO_Port GPIOC
 #define Buzzer_Pin GPIO_PIN_8
 #define Buzzer_GPIO_Port GPIOA
 #define BTN_USER_Pin GPIO_PIN_0

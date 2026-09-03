@@ -6,10 +6,8 @@
 #include "motors.h"
 #include "encoders.h"
 #include "servo.h"
-#include "calib_servo.h"
 #include "calib.h"
 #include "icm20948.h"
-#include "flash_storage.h"
 #include "command.h"
 #include <math.h>
 #include <stdlib.h>
@@ -58,6 +56,7 @@ static float right_pid_integral = 0.0f;
 /* PID Gains for speed control (MG513 motors) */
 #define SPEED_KP    120.0f
 #define SPEED_KI    15.0f
+float steer_integral = 0.0f;
 
 /* ------------------------------------------------------------------------- */
 /* Helper Functions                                                          */
@@ -85,7 +84,7 @@ static void stop_hardware(move_result_t result)
 {
     motor_left(0);
     motor_right(0);
-    safe_servo_us(SERVO_CENTRE);
+    servo_us(SERVO_CENTRE);
 
     current_mode = MODE_IDLE;
     last_result  = result;
@@ -104,7 +103,7 @@ void control_init(void)
     busy_flag    = 0;
     global_yaw_deg = 0.0f;
     /* Ensure steering is centered while idle at startup */
-	safe_servo_us(SERVO_CENTRE);
+	servo_us(SERVO_CENTRE);
 	motor_left(0);
 	motor_right(0);
     //stop_hardware(MOVE_NONE);
@@ -138,11 +137,17 @@ uint8_t move_straight_mm(int32_t mm)
     accum_counts              = 0;
     enc_left_straight_accum   = 0;
     enc_right_straight_accum  = 0;
+    steer_integral            = 0.0f;
+    left_pid_integral = 0.0f;
+	right_pid_integral = 0.0f;
+	current_speed_ramp = 0.0f;
     move_ticks                = 0;
     stall_ticks_count         = 0;
+    locked_heading_deg = global_yaw_deg;
 
     /* Lock wheels to calibrated center at launch */
-    safe_servo_us(SERVO_CENTRE);
+    servo_us(SERVO_CENTRE);
+    HAL_Delay(150);
 
     reset_speed_pid();
     busy_flag    = 1;
@@ -172,12 +177,14 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
     accum_deg           = 0.0f;
     move_ticks          = 0;
     stall_ticks_count   = 0;
+    left_pid_integral = 0.0f;
+	right_pid_integral = 0.0f;
 
     /* Set Ackermann steering angle */
     if (left) {
-        safe_servo_us(SERVO_LEFT);
+        servo_us(SERVO_LEFT);
     } else {
-        safe_servo_us(SERVO_RIGHT);
+        servo_us(SERVO_RIGHT);
     }
     HAL_Delay(250); /* Allow servo to reach mechanical position */
 
@@ -212,12 +219,14 @@ void move_pivot_deg(int8_t left, int32_t degrees)
     stall_ticks_count   = 0;
     pivot_enc_l_accum   = 0;
     pivot_enc_r_accum   = 0;
+    left_pid_integral = 0.0f;
+	right_pid_integral = 0.0f;
 
     /* Command mechanical steering lock */
     if (left) {
-        safe_servo_us(SERVO_LEFT); /* 1000 us */
+        servo_us(SERVO_LEFT); /* 1000 us */
     } else {
-        safe_servo_us(2000);       /* Backed off from 2100 us to prevent binding */
+        servo_us(2000);       /* Backed off from 2100 us to prevent binding */
     }
     HAL_Delay(220);
 
@@ -264,7 +273,7 @@ uint8_t move_kturn_90(int8_t left)
     }
 
     /* Straighten wheels */
-    safe_servo_us(SERVO_CENTRE);
+    servo_us(SERVO_CENTRE);
     HAL_Delay(100);
 
     return safe;
@@ -282,9 +291,9 @@ void move_turn(int8_t left, int8_t forward, int32_t counts)
     stall_ticks_count   = 0;
 
     if (left) {
-		safe_servo_us(SERVO_LEFT);   /* 1000 us */
+		servo_us(SERVO_LEFT);   /* 1000 us */
 	} else {
-		safe_servo_us(SERVO_RIGHT);
+		servo_us(SERVO_RIGHT);
 	}
     HAL_Delay(200);
 
@@ -307,9 +316,9 @@ void control_tick(void)
 
     /* 1. Sample IMU Gyro Z */
     float gz = icm20948_read_gyro_z(); /* in deg/sec */
-//    if (fabsf(gz) < 0.25f) {  /* Ignore noise below 0.25 deg/sec */
-//        gz = 0.0f;
-//    }
+    if (fabsf(gz) < 0.25f) {  /* Ignore noise below 0.25 deg/sec */
+        gz = 0.0f;
+    }
     float delta_yaw = gz * dt;
     global_yaw_deg += delta_yaw;
 
@@ -356,9 +365,17 @@ void control_tick(void)
 				return;
 			}
 
-			/* --- Slew-Rate Acceleration Ramp --- */
+			/* --- Slew-Rate Acceleration & Deceleration Ramp --- */
 			float target_speed = (float)(dir_forward * SPEED_STRAIGHT);
-			const float RAMP_STEP = 1.2f; /* Accelerates by ~1.2 ticks per 10ms */
+			int32_t remaining_counts = target_counts_total - accum_counts;
+			const int32_t DECEL_TICKS = 250; /* Tune this! Distance to start braking */
+
+			/* If we are getting close, change the target speed to a slow crawl */
+			if (remaining_counts < DECEL_TICKS) {
+				target_speed = (float)(dir_forward * 15.0f); /* Crawl speed */
+			}
+
+			const float RAMP_STEP = 1.2f; /* Accelerates/Decelerates smoothly */
 
 			if (current_speed_ramp < target_speed) {
 				current_speed_ramp += RAMP_STEP;
@@ -372,25 +389,64 @@ void control_tick(void)
 			enc_left_straight_accum  += abs(left_delta);
 			enc_right_straight_accum += abs(right_delta);
 
-			/* Position error (cumulative difference) and Velocity error (instantaneous rate) */
-			int32_t pos_error  = enc_right_straight_accum - enc_left_straight_accum;
-			int32_t rate_error = abs(right_delta) - abs(left_delta);
+			/* --- SENSOR FUSION: IMU + Encoders --- */
 
-			/* Controller gains (Servo us per tick difference) */
-			const float ENC_KP = 6.0f;   /* Proportional: restores straight track */
-			const float ENC_KD = 1.5f;   /* Derivative: damps oscillation */
-			const int16_t MAX_STEER_TRIM = 220; /* Increased to overcome linkage play */
+			/* 1. Heading Error (Degrees) */
+			float heading_error = global_yaw_deg - locked_heading_deg;
+			if (dir_forward == -1) {
+				heading_error = -heading_error;
+			}
+
+			/* 2. Position Error (Ticks) */
+			int32_t pos_error = (enc_right_straight_accum - enc_left_straight_accum);
+			if (pos_error > 20)  pos_error = 20;
+			if (pos_error < -20) pos_error = -20;
+
+			/* 3. Rate Error (Derivative - Ticks per 10ms) */
+			float rate_error = (float)(abs(right_delta) - abs(left_delta));
+
+			/* --- The Direct Gains --- */
+			float HEADING_KP = 50.0f;  /* 1 degree of drift = 15us servo correction */
+			float POS_KP     = 2.5f;   /* 1 tick of drift = 1.5us servo correction */
+			float STEER_KI   = 0.0f;   /* Auto-trim */
+			float STEER_KD   = 5.0f;   /* Dampening */
+			const int16_t MAX_STEER_TRIM = 220;
+
+			int16_t reverse_bias = 0;
+//			if (dir_forward == -1) {
+//				HEADING_KP = 6.0f;
+//				POS_KP     = 0.5f;
+//				STEER_KI   = 0.0f;
+//				STEER_KD   = 0.0f;
+//				reverse_bias = -8;
+//			}
+
+			/* 4. Integral Accumulation (Auto-Trim) */
+			/* We combine heading and scaled pos_error to trim out permanent physical drift */
+			float combined_error = heading_error + ((float)pos_error * 0.1f);
+			steer_integral += combined_error * dt;
+
+			if (steer_integral > 150.0f)  steer_integral = 150.0f;
+			if (steer_integral < -150.0f) steer_integral = -150.0f;
 
 			/* Calculate dynamic steering correction */
-			int16_t steer_correction = (int16_t)((pos_error * ENC_KP) + (rate_error * ENC_KD));
+			int16_t steer_correction = (int16_t)((heading_error * HEADING_KP) +
+												 ((float)pos_error * POS_KP) +
+												 (steer_integral * STEER_KI) +
+												 (rate_error * STEER_KD) +
+												 reverse_bias);
+
+			/* Understeer Fade for Deceleration */
+			float speed_ratio = fabsf(current_speed_ramp) / (float)SPEED_STRAIGHT;
+			steer_correction = (int16_t)(steer_correction * speed_ratio);
 
 			/* Clamp maximum steering authority */
 			if (steer_correction > MAX_STEER_TRIM)  steer_correction = MAX_STEER_TRIM;
 			if (steer_correction < -MAX_STEER_TRIM) steer_correction = -MAX_STEER_TRIM;
 
-			/* Apply to servo (>1500 = Right, <1500 = Left) */
+			/* Apply to servo */
 			uint16_t commanded_servo = (uint16_t)(SERVO_CENTRE + steer_correction);
-			safe_servo_us(commanded_servo);
+			servo_us(commanded_servo);
 
 			/* 3. Velocity PI Controller */
 			float err_l = current_speed_ramp - (float)left_delta;
@@ -405,8 +461,11 @@ void control_tick(void)
 			if (right_pid_integral > 250.0f)  right_pid_integral = 250.0f;
 			if (right_pid_integral < -250.0f) right_pid_integral = -250.0f;
 
-			int32_t duty_l = (int32_t)(SPEED_KP * err_l + SPEED_KI * left_pid_integral);
-			int32_t duty_r = (int32_t)(SPEED_KP * err_r + SPEED_KI * right_pid_integral);
+			/* Pushes baseline power so the weaker left motor doesn't stall when braking */
+			int32_t ff = (int32_t)(dir_forward * (fabsf(current_speed_ramp) * 20.0f));
+
+			int32_t duty_l = ff + (int32_t)(SPEED_KP * err_l + SPEED_KI * left_pid_integral);
+			int32_t duty_r = ff + (int32_t)(SPEED_KP * err_r + SPEED_KI * right_pid_integral);
 
 			motor_left(duty_l);
 			motor_right(duty_r);
@@ -425,22 +484,42 @@ void control_tick(void)
 
 			/* 2. Angle Completion Check */
 			const float BRAKING_LEAD_DEG = 2.5f; /* Compensates for chassis inertia */
+			float remaining_deg = target_deg_total - accum_deg;
 
-			if (accum_deg >= (target_deg_total - BRAKING_LEAD_DEG)) {
-			    stop_hardware(MOVE_DONE);
-			    return;
+			if (remaining_deg <= BRAKING_LEAD_DEG) {
+				stop_hardware(MOVE_DONE);
+				return;
+			}
+			/* --- Slew-Rate Acceleration & Deceleration Ramp --- */
+			float target_base_speed = (float)(dir_forward * SPEED_TURN);
+
+			/* ONLY decelerate if this is a large turn (e.g., a 90-degree grid turn) */
+			if (target_deg_total >= 45.0f) {
+				const float DECEL_DEG = 20.0f;
+				if (remaining_deg < DECEL_DEG) {
+					target_base_speed = (float)(dir_forward * 20.0f); /* Crawl speed */
+				}
+			}
+
+			const float RAMP_STEP = 1.2f;
+
+			if (current_speed_ramp < target_base_speed) {
+				current_speed_ramp += RAMP_STEP;
+				if (current_speed_ramp > target_base_speed) current_speed_ramp = target_base_speed;
+			} else if (current_speed_ramp > target_base_speed) {
+				current_speed_ramp -= RAMP_STEP;
+				if (current_speed_ramp < target_base_speed) current_speed_ramp = target_base_speed;
 			}
 
 			/* 3. Differential Ackermann Wheel Speeds */
-			float base_speed = (float)(dir_forward * SPEED_TURN);
 			float target_l, target_r;
 
 			if (turn_left) {
-				target_l = base_speed * 0.70f;  /* Inner wheel slower */
-				target_r = base_speed * 1.30f;  /* Outer wheel faster */
+				target_l = current_speed_ramp * 0.70f;
+				target_r = current_speed_ramp * 1.30f;
 			} else {
-				target_l = base_speed * 1.30f;  /* Outer wheel faster */
-				target_r = base_speed * 0.70f;  /* Inner wheel slower */
+				target_l = current_speed_ramp * 1.30f;
+				target_r = current_speed_ramp * 0.70f;
 			}
 
 			float err_l = target_l - (float)left_delta;
@@ -455,8 +534,10 @@ void control_tick(void)
 			if (right_pid_integral > 250.0f)  right_pid_integral = 250.0f;
 			if (right_pid_integral < -250.0f) right_pid_integral = -250.0f;
 
-			/* 4. Direction-Aware Feedforward */
-			int32_t ff = (int32_t)dir_forward * 1200;
+			/* 4. DYNAMIC Direction-Aware Feedforward */
+			/* Scales the feedforward down as the speed ramps down, preserving the turning radius */
+			float speed_ratio = fabsf(current_speed_ramp) / (float)SPEED_TURN;
+			int32_t ff = (int32_t)((float)dir_forward * 1200.0f * speed_ratio);
 
 			int32_t duty_l = ff + (int32_t)(SPEED_KP * err_l + SPEED_KI * left_pid_integral);
 			int32_t duty_r = ff + (int32_t)(SPEED_KP * err_r + SPEED_KI * right_pid_integral);

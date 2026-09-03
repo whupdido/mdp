@@ -199,7 +199,7 @@ static void transition_to_next_face(void)
 
     /* 4. Optional: Small straight adjustment to lock in the exact 15cm standoff */
     /* If the reverse arc left you at 20cm away, drive 5cm forward to correct */
-    safe_move_straight_mm(230);
+    safe_move_straight_mm(90);
     HAL_Delay(100);
 }
 
