@@ -6,6 +6,7 @@
 #include "motors.h"
 #include "encoders.h"
 #include "servo.h"
+#include "sensors.h"
 #include "calib.h"
 #include "icm20948.h"
 #include "command.h"
@@ -61,17 +62,6 @@ float steer_integral = 0.0f;
 /* ------------------------------------------------------------------------- */
 /* Helper Functions                                                          */
 /* ------------------------------------------------------------------------- */
-
-/* ------------------------------------------------------------------------- */
-/* Sensor Placeholder (Replace with actual IR/Ultrasonic reading later)   */
-/* ------------------------------------------------------------------------- */
-uint8_t check_front_collision(void)
-{
-    /* Example future code:
-     * if (ultrasonic_distance_cm() < 12) return 1;
-     */
-    return 0; /* 0 = Path Clear */
-}
 
 static void reset_speed_pid(void)
 {

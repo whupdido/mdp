@@ -12,20 +12,19 @@ extern volatile float ultrasonic_distance_cm;
  */
 void trigger_ultrasonic(void);
 
-/* --- Navigation Safety Functions --- */
 /**
- * @brief Checks if the forward path is blocked using the Sharp IR sensors.
+ * @brief Checks if the forward path is blocked using the HC-SR04.
  * @return 1 if collision is imminent, 0 if path is clear.
  */
 uint8_t check_front_collision(void);
 
-/**
- * @brief Checks if the reverse path is blocked using the HC-SR04.
- * @return 1 if collision is imminent, 0 if path is clear.
- */
-uint8_t check_rear_collision(void);
-
 /* --- IR Sensor Data (To be implemented with your ADC code) --- */
+
+/**
+ * @brief Call this ONCE before your main loop starts to kick off the background DMA
+ */
+void ir_sensors_init(void);
+
 /**
  * @brief Reads the left Sharp IR sensor via ADC.
  * @return Distance in cm.
@@ -45,5 +44,10 @@ float get_sharp_ir_right_cm(void);
 void test_ultrasonic_oled(void);
 
 extern volatile uint8_t image_found;
+
+/**
+ * @brief Formats the voltages into strings for your OLED screen.
+ */
+void display_ir_voltages_oled(void);
 
 #endif /* SENSORS_H */

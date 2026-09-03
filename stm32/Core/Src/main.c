@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "adc.h"
+#include "dma.h"
 #include "i2c.h"
 #include "tim.h"
 #include "usart.h"
@@ -171,6 +173,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_TIM1_Init();
   MX_TIM6_Init();
   MX_TIM8_Init();
@@ -182,6 +185,7 @@ int main(void)
   MX_TIM10_Init();
   MX_TIM11_Init();
   MX_I2C2_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   motors_init();
   encoders_init();
@@ -189,6 +193,7 @@ int main(void)
   control_init();
   command_init();
   OLED_Init();
+  ir_sensors_init();
   icm20948_init(&hi2c2);
   HAL_TIM_Base_Start_IT(&htim6);       /* starts the 100 Hz control loop */     
 #if SELFTEST
@@ -228,7 +233,7 @@ int main(void)
 			calibrated = 1;
 		}
 		OLED_Clear();
-		OLED_ShowString(10,0,(const uint8_t* )"Starting Test...");
+		OLED_ShowString(10,0,(const uint8_t* )"Starting Test..");
 		OLED_ShowString(10,10,(const uint8_t* )"In 3...");
 		OLED_Refresh_Gram();
 		HAL_Delay(1000);
@@ -239,12 +244,13 @@ int main(void)
 		OLED_Refresh_Gram();
 		HAL_Delay(1000);
 		//test_ultrasonic_oled();
-		move_straight_mm(960);
+		//display_ir_voltages_oled();
+		//move_straight_mm(960);
 		//HAL_Delay(150);
 		//move_turn_deg(1,1,90);
-		HAL_Delay(150);
-		move_straight_mm(-960);
-		//navigate_and_inspect_obstacle(0, 300);
+		//HAL_Delay(150);
+		//move_straight_mm(-960);
+		navigate_and_inspect_obstacle(0, 300);
 
 		//testMaxSpeed();
 		//testSequence();

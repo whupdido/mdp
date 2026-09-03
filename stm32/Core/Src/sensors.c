@@ -12,6 +12,90 @@ volatile uint32_t echo_val2 = 0;
 volatile float    ultrasonic_distance_cm = 0.0f;
 volatile uint8_t image_found = 0;
 
+/*
+ * The DMA will automatically dump the 12-bit ADC values here.
+ * index 0 = Rank 1 (PA2 / Left IR)
+ * index 1 = Rank 2 (PA3 / Right IR)
+ */
+volatile uint16_t ir_adc_buffer[2] = {0, 0};
+
+/* Make sure you have access to your ADC handle (defined in adc.c) */
+extern ADC_HandleTypeDef hadc1;
+
+/**
+ * @brief Call this ONCE before your main loop starts to kick off the background DMA
+ */
+void ir_sensors_init(void) {
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ir_adc_buffer, 2);
+}
+
+/**
+ * @brief Helper to convert raw 12-bit ADC (0-4095) to Voltage (0.0 - 3.3V)
+ */
+static float adc_to_voltage(uint16_t raw_adc) {
+    return ((float)raw_adc / 4095.0f) * 3.3f;
+}
+
+/**
+ * @brief The Transfer Function (Linearization)
+ * Converts nonlinear Sharp IR voltage into centimeters.
+ */
+static float sharp_voltage_to_cm(float voltage) {
+    /* Prevent division by zero or negative distances if voltage drops too low */
+    if (voltage < 0.45f) return 80.0f;
+
+    /* Standard placeholder formula for GP2Y0A21YK (10cm - 80cm) */
+    float distance_cm = 27.86f / (voltage - 0.42f);
+
+    /* Clamp to sensor's reliable physical limits */
+    if (distance_cm > 80.0f) distance_cm = 80.0f;
+    if (distance_cm < 10.0f) distance_cm = 10.0f;
+
+    return distance_cm;
+}
+
+/* --- Public Getters for your Control Loop --- */
+
+float get_sharp_ir_left_cm(void) {
+    /* Buffer[1] is PA3 */
+    float volts = adc_to_voltage(ir_adc_buffer[1]);
+    return sharp_voltage_to_cm(volts);
+}
+
+float get_sharp_ir_right_cm(void) {
+    /* Buffer[0] is PA2 */
+    float volts = adc_to_voltage(ir_adc_buffer[0]);
+    return sharp_voltage_to_cm(volts);
+}
+
+/**
+ * @brief Formats the voltages into strings for your OLED screen.
+ */
+void display_ir_voltages_oled(void) {
+    float left_v  = adc_to_voltage(ir_adc_buffer[1]);
+    float right_v = adc_to_voltage(ir_adc_buffer[0]);
+    float left_dist = get_sharp_ir_left_cm();
+    float right_dist = get_sharp_ir_right_cm();
+
+    char line1[32];
+    char line2[32];
+    char line3[32];
+    char line4[32];
+
+    /* Format the floats to 2 decimal places */
+    sprintf(line1, "Left : %.2fV", left_v);
+    sprintf(line3, "Distance: %.2f", left_dist);
+    sprintf(line2, "Right: %.2f V", right_v);
+    sprintf(line4, "Distance: %.2f", right_dist);
+
+    OLED_Clear();
+    OLED_ShowString(0, 0, (const uint8_t* ) line1);
+    OLED_ShowString(0, 10, (const uint8_t* ) line3);
+    OLED_ShowString(0, 20, (const uint8_t* ) line2);
+    OLED_ShowString(0, 30, (const uint8_t* ) line4);
+    OLED_Refresh_Gram();
+}
+
 /**
  * @brief Sends the 10us trigger pulse and force-resets the state machine.
  */
@@ -73,7 +157,11 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
     }
 }
 
-uint8_t check_rear_collision(void)
+/**
+ * @brief Checks if the forward path is blocked using the HC-SR04.
+ * @return 1 if collision is imminent, 0 if path is clear.
+ */
+uint8_t check_front_collision(void)
 {
     /* 1. Fire a new pulse for the NEXT check */
     trigger_ultrasonic();
