@@ -214,44 +214,43 @@ int main(void)
     /* --- User Button (SW1 / PE0) Check --- */
     if (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_0) == GPIO_PIN_RESET)
 	{
-		if (calibrated == 0) {
-			/* Debounce and wait for release */
-			HAL_Delay(50);
-			while (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_0) == GPIO_PIN_RESET);
-
-			OLED_Clear();
-			OLED_ShowString(0, 0, (const uint8_t *)"STABILIZING...");
-			OLED_Refresh_Gram();
-			HAL_Delay(1500);
-
-			command_send("\r\n[IMU] Calibrating Gyro Zero Bias (stationary)...\r\n");
-			OLED_ShowString(0, 20, (const uint8_t *)"Calibrating Gyro...");
-			OLED_Refresh_Gram();
-
-			icm20948_calib_gyro_bias();
-			command_send("[IMU] Gyro bias locked.\r\n");
-			calibrated = 1;
-		}
-		OLED_Clear();
-		OLED_ShowString(10,0,(const uint8_t* )"Starting Test..");
-		OLED_ShowString(10,10,(const uint8_t* )"In 3...");
-		OLED_Refresh_Gram();
-		HAL_Delay(1000);
-		OLED_ShowString(10,20,(const uint8_t* )"2...");
-		OLED_Refresh_Gram();
-		HAL_Delay(1000);
-		OLED_ShowString(10,30,(const uint8_t* )"1...");
-		OLED_Refresh_Gram();
-		HAL_Delay(1000);
+//		if (calibrated == 0) {
+//			/* Debounce and wait for release */
+//			HAL_Delay(50);
+//			while (HAL_GPIO_ReadPin(GPIOE, GPIO_PIN_0) == GPIO_PIN_RESET);
+//
+//			OLED_Clear();
+//			OLED_ShowString(0, 0, (const uint8_t *)"STABILIZING...");
+//			OLED_Refresh_Gram();
+//			HAL_Delay(1500);
+//
+//			command_send("\r\n[IMU] Calibrating Gyro Zero Bias (stationary)...\r\n");
+//			OLED_ShowString(0, 20, (const uint8_t *)"Calibrating Gyro...");
+//			OLED_Refresh_Gram();
+//
+//			icm20948_calib_gyro_bias();
+//			command_send("[IMU] Gyro bias locked.\r\n");
+//			calibrated = 1;
+//		}
+//		OLED_Clear();
+//		OLED_ShowString(10,0,(const uint8_t* )"Starting Test..");
+//		OLED_ShowString(10,10,(const uint8_t* )"In 3...");
+//		OLED_Refresh_Gram();
+//		HAL_Delay(1000);
+//		OLED_ShowString(10,20,(const uint8_t* )"2...");
+//		OLED_Refresh_Gram();
+//		HAL_Delay(1000);
+//		OLED_ShowString(10,30,(const uint8_t* )"1...");
+//		OLED_Refresh_Gram();
+//		HAL_Delay(1000);
 		//test_ultrasonic_oled();
-		//display_ir_voltages_oled();
+		display_ir_voltages_oled();
 		//move_straight_mm(960);
 		//HAL_Delay(150);
 		//move_turn_deg(1,1,90);
 		//HAL_Delay(150);
 		//move_straight_mm(-960);
-		navigate_and_inspect_obstacle(0, 300);
-
+		//navigate_and_inspect_obstacle(0, 300);
 		//testMaxSpeed();
 		//testSequence();
 //		move_pivot_deg(0, 90);
