@@ -1,266 +1,633 @@
 /*
- * control.c
- *
- *  Created on: 15-Aug-2026
- *      Author: Kush Agrawal
+ * control.c -- closed-loop motion controller with IMU heading & distance feedback
  */
 
-#include "main.h"          /* for __disable_irq / __get_PRIMASK */
 #include "control.h"
 #include "motors.h"
 #include "encoders.h"
 #include "servo.h"
+#include "sensors.h"
 #include "calib.h"
+#include "icm20948.h"
+#include "command.h"
+#include <math.h>
 #include <stdlib.h>
 
-/* --- gains ----------------------------------------------------------------
- * Scaled for PWM_MAX = 16799. The previous values were tuned against a 4199
- * scale, so every duty-producing gain here is 4x what it used to be. If you
- * change PWM_MAX again, scale KFF, KP_SPEED, KI_SPEED, KS_SYNC, I_DUTY_LIMIT
- * and SLEW_PER_TICK by the same factor.
- *
- * Sanity check: KFF * SPEED_STRAIGHT = 480 * 20 = 9600, which is 57 % of
- * PWM_MAX -- the same operating point as before.
- * ------------------------------------------------------------------------- */
-#define KFF            480.0f   /* feed-forward: duty per (count/tick)      */
-#define KP_SPEED        16.0f
-#define KI_SPEED         1.6f
-#define KS_SYNC         24.0f   /* straight-line wheel sync                 */
-#define I_DUTY_LIMIT  3200.0f   /* cap on the integral term, in duty units  */
+/* --- Motion Mode State --- */
+typedef enum {
+    MODE_IDLE = 0,
+    MODE_STRAIGHT,
+    MODE_TURN_DEG,
+    MODE_TURN_RAW,
+	MODE_PIVOT_DEG
+} control_mode_t;
 
-/* Max duty change per 10 ms tick. Ramping instead of stepping is what keeps
-   the AT8236 out of current limit when a wheel starts from rest. 600/tick
-   reaches full duty in ~280 ms. */
-#define SLEW_PER_TICK   600
+static volatile control_mode_t current_mode = MODE_IDLE;
+static volatile move_result_t  last_result  = MOVE_NONE;
+static volatile uint8_t        busy_flag    = 0;
+static float current_speed_ramp = 0.0f;
+static float pivot_speed_ramp = 0.0f;
+/* Track cumulative signed ticks during in-place pivots */
+static volatile int32_t pivot_enc_l_accum = 0;
+static volatile int32_t pivot_enc_r_accum = 0;
 
-/* Deceleration profile. Without a taper the loop holds cruise speed right up
-   to the final tick and then coasts through the remainder -- that was the
-   ~21 % overshoot measured during distance calibration. */
-#define RAMP_DOWN_COUNTS  600   /* ~80 mm of taper before the target   */
-#define MIN_CRAWL           4   /* counts/tick floor, or it stalls out */
+/* Motion Targets and Accumulators */
+static volatile int32_t  target_counts_total = 0;
+static volatile int32_t  accum_counts        = 0;
+static volatile float    target_deg_total    = 0.0f;
+static volatile float    accum_deg           = 0.0f;
+static volatile int8_t   dir_forward         = 1;
+static volatile int8_t   turn_left           = 0;
+/* Relative encoder accumulators for straight driving */
+static volatile int32_t enc_left_straight_accum  = 0;
+static volatile int32_t enc_right_straight_accum = 0;
 
-/* Differential for turns. Commanding both rear wheels the same speed on an
-   arc is a locked axle: the tyres scrub and the car understeers no matter
-   how much steering lock you add. Measured symptom -- turn rate FELL as
-   lock increased (40 deg at +-400 us, 31 deg at +-500 us). */
-#define TURN_BIAS       0.35f   /* inner wheel runs this much slower */
+/* Active Straight-Line Heading Lock Reference */
+static volatile float    locked_heading_deg  = 0.0f;
+static volatile float    global_yaw_deg      = 0.0f;
 
-typedef enum { M_IDLE = 0, M_SETTLE, M_RUN } mstate_t;
+/* Safety & Diagnostics */
+static volatile uint32_t move_ticks          = 0;
+static volatile uint32_t stall_ticks_count   = 0;
 
-static volatile mstate_t state = M_IDLE;
-static volatile move_result_t last_result = MOVE_NONE;
-static int32_t  target_counts;
-static int32_t  target_delta;
-static float    i_l, i_r;
-static int32_t  out_l, out_r;      /* last duty actually sent, for slewing */
-static uint8_t  use_sync;
-static int8_t   turn_left;      /* 1 = left turn -> LEFT wheel is inner */
-static uint16_t settle;
-static uint16_t stall;
-static uint16_t elapsed;
+/* Speed PID States (tracks counts per 10ms tick) */
+static float left_pid_integral  = 0.0f;
+static float right_pid_integral = 0.0f;
 
-static int32_t slew(int32_t now, int32_t want)
+/* PID Gains for speed control (MG513 motors) */
+#define SPEED_KP    120.0f
+#define SPEED_KI    15.0f
+float steer_integral = 0.0f;
+
+/* ------------------------------------------------------------------------- */
+/* Helper Functions                                                          */
+/* ------------------------------------------------------------------------- */
+
+static void reset_speed_pid(void)
 {
-    /* Asymmetric on purpose. The rate limit exists to keep inrush current
-       out of the AT8236 when duty RISES; applying it on the way down just
-       makes the car coast past its target (measured: ~300 counts of
-       run-out). So a reduction in magnitude within the same sign is
-       allowed to take effect immediately, while growth and any sign
-       reversal -- which would plug a spinning motor -- stay limited. */
-    if ((now >= 0 && want >= 0 && want <= now) ||
-        (now <= 0 && want <= 0 && want >= now)) {
-        return want;
-    }
-
-    int32_t d = want - now;
-    if (d >  SLEW_PER_TICK) d =  SLEW_PER_TICK;
-    if (d < -SLEW_PER_TICK) d = -SLEW_PER_TICK;
-    return now + d;
+    left_pid_integral  = 0.0f;
+    right_pid_integral = 0.0f;
+    current_speed_ramp = 0.0f;
 }
+
+static void stop_hardware(move_result_t result)
+{
+    motor_left(0);
+    motor_right(0);
+    servo_us(SERVO_CENTRE);
+
+    current_mode = MODE_IDLE;
+    last_result  = result;
+    busy_flag    = 0;
+    reset_speed_pid();
+}
+
+/* ------------------------------------------------------------------------- */
+/* Public API                                                                */
+/* ------------------------------------------------------------------------- */
 
 void control_init(void)
 {
-    state = M_IDLE;
-    last_result = MOVE_NONE;
-    out_l = out_r = 0;
+    current_mode = MODE_IDLE;
+    last_result  = MOVE_NONE;
+    busy_flag    = 0;
+    global_yaw_deg = 0.0f;
+    /* Ensure steering is centered while idle at startup */
+	servo_us(SERVO_CENTRE);
+	motor_left(0);
+	motor_right(0);
+    //stop_hardware(MOVE_NONE);
 }
 
-uint8_t motion_busy(void) { return (state != M_IDLE); }
-
-move_result_t motion_result(void) { return last_result; }
-
-/* Single exit point for every way a move can end, so the reason is always
-   recorded. Called from ISR context (normal completion, stall, timeout) and
-   from main context (STOP command), hence the critical section. */
-static void finish(move_result_t reason)
+uint8_t motion_busy(void)
 {
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
+    return busy_flag;
+}
 
-    state = M_IDLE;
-    out_l = out_r = 0;
-    last_result = reason;
+void motion_stop(void)
+{
+    stop_hardware(MOVE_ABORT);
+}
 
-    __set_PRIMASK(primask);
+move_result_t motion_result(void)
+{
+    return last_result;
+}
 
-    motors_brake();
+/* ------------------------------------------------------------------------- */
+/* High-Level Motion Commands (Blocking)                                    */
+/* ------------------------------------------------------------------------- */
+
+uint8_t move_straight_mm(int32_t mm)
+{
+    if (mm == 0) return 1;
+
+    target_counts_total       = (int32_t)(fabsf((float)mm) / MM_PER_COUNT);
+    dir_forward               = (mm > 0) ? 1 : -1;
+    accum_counts              = 0;
+    enc_left_straight_accum   = 0;
+    enc_right_straight_accum  = 0;
+    steer_integral            = 0.0f;
+    left_pid_integral = 0.0f;
+	right_pid_integral = 0.0f;
+	current_speed_ramp = 0.0f;
+    move_ticks                = 0;
+    stall_ticks_count         = 0;
+    locked_heading_deg = global_yaw_deg;
+
+    /* Lock wheels to calibrated center at launch */
     servo_us(SERVO_CENTRE);
+    HAL_Delay(150);
+
+    reset_speed_pid();
+    busy_flag    = 1;
+    current_mode = MODE_STRAIGHT;
+
+    /* Monitor sensors while moving */
+	while (busy_flag) {
+		/* Only check for front collisions if we are driving forward */
+		if (dir_forward == 1 && check_front_collision()) {
+			stop_hardware(MOVE_DONE);
+			busy_flag = 0;
+			command_send("\r\n[WARN] COLLISION AVOIDED! Stopping early.\r\n");
+			return 0; /* Return 0 = Aborted */
+		}
+		HAL_Delay(5);
+	}
+	return 1;
 }
 
-void motion_stop(void) { finish(MOVE_ABORT); }
-
-static void begin(int32_t counts, int32_t delta, uint8_t sync,
-                  uint16_t settle_ticks, int8_t left)
+uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 {
-    /* Called from main context while control_tick() runs in the TIM6 ISR.
-       encoders_reset() and the state variables must not be touched
-       half-way through a tick. */
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
+    if (degrees <= 0) return 1;
 
-    encoders_reset();
-    i_l = i_r = 0.0f;
-    out_l = out_r = 0;
-    target_counts = labs(counts);
-    target_delta  = delta;
-    use_sync      = sync;
-    turn_left     = left;
-    settle        = settle_ticks;
-    stall         = 0u;
-    elapsed       = 0u;
-    /* A zero-length move must not arm the state machine, or the distance
-       check below would never see a reason to stop. */
-    state = (target_counts > 0) ? M_SETTLE : M_IDLE;
-    if (state == M_IDLE) last_result = MOVE_DONE;   /* zero-length move */
+    turn_left           = left;
+    dir_forward         = forward ? 1 : -1;
+    target_deg_total    = (float)degrees;
+    accum_deg           = 0.0f;
+    move_ticks          = 0;
+    stall_ticks_count   = 0;
+    left_pid_integral = 0.0f;
+	right_pid_integral = 0.0f;
 
-    __set_PRIMASK(primask);
+    /* Set Ackermann steering angle */
+    if (left) {
+        servo_us(SERVO_LEFT);
+    } else {
+        servo_us(SERVO_RIGHT);
+    }
+    HAL_Delay(250); /* Allow servo to reach mechanical position */
+
+    reset_speed_pid();
+    busy_flag    = 1;
+    current_mode = MODE_TURN_DEG;
+
+    /* Block until IMU confirms rotation complete */
+    /* Monitor sensors while turning */
+	while (busy_flag) {
+		/* Only check for front collisions if driving FORWARD in the turn */
+		if (dir_forward == 1 && check_front_collision()) {
+			stop_hardware(MOVE_DONE);
+			busy_flag = 0;
+			command_send("\r\n[WARN] COLLISION AVOIDED MID-TURN! Stopping early.\r\n");
+			return 0; /* Return 0 = Aborted */
+		}
+		HAL_Delay(5);
+	}
+	return 1;
 }
 
-void move_straight_mm(int32_t mm)
+void move_pivot_deg(int8_t left, int32_t degrees)
 {
+    if (degrees <= 0) return;
+
+    turn_left           = left;
+    dir_forward         = 1;
+    target_deg_total    = (float)degrees;
+    accum_deg           = 0.0f;
+    move_ticks          = 0;
+    stall_ticks_count   = 0;
+    pivot_enc_l_accum   = 0;
+    pivot_enc_r_accum   = 0;
+    left_pid_integral = 0.0f;
+	right_pid_integral = 0.0f;
+
+    /* Command mechanical steering lock */
+    if (left) {
+        servo_us(SERVO_LEFT); /* 1000 us */
+    } else {
+        servo_us(2000);       /* Backed off from 2100 us to prevent binding */
+    }
+    HAL_Delay(220);
+
+    reset_speed_pid();
+    busy_flag    = 1;
+    current_mode = MODE_PIVOT_DEG;
+
+    while (busy_flag) {
+        HAL_Delay(5);
+    }
+}
+
+/**
+ * @brief Executes a compact 90-degree 3-point turn.
+ * @return 1 if successful, 0 if aborted due to obstacle.
+ */
+uint8_t move_kturn_90(int8_t left)
+{
+    uint8_t safe = 1;
+
+    if (left)
+    {
+        /* 1. Forward-Left 45 degrees (Checks for obstacles) */
+        safe = move_turn_deg(1, 1, 45);
+        HAL_Delay(150);
+
+        /* 2. Reverse-Right 45 degrees (Only if forward was safe) */
+        if (safe) {
+            move_turn_deg(0, 0, 45);
+            HAL_Delay(150);
+        }
+    }
+    else
+    {
+        /* 1. Forward-Right 45 degrees (Checks for obstacles) */
+        safe = move_turn_deg(0, 1, 45);
+        HAL_Delay(150);
+
+        /* 2. Reverse-Left 45 degrees (Only if forward was safe) */
+        if (safe) {
+            move_turn_deg(1, 0, 45);
+            HAL_Delay(150);
+        }
+    }
+
+    /* Straighten wheels */
     servo_us(SERVO_CENTRE);
-    int32_t counts = (int32_t)((float)mm / MM_PER_COUNT);
-    /* 20 ticks = 200 ms for the servo to reach centre before moving */
-    begin(counts, (mm >= 0) ? SPEED_STRAIGHT : -SPEED_STRAIGHT, 1u, 20u, 0);
+    HAL_Delay(100);
+
+    return safe;
 }
 
 void move_turn(int8_t left, int8_t forward, int32_t counts)
 {
-    servo_us(left ? SERVO_LEFT : SERVO_RIGHT);
-    /* 30 ticks = 300 ms: full lock takes longer than centring     */
-    begin(counts, forward ? SPEED_TURN : -SPEED_TURN, 0u, 30u, left);
+    if (counts <= 0) return;
+
+    turn_left           = left;
+    dir_forward         = forward ? 1 : -1;
+    target_counts_total = counts;
+    accum_counts        = 0;
+    move_ticks          = 0;
+    stall_ticks_count   = 0;
+
+    if (left) {
+		servo_us(SERVO_LEFT);   /* 1000 us */
+	} else {
+		servo_us(SERVO_RIGHT);
+	}
+    HAL_Delay(200);
+
+    reset_speed_pid();
+    busy_flag    = 1;
+    current_mode = MODE_TURN_RAW;
+
+    while (busy_flag) {
+        HAL_Delay(5);
+    }
 }
 
-/* Scale the calibrated 90 deg constants linearly. Checklist A.4 asks for a
-   supervisor-specified angle between 90 and 360 degrees, so 90 alone is not
-   enough. Linear scaling assumes the radius is constant through the arc,
-   which holds because the steering lock does not change mid-move -- but
-   verify a 180 and a 360 on the floor before trusting it. */
-void move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
-{
-    if (degrees <= 0)  degrees = 90;    /* legacy FL000 etc. means 90 */
-    if (degrees > 360) degrees = 360;
-
-    int32_t base;
-    if (forward) base = left ? TURN_COUNTS_FL : TURN_COUNTS_FR;
-    else         base = left ? TURN_COUNTS_BL : TURN_COUNTS_BR;
-
-    move_turn(left, forward, (base * degrees) / 90);
-}
+/* ------------------------------------------------------------------------- */
+/* 100 Hz Control Interrupt (TIM6 Callback)                                  */
+/* ------------------------------------------------------------------------- */
 
 void control_tick(void)
 {
+    const float dt = 0.01f; /* 10 ms period */
+
+    /* 1. Sample IMU Gyro Z */
+    float gz = icm20948_read_gyro_z(); /* in deg/sec */
+    if (fabsf(gz) < 0.25f) {  /* Ignore noise below 0.25 deg/sec */
+        gz = 0.0f;
+    }
+    float delta_yaw = gz * dt;
+    global_yaw_deg += delta_yaw;
+
+    /* 2. Sample Encoders (ticks in this 10ms slice) */
     encoders_sample();
+    int32_t left_delta  = enc_left_delta;
+    int32_t right_delta = enc_right_delta;
+    int32_t avg_delta   = (abs(left_delta) + abs(right_delta)) / 2;
 
-    if (state == M_IDLE) return;
+    if (current_mode == MODE_IDLE) {
+        return;
+    }
 
-    if (state == M_SETTLE) {
-        motors_brake();
-        if (settle == 0u) {
-            encoders_reset();      /* discard anything from settling */
-            state = M_RUN;
+    move_ticks++;
+
+    /* --- Safety Checks (Stall & Timeout) --- */
+    if (move_ticks > 25) { /* Grace period for initial motor startup */
+        if (abs(left_delta) < STALL_MIN_COUNTS && abs(right_delta) < STALL_MIN_COUNTS) {
+            stall_ticks_count++;
+            if (stall_ticks_count >= STALL_TICKS) {
+                stop_hardware(MOVE_STALL);
+                return;
+            }
         } else {
-            settle--;
+            stall_ticks_count = 0;
         }
+    }
+
+    if (move_ticks >= MOVE_TIMEOUT_TICKS) {
+        stop_hardware(MOVE_TIMEOUT);
         return;
     }
 
-    /* --- hard safety limits ------------------------------------------
-       Without these, a jammed wheel leaves the PI loop winding up and
-       holding full duty into a stalled motor indefinitely.            */
-    if (++elapsed > MOVE_TIMEOUT_TICKS) {
-        finish(MOVE_TIMEOUT);
-        return;
-    }
+    /* --- Closed-Loop Motion Modes --- */
+    switch (current_mode)
+    {
+    	case MODE_STRAIGHT:
+		{
+			/* 1. Track cumulative ticks for target distance */
+			accum_counts += avg_delta;
 
-    if (labs(enc_left_delta)  < STALL_MIN_COUNTS &&
-        labs(enc_right_delta) < STALL_MIN_COUNTS) {
-        if (++stall > STALL_TICKS) {
-            finish(MOVE_STALL);
-            return;
+			if (accum_counts >= target_counts_total) {
+				stop_hardware(MOVE_DONE);
+				return;
+			}
+
+			/* --- Slew-Rate Acceleration & Deceleration Ramp --- */
+			float target_speed = (float)(dir_forward * SPEED_STRAIGHT);
+			int32_t remaining_counts = target_counts_total - accum_counts;
+			const int32_t DECEL_TICKS = 250; /* Tune this! Distance to start braking */
+
+			/* If we are getting close, change the target speed to a slow crawl */
+			if (remaining_counts < DECEL_TICKS) {
+				target_speed = (float)(dir_forward * 15.0f); /* Crawl speed */
+			}
+
+			const float RAMP_STEP = 1.2f; /* Accelerates/Decelerates smoothly */
+
+			if (current_speed_ramp < target_speed) {
+				current_speed_ramp += RAMP_STEP;
+				if (current_speed_ramp > target_speed) current_speed_ramp = target_speed;
+			} else if (current_speed_ramp > target_speed) {
+				current_speed_ramp -= RAMP_STEP;
+				if (current_speed_ramp < target_speed) current_speed_ramp = target_speed;
+			}
+
+			/* 2. Accumulate individual wheel ticks for differential steering */
+			enc_left_straight_accum  += abs(left_delta);
+			enc_right_straight_accum += abs(right_delta);
+
+			/* --- SENSOR FUSION: IMU + Encoders --- */
+
+			/* 1. Heading Error (Degrees) */
+			float heading_error = global_yaw_deg - locked_heading_deg;
+			if (dir_forward == -1) {
+				heading_error = -heading_error;
+			}
+
+			/* 2. Position Error (Ticks) */
+			int32_t pos_error = (enc_right_straight_accum - enc_left_straight_accum);
+			if (pos_error > 20)  pos_error = 20;
+			if (pos_error < -20) pos_error = -20;
+
+			/* 3. Rate Error (Derivative - Ticks per 10ms) */
+			float rate_error = (float)(abs(right_delta) - abs(left_delta));
+
+			/* --- The Direct Gains --- */
+			float HEADING_KP = 50.0f;  /* 1 degree of drift = 15us servo correction */
+			float POS_KP     = 2.5f;   /* 1 tick of drift = 1.5us servo correction */
+			float STEER_KI   = 0.0f;   /* Auto-trim */
+			float STEER_KD   = 5.0f;   /* Dampening */
+			const int16_t MAX_STEER_TRIM = 220;
+
+			int16_t reverse_bias = 0;
+//			if (dir_forward == -1) {
+//				HEADING_KP = 6.0f;
+//				POS_KP     = 0.5f;
+//				STEER_KI   = 0.0f;
+//				STEER_KD   = 0.0f;
+//				reverse_bias = -8;
+//			}
+
+			/* 4. Integral Accumulation (Auto-Trim) */
+			/* We combine heading and scaled pos_error to trim out permanent physical drift */
+			float combined_error = heading_error + ((float)pos_error * 0.1f);
+			steer_integral += combined_error * dt;
+
+			if (steer_integral > 150.0f)  steer_integral = 150.0f;
+			if (steer_integral < -150.0f) steer_integral = -150.0f;
+
+			/* Calculate dynamic steering correction */
+			int16_t steer_correction = (int16_t)((heading_error * HEADING_KP) +
+												 ((float)pos_error * POS_KP) +
+												 (steer_integral * STEER_KI) +
+												 (rate_error * STEER_KD) +
+												 reverse_bias);
+
+			/* Understeer Fade for Deceleration */
+			float speed_ratio = fabsf(current_speed_ramp) / (float)SPEED_STRAIGHT;
+			steer_correction = (int16_t)(steer_correction * speed_ratio);
+
+			/* Clamp maximum steering authority */
+			if (steer_correction > MAX_STEER_TRIM)  steer_correction = MAX_STEER_TRIM;
+			if (steer_correction < -MAX_STEER_TRIM) steer_correction = -MAX_STEER_TRIM;
+
+			/* Apply to servo */
+			uint16_t commanded_servo = (uint16_t)(SERVO_CENTRE + steer_correction);
+			servo_us(commanded_servo);
+
+			/* 3. Velocity PI Controller */
+			float err_l = current_speed_ramp - (float)left_delta;
+			float err_r = current_speed_ramp - (float)right_delta;
+
+			left_pid_integral  += err_l * dt;
+			right_pid_integral += err_r * dt;
+
+			/* Anti-windup clamping */
+			if (left_pid_integral > 250.0f)  left_pid_integral = 250.0f;
+			if (left_pid_integral < -250.0f) left_pid_integral = -250.0f;
+			if (right_pid_integral > 250.0f)  right_pid_integral = 250.0f;
+			if (right_pid_integral < -250.0f) right_pid_integral = -250.0f;
+
+			/* Pushes baseline power so the weaker left motor doesn't stall when braking */
+			int32_t ff = (int32_t)(dir_forward * (fabsf(current_speed_ramp) * 20.0f));
+
+			int32_t duty_l = ff + (int32_t)(SPEED_KP * err_l + SPEED_KI * left_pid_integral);
+			int32_t duty_r = ff + (int32_t)(SPEED_KP * err_r + SPEED_KI * right_pid_integral);
+
+			motor_left(duty_l);
+			motor_right(duty_r);
+			break;
+		}
+
+    	case MODE_TURN_DEG:
+		{
+			/* 1. True Ackermann Yaw Integration (handles forward AND reverse correctly) */
+			float step_yaw = delta_yaw * (float)dir_forward;
+			if (turn_left) {
+				accum_deg += step_yaw;
+			} else {
+				accum_deg -= step_yaw;
+			}
+
+			/* 2. Angle Completion Check */
+			const float BRAKING_LEAD_DEG = 2.5f; /* Compensates for chassis inertia */
+			float remaining_deg = target_deg_total - accum_deg;
+
+			if (remaining_deg <= BRAKING_LEAD_DEG) {
+				stop_hardware(MOVE_DONE);
+				return;
+			}
+			/* --- Slew-Rate Acceleration & Deceleration Ramp --- */
+			float target_base_speed = (float)(dir_forward * SPEED_TURN);
+
+			/* ONLY decelerate if this is a large turn (e.g., a 90-degree grid turn) */
+			if (target_deg_total >= 45.0f) {
+				const float DECEL_DEG = 20.0f;
+				if (remaining_deg < DECEL_DEG) {
+					target_base_speed = (float)(dir_forward * 20.0f); /* Crawl speed */
+				}
+			}
+
+			const float RAMP_STEP = 1.2f;
+
+			if (current_speed_ramp < target_base_speed) {
+				current_speed_ramp += RAMP_STEP;
+				if (current_speed_ramp > target_base_speed) current_speed_ramp = target_base_speed;
+			} else if (current_speed_ramp > target_base_speed) {
+				current_speed_ramp -= RAMP_STEP;
+				if (current_speed_ramp < target_base_speed) current_speed_ramp = target_base_speed;
+			}
+
+			/* 3. Differential Ackermann Wheel Speeds */
+			float target_l, target_r;
+
+			if (turn_left) {
+				target_l = current_speed_ramp * 0.70f;
+				target_r = current_speed_ramp * 1.30f;
+			} else {
+				target_l = current_speed_ramp * 1.30f;
+				target_r = current_speed_ramp * 0.70f;
+			}
+
+			float err_l = target_l - (float)left_delta;
+			float err_r = target_r - (float)right_delta;
+
+			left_pid_integral  += err_l * dt;
+			right_pid_integral += err_r * dt;
+
+			/* Anti-windup clamping */
+			if (left_pid_integral > 250.0f)  left_pid_integral = 250.0f;
+			if (left_pid_integral < -250.0f) left_pid_integral = -250.0f;
+			if (right_pid_integral > 250.0f)  right_pid_integral = 250.0f;
+			if (right_pid_integral < -250.0f) right_pid_integral = -250.0f;
+
+			/* 4. DYNAMIC Direction-Aware Feedforward */
+			/* Scales the feedforward down as the speed ramps down, preserving the turning radius */
+			float speed_ratio = fabsf(current_speed_ramp) / (float)SPEED_TURN;
+			int32_t ff = (int32_t)((float)dir_forward * 1200.0f * speed_ratio);
+
+			int32_t duty_l = ff + (int32_t)(SPEED_KP * err_l + SPEED_KI * left_pid_integral);
+			int32_t duty_r = ff + (int32_t)(SPEED_KP * err_r + SPEED_KI * right_pid_integral);
+
+			motor_left(duty_l);
+			motor_right(duty_r);
+			break;
+		}
+    	case MODE_PIVOT_DEG:
+		{
+			/* 1. Integrate Absolute Gyro Yaw */
+			if (turn_left) {
+				accum_deg += delta_yaw;
+			} else {
+				accum_deg -= delta_yaw;
+			}
+
+			/* 2. Target Completion Check */
+			if (accum_deg >= target_deg_total) {
+				stop_hardware(MOVE_DONE);
+				return;
+			}
+
+			/* 3. Symmetric Counter-Rotating Speed Targets */
+			const float MAX_PIVOT_SPEED = (float)SPEED_TURN;
+			const float RAMP_STEP = 1.5f; /* Accelerates by 1.5 ticks every 10ms */
+
+			if (pivot_speed_ramp < MAX_PIVOT_SPEED) {
+			    pivot_speed_ramp += RAMP_STEP;
+			    if (pivot_speed_ramp > MAX_PIVOT_SPEED) pivot_speed_ramp = MAX_PIVOT_SPEED;
+			}
+
+			float target_l = turn_left ? -pivot_speed_ramp :  pivot_speed_ramp;
+			float target_r = turn_left ?  pivot_speed_ramp : -pivot_speed_ramp;
+
+			/* 4. PID Error Calculations */
+			float err_l = target_l - (float)left_delta;
+			float err_r = target_r - (float)right_delta;
+
+			left_pid_integral  += err_l * dt;
+			right_pid_integral += err_r * dt;
+
+			/* Anti-windup clamping */
+			if (left_pid_integral > 300.0f)  left_pid_integral = 300.0f;
+			if (left_pid_integral < -300.0f) left_pid_integral = -300.0f;
+			if (right_pid_integral > 300.0f)  right_pid_integral = 300.0f;
+			if (right_pid_integral < -300.0f) right_pid_integral = -300.0f;
+
+			/* 5. Anti-Creep (Forward Drift Prevention) */
+			pivot_enc_l_accum += left_delta;
+			pivot_enc_r_accum += right_delta;
+			int32_t net_translation = pivot_enc_l_accum + pivot_enc_r_accum;
+
+			int32_t creep_trim = 0;
+			if (net_translation > 10) { /* If chassis creeps forward more than ~1.5mm */
+				creep_trim = (net_translation - 10) * 12; /* Kp of 12 for drift correction */
+				if (creep_trim > 600) creep_trim = 600;   /* Cap trim to prevent violent vibration */
+			}
+
+			/* 6. Symmetric Feedforward */
+			/* 1500 is roughly 9% duty cycle, enough to break average stiction */
+			int32_t ff_l = turn_left ? -3000 :  3000;
+			int32_t ff_r = turn_left ?  3000 : -3000;
+
+			/* 7. Motor Output */
+			/* Subtracting creep_trim forces the robot backward if it drifts forward */
+			int32_t duty_l = ff_l + (int32_t)(SPEED_KP * err_l + SPEED_KI * left_pid_integral) - creep_trim;
+			int32_t duty_r = ff_r + (int32_t)(SPEED_KP * err_r + SPEED_KI * right_pid_integral) - creep_trim;
+
+			motor_left(duty_l);
+			motor_right(duty_r);
+			break;
+		}
+
+        case MODE_TURN_RAW:
+        {
+            accum_counts += avg_delta;
+
+            if (accum_counts >= target_counts_total) {
+                stop_hardware(MOVE_DONE);
+                return;
+            }
+
+            float target_speed = (float)(dir_forward * SPEED_TURN);
+            float err_l = target_speed - (float)left_delta;
+            float err_r = target_speed - (float)right_delta;
+
+            left_pid_integral  += err_l * dt;
+            right_pid_integral += err_r * dt;
+
+            int32_t duty_l = (int32_t)(SPEED_KP * err_l + SPEED_KI * left_pid_integral);
+            int32_t duty_r = (int32_t)(SPEED_KP * err_r + SPEED_KI * right_pid_integral);
+
+            motor_left(duty_l);
+            motor_right(duty_r);
+            break;
         }
-    } else {
-        stall = 0u;
+
+        case MODE_IDLE:
+        default:
+            break;
     }
-
-    /* --- distance check --- */
-    int32_t travelled = (enc_left_total + enc_right_total) / 2;
-    if (labs(travelled) >= target_counts) {
-        finish(MOVE_DONE);
-        return;
-    }
-
-    /* --- decelerate over the last stretch so we stop ON target --- */
-    int32_t remaining = target_counts - labs(travelled);
-    int32_t delta = target_delta;
-    if (remaining < RAMP_DOWN_COUNTS) {
-        int32_t scaled  = (target_delta * remaining) / RAMP_DOWN_COUNTS;
-        int32_t floor_v = (target_delta >= 0) ? MIN_CRAWL : -MIN_CRAWL;
-        /* Never let the commanded speed reach zero before the distance
-           does, or the stall guard fires instead of the distance check. */
-        if (labs(scaled) < MIN_CRAWL) scaled = floor_v;
-        delta = scaled;
-    }
-
-    /* --- differential: the inner wheel travels a shorter arc ---
-       use_sync is 0 exactly when turning, so it doubles as the flag. */
-    int32_t delta_l = delta, delta_r = delta;
-    if (!use_sync) {
-        int32_t inner = (int32_t)((float)delta * (1.0f - TURN_BIAS));
-        int32_t outer = (int32_t)((float)delta * (1.0f + TURN_BIAS));
-        if (turn_left) { delta_l = inner; delta_r = outer; }
-        else           { delta_l = outer; delta_r = inner; }
-    }
-
-    /* --- per-wheel PI on speed ---
-       The integral is accumulated already scaled by KI_SPEED, so the
-       clamp below is directly in duty units and is easy to reason about. */
-    float e_l = (float)(delta_l - enc_left_delta);
-    float e_r = (float)(delta_r - enc_right_delta);
-
-    i_l += KI_SPEED * e_l;
-    i_r += KI_SPEED * e_r;
-    if (i_l >  I_DUTY_LIMIT) i_l =  I_DUTY_LIMIT;
-    if (i_l < -I_DUTY_LIMIT) i_l = -I_DUTY_LIMIT;
-    if (i_r >  I_DUTY_LIMIT) i_r =  I_DUTY_LIMIT;
-    if (i_r < -I_DUTY_LIMIT) i_r = -I_DUTY_LIMIT;
-
-    float u_l = KFF * (float)delta_l + KP_SPEED * e_l + i_l;
-    float u_r = KFF * (float)delta_r + KP_SPEED * e_r + i_r;
-
-    /* --- sync term: only when going straight ---
-       On an arc the wheels SHOULD travel different distances, so
-       enabling this during a turn makes the car fight itself.     */
-    if (use_sync) {
-        float drift = (float)(enc_left_total - enc_right_total);
-        u_l -= KS_SYNC * drift;
-        u_r += KS_SYNC * drift;
-    }
-
-    /* --- slew limit: never step the bridge from rest to full duty --- */
-    out_l = slew(out_l, (int32_t)u_l);
-    out_r = slew(out_r, (int32_t)u_r);
-
-    motor_left(out_l);
-    motor_right(out_r);
 }

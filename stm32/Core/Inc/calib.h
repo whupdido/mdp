@@ -44,8 +44,9 @@
 /* Target speeds in ENCODER COUNTS PER 10 ms CONTROL TICK.
    A physical quantity, independent of PWM_MAX -- do NOT rescale these
    if you change the PWM period.                                            */
-#define SPEED_STRAIGHT      20
-#define SPEED_TURN          14
+// Max 85 for left motor, 80 for right on my floor
+#define SPEED_STRAIGHT      60
+#define SPEED_TURN          50
 
 /* VERIFIED ON HARDWARE -- DO NOT CHANGE.
    Both motors drive the car backwards on positive duty, so both are 1.

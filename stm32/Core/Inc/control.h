@@ -18,7 +18,7 @@ typedef enum {
     MOVE_DONE,       /* reached the target distance normally       */
     MOVE_STALL,      /* both wheels stopped turning -> aborted     */
     MOVE_TIMEOUT,    /* exceeded MOVE_TIMEOUT_TICKS -> aborted     */
-    MOVE_ABORT       /* cancelled by motion_stop() / STOP command  */
+    MOVE_ABORT,       /* cancelled by motion_stop() / STOP command  */
 } move_result_t;
 
 void    control_init(void);
@@ -27,12 +27,17 @@ uint8_t motion_busy(void);
 void    motion_stop(void);
 move_result_t motion_result(void); /* valid once motion_busy() is false */
 
-void move_straight_mm(int32_t mm);
+uint8_t move_straight_mm(int32_t mm);
 
 /* Raw form: counts is the arc length in encoder counts. Used for calibration. */
 void move_turn(int8_t left, int8_t forward, int32_t counts);
 
 /* Preferred form: degrees is 1..360, scaled from the TURN_COUNTS_* constants. */
-void move_turn_deg(int8_t left, int8_t forward, int32_t degrees);
+uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees);
+
+/* In-place pivot turn (counter-rotating rear wheels) */
+void move_pivot_deg(int8_t left, int32_t degrees);
+
+uint8_t move_kturn_90(int8_t left);
 
 #endif
