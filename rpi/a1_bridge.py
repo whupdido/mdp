@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Minimal Android Bluetooth-to-STM32 bridge for checklist A1."""
 
+# Defers type-hint evaluation -- the Pi's Python is older than 3.9, which
+# can't evaluate `dict[int, dict]` at runtime without this (same class of
+# issue as the `str | None` fix in capture_and_report.py).
+from __future__ import annotations
+
 import re
 import sys
 import time
@@ -20,12 +25,63 @@ STM_TIMEOUT_SECONDS = 25
 # checklist C.6 and C.7 -- are for the algorithm and must never reach the
 # board. The single pattern here rejected the map messages outright, so the
 # tablet got ERR,INVALID_COMMAND every time an obstacle was placed, moved or
-# annotated. Kenneth: swap MAP_PATTERN's branch for a real handoff to the
-# algorithm side when you have somewhere to put them.
+# annotated.
 MOVE_PATTERN = re.compile(r"^(?:F[WLR]|B[WLR])\d{3}$|^STOP$")
 MAP_PATTERN = re.compile(r"^(?:ADD|SUB|FACE),")
 
+# Real parsers for the three map message shapes Android actually sends
+# (see Android/PROTOCOL.md -- these are Android's fixed outbound formats,
+# not the tolerant set of things it accepts as input).
+ADD_PATTERN = re.compile(r"^ADD,B(\d+),\((\d+),(\d+)\)$")
+SUB_PATTERN = re.compile(r"^SUB,B(\d+)$")
+FACE_PATTERN = re.compile(r"^FACE,B(\d+),([NESW])$")
+
 FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "ACK", "BUSY", "ERR"}
+
+# obstacle_number -> {"pos": (x, y), "face": "N"/"E"/"S"/"W"/None}
+# This is what image recognition needs before it can call report_obstacle():
+# the obstacle number and which face to look at. Whatever decides "we've
+# arrived at obstacle N, go check it" (the real navigation loop -- not
+# written yet) should read from this dict once the robot is in position.
+obstacles: dict[int, dict] = {}
+
+
+def handle_map_message(command: str) -> str:
+    """Parse one ADD/SUB/FACE message and update `obstacles`. Returns the
+    status text to echo back to Android (mirrors the old unconditional ack,
+    but now actually does something with the data first)."""
+    m = ADD_PATTERN.match(command)
+    if m:
+        n, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        obstacles[n] = {"pos": (x, y), "face": obstacles.get(n, {}).get("face")}
+        print(f"[MAP] obstacle {n} placed at {(x, y)}")
+        return command
+
+    m = SUB_PATTERN.match(command)
+    if m:
+        n = int(m.group(1))
+        obstacles.pop(n, None)
+        print(f"[MAP] obstacle {n} removed")
+        return command
+
+    m = FACE_PATTERN.match(command)
+    if m:
+        n, face = int(m.group(1)), m.group(2)
+        if n in obstacles:
+            obstacles[n]["face"] = face
+            print(f"[MAP] obstacle {n} face set to {face} -- ready for detection once robot arrives")
+        else:
+            # FACE for an obstacle we never saw an ADD for -- shouldn't
+            # happen if Android's already validating this, but don't crash
+            # the bridge over it.
+            obstacles[n] = {"pos": None, "face": face}
+            print(f"[MAP] face {face} set for obstacle {n} with no known position yet")
+        return command
+
+    # Matched MAP_PATTERN's loose prefix check but not any real shape --
+    # log it so a format mismatch is visible instead of silently swallowed.
+    print(f"[MAP] unrecognised map message, ignoring: {command}")
+    return command
 
 
 def send_line(port, message):
@@ -33,7 +89,12 @@ def send_line(port, message):
     port.flush()
 
 
-def main():
+def main(on_face_known=None):
+    """Run the bridge. `on_face_known(stm, android, obstacle_number)`, if
+    given, is called once -- not on every resend -- the moment an obstacle
+    goes from "no face known yet" to "face known", with the same open stm
+    and android connections this loop already holds. Left as None by
+    default so test_a1_bridge.py's existing behaviour is unchanged."""
     print(f"Opening STM32 on {STM_DEVICE} at {BAUD_RATE} baud")
     with serial.Serial(STM_DEVICE, BAUD_RATE, timeout=1) as stm:
         print(f"Waiting for Android RFCOMM device {BT_DEVICE}")
@@ -52,13 +113,23 @@ def main():
 
                 print(f"Android -> RPi: {command}")
 
-                # Zhenxi: map edits are acknowledged and dropped rather than
-                # rejected. Acknowledging matters -- the tablet shows the user a
-                # warning for every ERR it receives, so silently refusing these
-                # made it look like the map was broken.
+                # Map edits are acknowledged (never rejected -- the tablet
+                # shows the user a warning for every ERR it receives) AND
+                # now actually recorded in `obstacles`, instead of just
+                # being echoed back and dropped.
                 if MAP_PATTERN.match(command):
-                    print(f"map message (not for STM32): {command}")
+                    face_match = FACE_PATTERN.match(command)
+                    n = int(face_match.group(1)) if face_match else None
+                    face_was_known = (
+                        n is not None and obstacles.get(n, {}).get("face") is not None
+                    )
+
+                    handle_map_message(command)
                     send_line(android, f"STATUS,MAP,{command}")
+
+                    if on_face_known is not None and n is not None and not face_was_known:
+                        if obstacles.get(n, {}).get("face") is not None:
+                            on_face_known(stm, android, n)
                     continue
 
                 if not MOVE_PATTERN.fullmatch(command):
