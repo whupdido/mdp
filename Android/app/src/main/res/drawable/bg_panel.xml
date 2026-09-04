@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="@color/arena_panel" />
-    <corners android:radius="10dp" />
-    <stroke android:width="1dp" android:color="@color/arena_hairline" />
-</shape>
+<!--
+  Instrument-panel face. A hairline of light along the top edge and a slightly
+  darker base: the same trick a real bevelled fascia uses, and the reason these
+  read as objects rather than as flat rectangles.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/arena_panel_edge" />
+            <corners android:radius="11dp" />
+        </shape>
+    </item>
+    <item android:top="1dp">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/arena_panel" />
+            <corners android:radius="11dp" />
+            <stroke android:width="1dp" android:color="@color/arena_hairline" />
+        </shape>
+    </item>
+</layer-list>

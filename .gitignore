@@ -25,3 +25,20 @@ Thumbs.db
 # Python
 __pycache__/
 *.py[cod]
+
+# Secrets
+.env
+
+# Virtual environments (never commit, regenerate from requirements.txt instead)
+live_env/
+img_rec_env/
+*_env/
+venv/
+.venv/
+
+# Datasets (too heavy for git)
+Detection-Symbols-Updated-3-4/
+*.zip
+
+# Runtime output from yolo_task1.py (debug frames, not source)
+yolo_logs/
