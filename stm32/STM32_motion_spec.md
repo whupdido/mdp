@@ -49,6 +49,8 @@ Settle 200 ms, then ~160 ms accel ramp. Deceleration begins 82 mm before target.
 
 **Cannot turn on the spot.** Ackermann steering. Radii at rear-axle centre.
 
+### Superseded: before the deceleration ramp
+
 **Measured 31-Aug-2026, 5 runs per direction.** Method: the controller accumulates
 each rear wheel's arc in encoder counts over a turn (plus 400 ms of coast), and
 the IMU supplies the angle. Then `R = mean_arc / yaw_rad`. No chassis constants
@@ -66,21 +68,45 @@ straight-line chord `c`, then `R = c / 2·sin(θ/2)` with θ read off the OLED:
 Agreement to 0.3 % on the direction that scrubs the most, which is what
 establishes that scrub does not corrupt the radius (see Open).
 
+### Current, after the turn deceleration ramp
+
+**Re-measured 05-Sep-2026, 5 runs per direction**, same method, after the
+deceleration ramp was added to `MODE_TURN_DEG` (crawl target in the last 20° of
+any turn of 45° or more).
+
 | Command | Radius | Spread (5 runs) | Displacement (90°) | Grid cells |
 |---|---|---|---|---|
-| `FL` | **317 mm** | ±5 mm (1.2 %) | 317 fwd + 317 left | ~3.2 |
-| `FR` | **413 mm** | ±3 mm (0.6 %) | 413 fwd + 413 right | ~4.1 |
-| `BL` | **312 mm** | ±4 mm (0.9 %) | 312 back + 312 left | ~3.1 |
-| `BR` | **421 mm** | ±3 mm (0.6 %) | 421 back + 421 right | ~4.2 |
+| `FL` | **277 mm** | ±13 mm (4.7 %) | 277 fwd + 277 left | ~2.8 |
+| `FR` | **365 mm** | ±2 mm (0.5 %) | 365 fwd + 365 right | ~3.7 |
+| `BL` | **281 mm** | ±14 mm (5.0 %) | 281 back + 281 left | ~2.8 |
+| `BR` | **383 mm** | ±2 mm (0.5 %) | 383 back + 383 right | ~3.8 |
 
-Every radius is 21–39 % larger than the previous table claimed. **Any planner
-still using 261/318/246/303 is under-reserving space on every turn.**
+Deceleration tightened every radius by 9–13 %:
 
-Right turns need **30 % more space than left going forward, 35 % in reverse** —
-not the 22 % previously stated. Prefer left turns wherever the path allows.
+| | before decel | after decel | change | spread |
+|---|---|---|---|---|
+| `FL` | 317 ±5 | 277 ±13 | −40 mm, −12.6 % | 1.6 % → 4.7 % |
+| `FR` | 413 ±3 | 365 ±2 | −48 mm, −11.6 % | 0.7 % → 0.5 % |
+| `BL` | 312 ±4 | 281 ±14 | −31 mm, −9.9 % | 1.3 % → 5.0 % |
+| `BR` | 421 ±3 | 383 ±2 | −38 mm, −9.0 % | 0.7 % → 0.5 % |
 
-Repeatability is good: worst-case spread is 1.2 % of radius, so turns are
-consistent even though they are large.
+Tighter turns are the wanted outcome and the clearance figures below have been
+rescaled to them.
+
+**Open issue: left-turn repeatability regressed.** Left spread went from ~1.5 %
+to ~5 %, a run-to-run range of 26–28 mm per turn, while right turns were
+untouched at 0.5 %. A biased radius is harmless once measured; scatter is not,
+because it accumulates along a route and cannot be corrected for. Suspected
+cause: in the crawl phase `speed_ratio` is 20/50, so the turn feedforward falls
+to `1200 × 0.4 = 480` against a `PWM_MAX` of 16799, about **2.9 % duty**, at or
+below the motor deadband, leaving the wheel dependent on PID integral windup
+rather than feedforward. Left turns also run at `SERVO_LEFT` = 1000, documented
+as the saturation limit, so they scrub the most. Untested; the candidate fixes
+are raising the crawl target from 20, or flooring the feedforward above the
+deadband.
+
+Right turns still need about **31 % more space than left**. Prefer left turns
+wherever the path allows, but note they are now the less repeatable ones.
 
 Non-90° angles scale linearly from the above.
 
@@ -93,17 +119,19 @@ Body 230 × 188 mm, so ±94 mm either side of the rear-axle centre path.
 
 | Turn | Inner radius | Outer radius (excl. front overhang) |
 |---|---|---|
-| `FL` | ~223 mm | ~411 mm |
-| `FR` | ~319 mm | ~507 mm |
-| `BL` | ~218 mm | ~406 mm |
-| `BR` | ~327 mm | ~515 mm |
+| `FL` | ~183 mm | ~371 mm |
+| `FR` | ~271 mm | ~459 mm |
+| `BL` | ~187 mm | ~375 mm |
+| `BR` | ~289 mm | ~477 mm |
 
-Left and right can no longer share a row — they differ by ~100 mm of outer radius.
+Left and right still cannot share a row — they differ by ~90 mm of outer radius.
 
 Working figures for obstacle inflation, scaled from the measured envelope:
-**520 × 520 mm** clear for a left turn, **620 × 620 mm** for a right turn.
-Both were 450/500 before, i.e. too small by a comfortable margin. Front
-overhang is still not included in either figure.
+**480 × 480 mm** clear for a left turn, **570 × 570 mm** for a right turn.
+Front overhang is still not included in either figure.
+
+For left turns, add the ±13 mm scatter above on top of these before trusting
+them, until the repeatability issue is resolved.
 
 ## Timing
 
@@ -136,12 +164,12 @@ SPEED_STRAIGHT      20        // counts per 10 ms tick  -- STALE, calib.h has 40
 SPEED_TURN          14        // STALE, calib.h has 50
 
 /* Unused by the firmware -- turns terminate on integrated IMU yaw, not on
-   these. Kept as documentation. Values below are back-computed from the
-   radii measured 31-Aug-2026; the ones in calib.h are older and lower. */
-TURN_COUNTS_FL      3640      // 90 deg
-TURN_COUNTS_FR      4750
-TURN_COUNTS_BL      3580
-TURN_COUNTS_BR      4830
+   counts. Kept only so the Pi can interpret older telemetry. The radii above
+   are the numbers a planner should use. */
+TURN_RADIUS_FL_MM   277       // +-13 mm, see the open issue
+TURN_RADIUS_FR_MM   365       // +-2 mm
+TURN_RADIUS_BL_MM   281       // +-14 mm, see the open issue
+TURN_RADIUS_BR_MM   383       // +-2 mm
 
 SERVO_CENTRE        1500
 SERVO_LEFT          1000

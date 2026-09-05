@@ -1,7 +1,9 @@
 #include "main.h"
 #include "sensors.h"
+#include "calib.h"
 #include "oled.h"
 #include <stdio.h>
+#include <math.h>
 
 extern TIM_HandleTypeDef htim8;
 
@@ -14,19 +16,74 @@ volatile uint8_t image_found = 0;
 
 /*
  * The DMA will automatically dump the 12-bit ADC values here.
- * index 0 = Rank 1 (PA2 / Left IR)
- * index 1 = Rank 2 (PA3 / Right IR)
+ * index 0 = Rank 1 (PA2 / Right IR)
+ * index 1 = Rank 2 (PA3 / Left  IR)
+ * IR_RIGHT and IR_LEFT below ARE those indices, so the buffer, the fit arrays
+ * and the getters all use one numbering instead of swapping it per function.
  */
 volatile uint16_t ir_adc_buffer[2] = {0, 0};
 
+#define IR_RIGHT   0u
+#define IR_LEFT    1u
+
 /* Make sure you have access to your ADC handle (defined in adc.c) */
 extern ADC_HandleTypeDef hadc1;
+extern DMA_HandleTypeDef hdma_adc1;
+
+/**
+ * @brief Start the ADC free-running into ir_adc_buffer, with the DMA interrupt
+ *        kept masked.
+ *
+ * HAL_ADC_Start_DMA enables the DMA half- and full-transfer interrupts, and at
+ * these conversion rates that is ruinous. Two channels free-run into a two
+ * entry circular buffer, so at the stock 84 cycle sampling time a conversion
+ * lands every ~4.6 us and the CPU takes a DMA interrupt that often, spending a
+ * large slice of every second inside HAL_DMA_IRQHandler for nothing.
+ *
+ * At the 3 cycle sampling time the source test uses it stops being merely
+ * wasteful: an interrupt is requested every ~0.7 us, which is faster than the
+ * handler can run. The CPU never leaves the ISR, and since DMA2_Stream0 sits at
+ * NVIC priority 0 while SysTick is at 15, SysTick stops being serviced, uwTick
+ * freezes, and HAL_Delay never returns. That is precisely what left the source
+ * test stuck on "sampling...".
+ *
+ * Nothing here uses the DMA transfer callbacks, the buffer is polled, so the
+ * interrupt has no job. Masked, the DMA keeps refilling the buffer purely in
+ * hardware with zero CPU cost, which also gives the rest of the firmware back
+ * the cycles it was quietly losing.
+ */
+static uint8_t ir_dma_start(void) {
+    uint8_t ok = (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)ir_adc_buffer, 2) == HAL_OK);
+    __HAL_DMA_DISABLE_IT(&hdma_adc1, DMA_IT_HT | DMA_IT_TC);
+    HAL_NVIC_DisableIRQ(DMA2_Stream0_IRQn);
+    return ok;
+}
+
+/* Live model coefficients, one pair per sensor, seeded from calib.h.
+   Fixed at the calib.h values; the on-car calibration UI that used to rewrite
+   them at run time has been removed. */
+static float ir_m[2] = { IR_RIGHT_M, IR_LEFT_M };
+static float ir_b[2] = { IR_RIGHT_B, IR_LEFT_B };
+static float ir_k[2] = { IR_RIGHT_K, IR_LEFT_K };
+
+/* Set by ir_sensors_init(). A failed DMA start leaves the buffer at zero
+   forever, which is indistinguishable from a dead sensor unless you check. */
+static uint8_t ir_dma_started = 0;
 
 /**
  * @brief Call this ONCE before your main loop starts to kick off the background DMA
  */
 void ir_sensors_init(void) {
-    HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ir_adc_buffer, 2);
+    ir_dma_started = ir_dma_start();
+}
+
+/**
+ * @brief Re-arm the ADC/DMA after a failed or aborted start.
+ */
+uint8_t ir_sensors_restart(void) {
+    HAL_ADC_Stop_DMA(&hadc1);
+    ir_dma_started = ir_dma_start();
+    return ir_dma_started;
 }
 
 /**
@@ -37,62 +94,63 @@ static float adc_to_voltage(uint16_t raw_adc) {
 }
 
 /**
- * @brief The Transfer Function (Linearization)
- * Converts nonlinear Sharp IR voltage into centimeters.
+ * @brief Instantaneous voltage on one IR channel.
  */
-static float sharp_voltage_to_cm(float voltage) {
-    /* Prevent division by zero or negative distances if voltage drops too low */
-    if (voltage < 0.45f) return 80.0f;
+static float ir_volts(uint8_t ch) {
+    return adc_to_voltage(ir_adc_buffer[ch]);
+}
 
-    /* Standard placeholder formula for GP2Y0A21YK (10cm - 80cm) */
-    float distance_cm = 27.86f / (voltage - 0.42f);
+/**
+ * @brief The transfer function: d = m/(V - b), clamped to the trusted band.
+ */
+static float ir_volts_to_cm(uint8_t ch, float voltage) {
+    float denom = voltage - ir_b[ch];
 
-    /* Clamp to sensor's reliable physical limits */
-    if (distance_cm > 80.0f) distance_cm = 80.0f;
-    if (distance_cm < 10.0f) distance_cm = 10.0f;
+    /* Far away, or nothing plugged in: the model blows up here, so bail out
+       to the far limit instead of returning a huge or negative distance. */
+    if (denom < 0.01f) return IR_MAX_CM;
 
+    float distance_cm = ir_m[ch] / denom - ir_k[ch];
+
+    if (distance_cm > IR_MAX_CM) distance_cm = IR_MAX_CM;
+    if (distance_cm < IR_MIN_CM) distance_cm = IR_MIN_CM;
     return distance_cm;
 }
 
 /* --- Public Getters for your Control Loop --- */
 
 float get_sharp_ir_left_cm(void) {
-    /* Buffer[1] is PA3 */
-    float volts = adc_to_voltage(ir_adc_buffer[1]);
-    return sharp_voltage_to_cm(volts);
+    return ir_volts_to_cm(IR_LEFT, ir_volts(IR_LEFT));
 }
 
 float get_sharp_ir_right_cm(void) {
-    /* Buffer[0] is PA2 */
-    float volts = adc_to_voltage(ir_adc_buffer[0]);
-    return sharp_voltage_to_cm(volts);
+    return ir_volts_to_cm(IR_RIGHT, ir_volts(IR_RIGHT));
 }
 
 /**
  * @brief Formats the voltages into strings for your OLED screen.
  */
 void display_ir_voltages_oled(void) {
-    float left_v  = adc_to_voltage(ir_adc_buffer[1]);
-    float right_v = adc_to_voltage(ir_adc_buffer[0]);
-    float left_dist = get_sharp_ir_left_cm();
-    float right_dist = get_sharp_ir_right_cm();
+    float left_v   = ir_volts(IR_LEFT);
+    float right_v  = ir_volts(IR_RIGHT);
+    float left_d   = ir_volts_to_cm(IR_LEFT,  left_v);
+    float right_d  = ir_volts_to_cm(IR_RIGHT, right_v);
 
     char line1[32];
     char line2[32];
     char line3[32];
     char line4[32];
 
-    /* Format the floats to 2 decimal places */
     sprintf(line1, "Left : %.2fV", left_v);
-    sprintf(line3, "Distance: %.2f", left_dist);
-    sprintf(line2, "Right: %.2f V", right_v);
-    sprintf(line4, "Distance: %.2f", right_dist);
+    sprintf(line3, "Distance: %.2f", left_d);
+    sprintf(line2, "Right: %.2fV", right_v);
+    sprintf(line4, "Distance: %.2f", right_d);
 
     OLED_Clear();
-    OLED_ShowString(0, 0, (const uint8_t* ) line1);
-    OLED_ShowString(0, 10, (const uint8_t* ) line3);
-    OLED_ShowString(0, 20, (const uint8_t* ) line2);
-    OLED_ShowString(0, 30, (const uint8_t* ) line4);
+    OLED_ShowString(0,  0, (const uint8_t *)line1);
+    OLED_ShowString(0, 10, (const uint8_t *)line3);
+    OLED_ShowString(0, 20, (const uint8_t *)line2);
+    OLED_ShowString(0, 30, (const uint8_t *)line4);
     OLED_Refresh_Gram();
 }
 

@@ -103,9 +103,13 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(Buzzer_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : BTN_USER_Pin */
+  /* PULLUP, not NOPULL. SW1 shorts the pin to ground when pressed and there is
+     no external pull-up on the board, so with NOPULL the pin floated whenever
+     the button was released and the reads were noise: random phantom presses,
+     and a held button that appeared to let go on its own. */
   GPIO_InitStruct.Pin = BTN_USER_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(BTN_USER_GPIO_Port, &GPIO_InitStruct);
 
 }

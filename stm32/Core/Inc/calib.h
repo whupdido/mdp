@@ -33,13 +33,34 @@
 #define SERVO_LEFT          1000
 #define SERVO_RIGHT         2100
 
-/* Encoder counts to complete a 90 degree change of heading.
-   Four separate values -- they are NOT symmetric. All verified on hardware.
-   move_turn_deg() scales these linearly for other angles.                  */
-#define TURN_COUNTS_FL      3350   /* forward-left  90 deg */
-#define TURN_COUNTS_FR      4150   /* forward-right 90 deg */
-#define TURN_COUNTS_BL      3300   /* reverse-left  90 deg */
-#define TURN_COUNTS_BR      4100   /* reverse-right 90 deg */
+/* --- Turn geometry, MEASURED on hardware, 5 runs per case ---
+   (the test that produced these is archived in tools/turn_test/)
+   Radius = arc / gyro-measured heading change, including the coast after the
+   controller stops steering. The "+-" is half the observed run-to-run range.
+
+   The controller does NOT read these. move_turn_deg() closes on the gyro and
+   stops at the commanded angle whatever radius the car traces. They are here
+   because the RADIUS is what displaces the car on the grid: after a 90 degree
+   turn the car has moved one radius forward (or back) and one radius sideways,
+   so the path planner needs them even though the controller does not.
+
+                    before decel      after decel
+        FL           317 +-5           277 +-13      -12.6 %
+        FR           413 +-3           365 +-2       -11.6 %
+        BL           312 +-4           281 +-14       -9.9 %
+        BR           421 +-3           383 +-2        -9.0 %
+
+   Two things to read off that table. Every radius tightened by about 10 %: the
+   speed_ratio scaling on the turn feedforward in control.c is meant to hold the
+   radius constant through the ramp and it does not fully manage it. And the
+   LEFT turns lost their repeatability, going from about 1.5 % run-to-run to
+   about 5 %, while the right turns stayed at 0.5 %. The left spread is the
+   problem worth chasing: 26 mm of scatter per turn accumulates across a route
+   in a way a biased but repeatable radius does not.                        */
+#define TURN_RADIUS_FL_MM   277     /* +-13 mm -- NOT repeatable, see above */
+#define TURN_RADIUS_FR_MM   365     /* +-2 mm                               */
+#define TURN_RADIUS_BL_MM   281     /* +-14 mm -- NOT repeatable, see above */
+#define TURN_RADIUS_BR_MM   383     /* +-2 mm                               */
 
 /* Target speeds in ENCODER COUNTS PER 10 ms CONTROL TICK.
    A physical quantity, independent of PWM_MAX -- do NOT rescale these
@@ -55,6 +76,34 @@
    together by open-loop test and must be changed together if at all.       */
 #define INVERT_LEFT         1
 #define INVERT_RIGHT        1
+
+/* --- Sharp analog IR distance model ---
+   Three parameters, not two:      V = m/(d + k) + b
+   inverted at run time to         d = m/(V - b) - k.
+
+   The k term is the point of it. The ideal 1/d law assumes the emitter and the
+   detector sit at the same place as the point you are measuring from, and they
+   do not: there is a fixed optical offset between the sensor's baseline and its
+   front face. Forcing k to 0 makes a two parameter fit bend to cover that
+   offset, and it pays for the bend at the near end of the range, which is
+   exactly where the readings are being used to avoid hitting things.
+
+   These are the values measured on this car. The on-car calibration UI that
+   produced them has been removed, so they are now fixed here.               */
+#define IR_LEFT_M           19.22f
+#define IR_LEFT_B           0.210f
+#define IR_LEFT_K           0.0f
+#define IR_RIGHT_M          20.80f
+#define IR_RIGHT_B          0.073f
+#define IR_RIGHT_K          0.0f
+
+/* Range the readings are trusted over. Below IR_MIN_CM the response curve
+   folds back on itself, so a 5 cm target reads the same as a 20 cm one.
+   IR_MAX_CM is deliberately just past the top of the calibration sweep: past
+   that the curve is too flat for the reading to mean much, so it saturates
+   instead of pretending to resolve 60 from 75.                              */
+#define IR_MIN_CM           10.0f
+#define IR_MAX_CM           60.0f
 
 /* --- safety limits, in 10 ms control ticks ---
    These exist because a stalled motor held at full duty is what tripped the

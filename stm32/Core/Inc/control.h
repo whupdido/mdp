@@ -27,12 +27,14 @@ uint8_t motion_busy(void);
 void    motion_stop(void);
 move_result_t motion_result(void); /* valid once motion_busy() is false */
 
+
 uint8_t move_straight_mm(int32_t mm);
 
 /* Raw form: counts is the arc length in encoder counts. Used for calibration. */
 void move_turn(int8_t left, int8_t forward, int32_t counts);
 
-/* Preferred form: degrees is 1..360, scaled from the TURN_COUNTS_* constants. */
+/* Preferred form: degrees is 1..360, closed on the gyro.
+   NOTE: this no longer uses the TURN_COUNTS_* constants in calib.h at all. */
 uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees);
 
 /* In-place pivot turn (counter-rotating rear wheels) */

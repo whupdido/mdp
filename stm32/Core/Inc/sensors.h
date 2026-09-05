@@ -38,6 +38,11 @@ float get_sharp_ir_left_cm(void);
 float get_sharp_ir_right_cm(void);
 
 /**
+ * @brief Formats the voltages into strings for your OLED screen.
+ */
+void display_ir_voltages_oled(void);
+
+/**
  * @brief Infinite loop to test the HC-SR04 and display on the OLED.
  *        WARNING: This is a blocking loop. Call this in main() for testing only.
  */
@@ -46,8 +51,8 @@ void test_ultrasonic_oled(void);
 extern volatile uint8_t image_found;
 
 /**
- * @brief Formats the voltages into strings for your OLED screen.
+ * @brief Stop and re-arm the ADC/DMA. Returns 1 if the restart took.
  */
-void display_ir_voltages_oled(void);
+uint8_t ir_sensors_restart(void);
 
 #endif /* SENSORS_H */
