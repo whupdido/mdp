@@ -27,6 +27,7 @@
     <string name="drive_back_left">Back-left</string>
     <string name="drive_back_right">Back-right</string>
     <string name="drive_stop">Stop</string>
+    <string name="whitespace"></string>
 
     <!-- Map actions -->
     <string name="undo">Undo</string>

@@ -256,6 +256,13 @@ ROBOT,99,99,N        ignored, with a warning — out of bounds
 Everything the app *sends* is logged in Traffic too, so you can confirm your own
 module will receive what it expects before wiring anything together.
 
+For AMDTool testing using the laptop as client:
+
+First, scan for the tablet via the AMDTool's interface. Then pair it.
+Secondly, use the Android App (Client) on the Tablet to initiate connection with the AMDTool (Server)
+
+
+
 ---
 
 ## Architecture
@@ -372,3 +379,4 @@ Simulator mode on the emulator, and the real tablet for anything with a radio.
 
 Keep decisions out of `ArenaView`, and keep Android out of `ArenaModel` and
 `protocol/`. That separation is what keeps the tests fast and the merges small.
+

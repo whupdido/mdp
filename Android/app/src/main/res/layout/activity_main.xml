@@ -8,6 +8,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:background="@color/arena_ground"
     android:orientation="horizontal"
     android:padding="10dp"
@@ -441,7 +442,11 @@
                         android:layout_width="0dp"
                         android:layout_height="42dp"
                         android:layout_weight="1"
-                        android:text="@string/drive_fwd_left" />
+                        android:text="@string/whitespace"
+                        app:icon="@drawable/arrow_topleft"
+                        app:iconGravity="textStart"
+                        app:iconPadding="8dp"
+                        app:iconTint="@color/white" />
     
                     <Space android:layout_width="6dp" android:layout_height="1dp" />
     
@@ -451,8 +456,11 @@
                         android:layout_width="0dp"
                         android:layout_height="42dp"
                         android:layout_weight="1"
-                        android:text="@string/drive_forward" />
-    
+                        android:text="@string/whitespace"
+                        app:icon="@drawable/arrow_upward"
+                        app:iconGravity="textStart"
+                        app:iconPadding="8dp"/>
+
                     <Space android:layout_width="6dp" android:layout_height="1dp" />
     
                     <com.google.android.material.button.MaterialButton
@@ -461,7 +469,11 @@
                         android:layout_width="0dp"
                         android:layout_height="42dp"
                         android:layout_weight="1"
-                        android:text="@string/drive_fwd_right" />
+                        android:text="@string/whitespace"
+                        app:icon="@drawable/arrow_topright"
+                        app:iconGravity="textStart"
+                        app:iconPadding="8dp"
+                        app:iconTint="@color/white" />
                 </LinearLayout>
     
                 <LinearLayout
@@ -476,7 +488,12 @@
                         android:layout_width="0dp"
                         android:layout_height="42dp"
                         android:layout_weight="1"
-                        android:text="@string/drive_back_left" />
+                        android:text="@string/whitespace"
+                        app:icon="@drawable/arrow_topleft"
+                        app:iconGravity="textStart"
+                        app:iconPadding="8dp"
+                        app:iconTint="@color/white"
+                        android:scaleY="-1" />
     
                     <Space android:layout_width="6dp" android:layout_height="1dp" />
     
@@ -486,7 +503,11 @@
                         android:layout_width="0dp"
                         android:layout_height="42dp"
                         android:layout_weight="1"
-                        android:text="@string/drive_back" />
+                        android:text="@string/whitespace"
+                        app:icon="@drawable/arrow_down"
+                        app:iconGravity="textStart"
+                        app:iconPadding="8dp"
+                        app:iconTint="@color/white" />
     
                     <Space android:layout_width="6dp" android:layout_height="1dp" />
     
@@ -496,7 +517,12 @@
                         android:layout_width="0dp"
                         android:layout_height="42dp"
                         android:layout_weight="1"
-                        android:text="@string/drive_back_right" />
+                        android:text="@string/whitespace"
+                        app:icon="@drawable/arrow_topright"
+                        app:iconGravity="textStart"
+                        app:iconPadding="8dp"
+                        app:iconTint="@color/white"
+                        android:scaleY="-1" />
                 </LinearLayout>
     
                 <LinearLayout
