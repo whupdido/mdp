@@ -1,5 +1,22 @@
 # MDP Task 1 Algorithm and Simulator
 
+## Command cheat sheet
+
+```text
+python -m algorithm.simulator --demo                         # B.1 scripted demo
+python -m algorithm.simulator --task1-demo                   # B.2 calibrated Task 1 demo
+python -m algorithm.simulator --task1-editor                 # edit and plan an arena
+python -m algorithm.simulator --task1-random --seed 42       # seeded random arena
+python -m algorithm.simulator --task1-random --seed 42 --solvable
+python -m algorithm.simulator --hybrid-demo                  # Hybrid A* debug demo
+python -m algorithm.simulator --local-arena-diagnostic       # local real-arena debug
+```
+
+Editor: W/A/S/D set image face North/West/South/East; N toggles candidates; R
+resets playback; F5 generates raw random; Shift+F5 requests a verified
+solvable arena; Enter plans; Space plays/pauses. B.3 shortest-time support
+remains provisional because STM timing is not physically calibrated.
+
 This package owns the Task 1 planning pipeline and its independent simulator.
 It does not own Bluetooth, serial communication, the RPi bridge, STM32 motion
 control, Android, or image recognition.
@@ -80,7 +97,7 @@ no physical-readiness claim. Its current values are:
 - 20 cm camera-to-image gap.
 - Viewing offsets of 0, -10, and +10 cm.
 - Forward/reverse straight primitives of 10 cm.
-- FL/FR/BL/BR radii of 26.1/31.8/24.6/30.3 cm.
+- FL/FR/BL/BR radii of 31.7/41.3/31.2/42.1 cm (current STM-measured geometry).
 - Provisional 90-degree durations of 2.4/2.9/2.3/2.8 seconds; partial-turn
   durations are proportional simulation estimates only.
 
@@ -166,8 +183,8 @@ The successor set comes directly from `PlanningConfig.motion.primitives` in its
 configured deterministic order. The initial profile therefore uses:
 
 - FW and BW: 10 cm forward and reverse straights.
-- FL and FR: bounded 30/45/60/90-degree forward arcs with 26.1 and 31.8 cm radii.
-- BL and BR: bounded 30/45/60/90-degree reverse arcs with 24.6 and 30.3 cm radii.
+- FL and FR: bounded 30/45/60/90-degree forward arcs with 31.7 and 41.3 cm radii.
+- BL and BR: bounded 30/45/60/90-degree reverse arcs with 31.2 and 42.1 cm radii.
 
 These are command-aligned configurable successors, not inherent Hybrid A\*
 restrictions. A calibrated configuration can supply different distances,

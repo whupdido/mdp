@@ -8,44 +8,44 @@ import argparse
 def main() -> None:
     parser = argparse.ArgumentParser(description="MDP Task 1 simulator")
     scenarios = parser.add_mutually_exclusive_group(required=True)
-    scenarios.add_argument("--demo", action="store_true", help="run the bundled Phase 4 route")
+    scenarios.add_argument("--demo", action="store_true", help="B.1 simulator demo: play the deterministic scripted movement demonstration")
     scenarios.add_argument(
         "--hybrid-demo",
         action="store_true",
-        help="plan and play one Phase 5 Hybrid A* query",
+        help="Hybrid A* debug demo: plan and play one local car-like path",
     )
     scenarios.add_argument(
         "--task1-demo",
         action="store_true",
-        help="plan and play the complete five-target Phase 6 route",
+        help="B.2 Task 1 demo: plan and play the deterministic five-image route",
     )
     scenarios.add_argument(
         "--task1-editor",
         action="store_true",
-        help="edit, plan, and play a five-target Task 1 arena",
+        help="B.2 Task 1 editor: edit obstacles/faces, plan, and play a five-image route",
     )
     scenarios.add_argument(
         "--task1-random",
         action="store_true",
-        help="open the editor with a seeded random five-target arena",
+        help="B.2 random arena: open a seeded five-obstacle Task 1 scenario",
     )
     scenarios.add_argument(
         "--local-plan-demo",
         action="store_true",
-        help="run one headless local Hybrid A* diagnostic query",
+        help="Debug: run one synthetic local Hybrid A* primitive/path diagnostic",
     )
-    scenarios.add_argument("--local-arena-diagnostic", action="store_true", help="diagnose real editor arena local queries")
-    parser.add_argument("--seed", type=int, help="seed for --task1-random")
+    scenarios.add_argument("--local-arena-diagnostic", action="store_true", help="Debug: run independent local Hybrid A* queries on the known real editor arena")
+    parser.add_argument("--seed", type=int, help="deterministic random seed used by --task1-random")
     parser.add_argument(
         "--solvable",
         action="store_true",
-        help="retry random maps until a complete route is found",
+        help="with --task1-random, retry until Task1Planner verifies a complete route",
     )
     parser.add_argument(
         "--retry-limit",
         type=int,
         default=50,
-        help="bounded attempts for --task1-random --solvable (default: 50)",
+        help="maximum solvable-generation attempts for --task1-random --solvable (default: 50)",
     )
     args = parser.parse_args()
     if (args.seed is not None or args.solvable or args.retry_limit != 50) and not args.task1_random:

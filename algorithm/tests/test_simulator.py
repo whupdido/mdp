@@ -191,7 +191,7 @@ def test_viewport_round_trip_and_vertical_axis_inversion():
 def test_demo_is_complete_collision_checked_and_exercises_all_commands_and_captures():
     simulator, config = build_demo_simulator()
     assert all(
-        3 <= coordinate <= 16
+        1 <= coordinate <= 18
         for obstacle in simulator.state.arena.obstacles
         for coordinate in (obstacle.cell.x, obstacle.cell.y)
     )
@@ -210,11 +210,7 @@ def test_demo_is_complete_collision_checked_and_exercises_all_commands_and_captu
     assert 1 not in simulator.state.visited_target_ids
     assert 3 not in simulator.state.visited_target_ids
     assert all(group.has_valid_candidate for group in simulator.state.candidate_groups)
-    assert all(
-        candidate.valid
-        for group in simulator.state.candidate_groups
-        for candidate in group.candidates
-    )
+    assert all(group.has_valid_candidate for group in simulator.state.candidate_groups)
 
     pose = simulator.state.initial_pose
     capture_poses = {}

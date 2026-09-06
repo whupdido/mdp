@@ -16,6 +16,8 @@ from algorithm.coordinates import default_start_pose
 from algorithm.enums import CostMetric, Direction, PlanningStatus, RoutingMode
 from algorithm.geometry import is_motion_collision_free, is_pose_collision_free, propagate_motion
 from algorithm.models import ArenaInput, GridCell, Obstacle, PlanningIssue, PlanningResult
+from algorithm.models.motion import MotionPrimitive
+from algorithm.enums import Steering
 from algorithm.routing import Task1Planner
 from algorithm.targets import generate_arena_observation_candidates
 
@@ -350,6 +352,14 @@ def _apply_commands(current, commands, arena, config):
     pose = current
     for command in commands:
         primitive = config.motion.primitives_for(command)[0]
+        if primitive.steering is not Steering.STRAIGHT:
+            sign = 1.0 if primitive.turn_angle_rad > 0 else -1.0
+            primitive = MotionPrimitive(
+                primitive.command, primitive.gear, primitive.steering,
+                turn_angle_rad=sign * math.radians(30.0),
+                radius_cm=primitive.radius_cm,
+                estimated_duration_s=primitive.estimated_duration_s / 3.0,
+            )
         if not is_motion_collision_free(pose, primitive, arena, config):
             return None
         pose = propagate_motion(pose, primitive, config)
@@ -745,7 +755,20 @@ class Task1EditorController:
         last_result: PlanningResult | None = None
         for attempt in range(1, retry_limit + 1):
             for _ in range(100):
-                arena = generate_command_reachable_task1_arena(self.config, rng=source)
+                try:
+                    arena = generate_command_reachable_task1_arena(self.config, rng=source)
+                except RuntimeError as exc:
+                    last_result = PlanningResult(
+                        PlanningStatus.INVALID_INPUT,
+                        issues=(PlanningIssue("proposal_generation_failed", str(exc)),),
+                    )
+                    self.random_attempts = attempt
+                    self.last_random_diagnostics = tuple(diagnostics)
+                    self.status_message = str(exc)
+                    return RandomScenarioOutcome(
+                        previous_arena, seed, request, attempt, True,
+                        last_result, tuple(diagnostics)
+                    )
                 if seed is not None:
                     break
                 signature = scenario_signature(arena)

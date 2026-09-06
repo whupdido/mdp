@@ -42,9 +42,9 @@ def build_demo_simulator() -> tuple[HeadlessSimulator, PlanningConfig]:
         obstacles=(
             # Keep the primary visual scenario comfortably inside the arena;
             # boundary-rejection cases belong to geometry/target tests.
-            Obstacle(1, GridCell(14, 4), Direction.WEST),
-            Obstacle(2, GridCell(9, 15), Direction.SOUTH),
-            Obstacle(3, GridCell(14, 11), Direction.WEST),
+            Obstacle(1, GridCell(18, 18), Direction.WEST),
+            Obstacle(2, GridCell(12, 17), Direction.SOUTH),
+            Obstacle(3, GridCell(18, 12), Direction.WEST),
         ),
     )
     if not is_pose_collision_free(start, arena, config):

@@ -169,8 +169,9 @@ def test_forward_turn_goal_preserves_continuous_arc_endpoint_and_heading():
 
     assert_successful_path(result, arena, CONFIG)
     assert [item.command for item in result.path.primitives] == ["FL"]
-    assert result.path.final_pose.x_cm == pytest.approx(106.1)
-    assert result.path.final_pose.y_cm == pytest.approx(106.1)
+    radius = primitive("FL").radius_cm
+    assert result.path.final_pose.x_cm == pytest.approx(80.0 + radius)
+    assert result.path.final_pose.y_cm == pytest.approx(80.0 + radius)
     assert result.path.final_pose.heading_rad == pytest.approx(math.pi / 2.0)
     assert result.metrics.turn_count == 1
 
@@ -352,7 +353,7 @@ def test_search_key_discretizes_without_snapping_continuous_successor():
     assert search_key(first, CONFIG) == search_key(second, CONFIG)
 
     successor = propagate_motion(Pose(80.0, 80.0, 0.0), primitive("FL"), CONFIG)
-    assert successor.x_cm == pytest.approx(106.1)
+    assert successor.x_cm == pytest.approx(80.0 + primitive("FL").radius_cm)
     assert successor.x_cm % CONFIG.position_bin_cm != pytest.approx(0.0)
 
 
