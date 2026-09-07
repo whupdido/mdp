@@ -138,6 +138,15 @@ for cmd, echoed in [
         ["STATUS,RPi bridge ready", f"STATUS,MAP,{echoed}"],
     )
 
+# --- map messages that look right but aren't ----------------------------
+# These match MAP_PATTERN's loose prefix but no real ADD/SUB/FACE shape.
+# They used to be acknowledged anyway, so the tablet believed an edit had
+# landed that the Pi had actually thrown away.
+for cmd in ["ADD,B1,(10)", "ADD,GARBAGE", "SUB,", "FACE,B2,Q", "FACE,B2"]:
+    to_android, to_stm = run([cmd])
+    check(f"{cmd} is reported as malformed", to_android[-1:], ["ERR,MALFORMED_MAP_MESSAGE"])
+    check(f"{cmd} never reaches the board", to_stm, [])
+
 # --- things that should still be refused --------------------------------
 for cmd in ["ROBOT,7,2,W", "NONSENSE", "FW10", "FWABC", "FW0100"]:
     to_android, to_stm = run([cmd])

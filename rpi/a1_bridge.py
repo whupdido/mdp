@@ -81,7 +81,7 @@ def handle_map_message(command: str) -> str:
     # Matched MAP_PATTERN's loose prefix check but not any real shape --
     # log it so a format mismatch is visible instead of silently swallowed.
     print(f"[MAP] unrecognised map message, ignoring: {command}")
-    return command
+    return None
 
 
 def send_line(port, message):
@@ -124,7 +124,19 @@ def main(on_face_known=None):
                         n is not None and obstacles.get(n, {}).get("face") is not None
                     )
 
-                    handle_map_message(command)
+                    # Zhenxi: only acknowledge what was actually understood.
+                    #
+                    # This acknowledged every message whose prefix looked like
+                    # a map edit, including ones handle_map_message() then
+                    # dropped as an unrecognised shape. The tablet would show
+                    # the edit as accepted while the Pi had discarded it --
+                    # a disagreement neither side could see. handle_map_message
+                    # now returns None for those, and they get an ERR the
+                    # tablet surfaces as a warning.
+                    handled = handle_map_message(command)
+                    if handled is None:
+                        send_line(android, "ERR,MALFORMED_MAP_MESSAGE")
+                        continue
                     send_line(android, f"STATUS,MAP,{command}")
 
                     if on_face_known is not None and n is not None and not face_was_known:

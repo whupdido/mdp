@@ -29,6 +29,9 @@ import struct
 
 import cv2
 
+# Zhenxi: for the obstacle face Android already reported -- see report_obstacle.
+import a1_bridge
+
 # Laptop's IP on the shared WiFi, running `python -m server.yolo_task1`.
 # TODO: set this before running -- find it with `ipconfig getifaddr en0` on the Mac.
 DETECTION_SERVER_IP = "SET_ME_TO_YOUR_LAPTOP_IP"
@@ -164,8 +167,19 @@ def report_obstacle(obstacle_number: int, android_serial, stm_serial=None, face:
         print(f"[CAPTURE] Saw the marker, not a face yet, for obstacle {obstacle_number}")
         return None
 
+    # Zhenxi: fall back to the face Android already told us about.
+    #
+    # `face` defaults to None, so every caller that did not pass one was
+    # sending a 3-field TARGET and the tablet never drew the coloured marker
+    # on the correct side of the block -- half of checklist C.9, silently
+    # missing. a1_bridge already recorded the face from Android's own
+    # FACE,B<n>,<D> message, so use that when the caller has not been
+    # explicit. Passing `face` still wins, for callers that know better.
+    if face is None:
+        face = a1_bridge.obstacles.get(obstacle_number, {}).get("face")
+
     message = f"TARGET,{obstacle_number},{class_id}"
-    if face is not None:
+    if face:
         message += f",{face}"
 
     android_serial.write((message + "\n").encode("ascii"))
