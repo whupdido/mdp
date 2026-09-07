@@ -26,6 +26,7 @@ import time
 
 import serial
 
+import a1_bridge
 from capture_and_report import capture_frame, detect, send_to_stm
 
 STM_DEVICE = "/dev/ttyACM0"
@@ -64,10 +65,25 @@ def search_for_face(stm: serial.Serial, obstacle_number: int, android_serial=Non
             print(f"[SEARCH] Found a valid face: Image ID {class_id}")
 
             if android_serial is not None:
-                message = f"TARGET,{obstacle_number},{class_id}\n"
-                android_serial.write(message.encode("ascii"))
+                # Zhenxi: include the face.
+                #
+                # This was sending TARGET,<n>,<id> with no face, so on the
+                # tablet the block showed its target ID but the coloured
+                # marker on the correct side never appeared -- which is half
+                # of checklist C.9. The face is already known: a1_bridge
+                # recorded it from Android's own FACE,B<n>,<D> message and it
+                # is sitting in a1_bridge.obstacles[n]["face"].
+                #
+                # Sent only when we actually have one, because Android treats
+                # a 3-field TARGET as "no face reported" and leaves whatever
+                # the user annotated alone, rather than overwriting it.
+                face = a1_bridge.obstacles.get(obstacle_number, {}).get("face")
+                message = f"TARGET,{obstacle_number},{class_id}"
+                if face:
+                    message += f",{face}"
+                android_serial.write((message + "\n").encode("ascii"))
                 android_serial.flush()
-                print(f"[SEARCH] Sent to Android: {message.strip()}")
+                print(f"[SEARCH] Sent to Android: {message}")
 
             send_to_stm(class_id, stm)
             return class_id
