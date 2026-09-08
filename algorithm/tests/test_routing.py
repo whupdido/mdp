@@ -727,7 +727,11 @@ def test_task1_demo_renderer_smoke(task1_demo_scenario, monkeypatch):
     renderer = PygameRenderer(task1_demo_scenario.config, width_px=960, height_px=700)
     try:
         renderer.initialize()
-        renderer.render(task1_demo_scenario.simulator.state, RenderOptions())
+        renderer.render(
+            task1_demo_scenario.simulator.state,
+            RenderOptions(),
+            planning_result=task1_demo_scenario.planning_result,
+        )
         pygame.display.flip()
     finally:
         renderer.shutdown()

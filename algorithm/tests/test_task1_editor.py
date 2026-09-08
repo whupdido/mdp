@@ -1,6 +1,7 @@
 import math
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -84,6 +85,25 @@ class AlwaysFailingTask1Planner:
             PlanningStatus.NO_FEASIBLE_ROUTE,
             issues=(PlanningIssue("test_no_route", "configured unsolvable random arena"),),
         )
+
+
+class BlockingTask1Planner:
+    def __init__(self, delegate):
+        self.delegate = delegate
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def plan(self, arena, *, objective=CostMetric.ESTIMATED_TIME):
+        self.calls += 1
+        self.started.set()
+        assert self.release.wait(2.0)
+        return self.delegate.plan(arena, objective=objective)
+
+
+class RaisingTask1Planner:
+    def plan(self, arena, *, objective=CostMetric.ESTIMATED_TIME):
+        raise ValueError("diagnostic planner failure")
 
 
 class NominalFailingPathPlanner(StraightFakePathPlanner):
@@ -360,6 +380,97 @@ def test_editor_renderer_smoke(monkeypatch):
     assert not pygame.get_init()
 
 
+def test_editor_resize_event_rebuilds_window_and_viewport(monkeypatch):
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    pygame = pytest.importorskip("pygame")
+    from algorithm.simulator.task1_editor import Task1EditorApp
+
+    app = Task1EditorApp(fake_editor())
+    app.renderer.initialize()
+    try:
+        app.handle_event(pygame.event.Event(pygame.VIDEORESIZE, w=1280, h=760))
+        assert (app.renderer.width_px, app.renderer.height_px) == (1280, 760)
+        assert app.renderer.viewport.size_px == min(760 - 80, 1280 - 480)
+        app.handle_event(pygame.event.Event(pygame.VIDEORESIZE, w=800, h=500))
+        assert (app.renderer.width_px, app.renderer.height_px) == app.renderer.MIN_WINDOW_SIZE
+    finally:
+        app.renderer.shutdown()
+
+
+def test_enter_plans_in_background_and_duplicate_enter_is_ignored(monkeypatch):
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    pygame = pytest.importorskip("pygame")
+    from algorithm.simulator.task1_editor import Task1EditorApp
+
+    planner = BlockingTask1Planner(Task1Planner(task1_editor_config(), path_planner=StraightFakePathPlanner()))
+    app = Task1EditorApp(Task1EditorController(task1_editor_config(), obstacles=task1_demo_obstacles(), planner=planner))
+    app.renderer.initialize()
+    try:
+        event = pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0)
+        app._handle_key(event)
+        assert app.controller.state is EditorState.PLANNING
+        assert planner.started.wait(1.0)
+        app._handle_key(event)
+        assert planner.calls == 1
+        planner.release.set()
+        assert app._planning_thread is not None
+        app._planning_thread.join(2.0)
+        app._poll_planning_result()
+        assert app.controller.state is EditorState.PLAN_READY
+        assert app.controller.planning_result is not None
+    finally:
+        planner.release.set()
+        app.renderer.shutdown()
+
+
+def test_background_planner_exception_returns_to_editor(monkeypatch):
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    pygame = pytest.importorskip("pygame")
+    from algorithm.simulator.task1_editor import Task1EditorApp
+
+    controller = Task1EditorController(
+        task1_editor_config(), obstacles=task1_demo_obstacles(), planner=RaisingTask1Planner()
+    )
+    app = Task1EditorApp(controller)
+    app.renderer.initialize()
+    try:
+        app._handle_key(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN, mod=0))
+        assert app._planning_thread is not None
+        app._planning_thread.join(2.0)
+        app._poll_planning_result()
+        assert controller.state is EditorState.NO_ROUTE
+        assert "diagnostic planner failure" in controller.status_message
+    finally:
+        app.renderer.shutdown()
+
+
+def test_editor_dashboard_renders_before_after_and_complete_at_supported_sizes(monkeypatch):
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    pygame = pytest.importorskip("pygame")
+    from algorithm.simulator.task1_editor import Task1EditorApp
+
+    controller = fake_editor()
+    app = Task1EditorApp(controller)
+    app.renderer.initialize()
+    try:
+        for width, height in ((1600, 900), (1200, 720)):
+            app.renderer.resize(width, height)
+            app.render()  # READY_TO_PLAN / pre-plan
+            result = controller.plan()
+            assert result.status is PlanningStatus.SUCCESS
+            app.render()  # PLAN_READY / post-plan
+            controller.play_pause()
+            controller.advance(10_000.0)
+            app.render()  # COMPLETE / post-playback
+            panel = app.renderer.panel_rect()
+            sections = app.renderer._sidebar_sections(panel, has_route=True, has_editor=True)
+            footer_height = 18 if panel.height < 700 else 20
+            assert sections["controls"].rect.bottom <= panel.bottom - footer_height
+            assert sections["legend"].rect.bottom <= sections["controls"].rect.top
+    finally:
+        app.renderer.shutdown()
+
+
 def test_shift_f5_handler_advances_persistent_random_stream(monkeypatch):
     monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
     pygame = pytest.importorskip("pygame")
@@ -438,6 +549,30 @@ def test_edit_after_retained_random_plan_invalidates_every_execution_artifact():
     assert controller.planning_result is None
     assert controller.simulator is None
     assert controller.state is EditorState.READY_TO_PLAN
+
+
+def test_editor_arrow_keys_navigate_playback_without_inverse_commands(monkeypatch):
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    pygame = pytest.importorskip("pygame")
+    from algorithm.simulator.task1_editor import Task1EditorApp
+
+    controller = fake_editor()
+    result = controller.plan()
+    assert result.status is PlanningStatus.SUCCESS
+    app = Task1EditorApp(controller)
+    app.renderer.initialize()
+    try:
+        assert not controller.step_backward()
+        assert controller.step_primitive()
+        after_forward = controller.simulator.state
+        app._handle_key(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_LEFT, mod=0))
+        before_forward = controller.simulator.state
+        assert before_forward.current_step_index < after_forward.current_step_index
+        assert before_forward.robot_pose != after_forward.robot_pose
+        app._handle_key(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RIGHT, mod=0))
+        assert controller.simulator.state == after_forward
+    finally:
+        app.renderer.shutdown()
 
 
 def test_editor_wasd_face_mapping_r_reset_and_z_is_not_reset(monkeypatch):

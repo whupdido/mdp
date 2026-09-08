@@ -8,18 +8,77 @@ python -m algorithm.simulator --task1-demo                   # B.2 calibrated Ta
 python -m algorithm.simulator --task1-editor                 # edit and plan an arena
 python -m algorithm.simulator --task1-random --seed 42       # seeded random arena
 python -m algorithm.simulator --task1-random --seed 42 --solvable
-python -m algorithm.simulator --hybrid-demo                  # Hybrid A* debug demo
+python -m algorithm.simulator --hybrid-demo                  # Hybrid A* debug demo1
+python -m algorithm.simulator --local-plan-demo              # local primitive smoke test
 python -m algorithm.simulator --local-arena-diagnostic       # local real-arena debug
 ```
 
 Editor: W/A/S/D set image face North/West/South/East; N toggles candidates; R
-resets playback; F5 generates raw random; Shift+F5 requests a verified
-solvable arena; Enter plans; Space plays/pauses. B.3 shortest-time support
-remains provisional because STM timing is not physically calibrated.
+resets playback; Left/Right Arrow navigate playback backward/forward; F5
+generates raw random; Shift+F5 requests a verified solvable arena; Enter plans;
+Space plays/pauses. Arrow keys only navigate the simulator timeline: they do
+not replan, send inverse robot commands, or modify the STM protocol. B.3
+shortest-time support remains provisional because STM timing is not physically
+calibrated.
 
 This package owns the Task 1 planning pipeline and its independent simulator.
 It does not own Bluetooth, serial communication, the RPi bridge, STM32 motion
 control, Android, or image recognition.
+
+## Simulator dashboard
+
+The Pygame simulator uses a square arena viewport and a responsive right-hand
+dashboard. Its sections are:
+
+The default desktop window is 1600x900 pixels. The same section layout enters
+a compact mode for smaller practical windows, keeping the arena square and
+keeping controls inside the panel.
+
+The simulator and editor use a normal decorated, resizable Pygame window. They
+can be minimized, maximized/restored, or drag-resized after launch. The usable
+minimum is 1200x720; below that the renderer clamps the window so the dashboard
+remains readable. Resizing recomputes the square arena viewport, right panel,
+section rectangles, and text bounds rather than stretching an old frame.
+
+- **Live Playback**: status, current command/sample, logical playback time,
+  speed, pose, heading, and visited-target count.
+- **Route Summary**: planning status, total planning time, provisional route
+  time, distance, target order, selected observation candidates, and primitive
+  counts.
+- **Planner Diagnostics**: candidate/pairwise/global/total planning timings,
+  cache and retry counters, expanded nodes, and reachability ratios.
+- **Editor State**: current editor state, selected obstacle/grid/face, and the
+  current status message (shown in editor mode).
+- **Controls**: the keyboard and mouse shortcuts for playback and editing.
+
+`Planning time` is the wall-clock time spent computing the route. `Route time`
+is the provisional estimated execution time for that route, while `Logical
+time` is the simulator playback clock. They are intentionally separate.
+
+Primitive abbreviations are `FW` (forward straight), `BW` (backward straight),
+`FL`/`FR` (forward left/right), and `BL`/`BR` (backward left/right). Observation
+candidate suffixes are `C` (center), `L` (left offset), and `R` (right offset).
+The dashboard truncates long diagnostics safely at smaller window sizes while
+retaining the important route fields and controls.
+
+## Window sizing and responsiveness
+
+The simulator and editor run in a normal resizable desktop window. Minimize,
+maximize/restore, and drag-resize are supported. The 20 x 20 arena always
+preserves its square aspect ratio, while the dashboard sections recompute
+their rectangles and text layout whenever the window size changes.
+
+The current minimum supported interactive size is approximately **1200 x 720**.
+Common desktop and laptop resolutions such as **1366 x 768**, **1440 x 900**,
+**1600 x 900**, **1920 x 1080**, and **2560 x 1440** are intended to work well.
+Very small resolutions below the minimum may not provide enough room for the
+complete dashboard. Windows display scaling can also reduce the effective
+usable space available to the application.
+
+The layout is responsive for normal desktop and laptop use, but it is not
+infinitely adaptive to every possible screen size. Future small-screen
+improvements could include scalable fonts, collapsible diagnostics, a
+scrollable right panel, and hiding low-priority diagnostics.
 
 ## Status
 
@@ -52,6 +111,177 @@ obstacles
     -> complete route
     -> capture events
 ```
+
+## How Task 1 Planning Works
+
+The Algorithm module turns an arena description into a continuous, executable
+simulation route. The complete flow is:
+
+```text
+Android / Arena Input
+        |
+        v
+Obstacles + image faces
+        |
+        v
+Observation candidates (10/20/30 cm x C/L/R)
+        |
+        v
+Hybrid A* local paths
+        |
+        v
+Directed pairwise path cache
+        |
+        v
+Exact target-order and candidate-chain optimization
+        |
+        v
+Continuous route materialization
+        |
+        v
+Capture events -> deterministic simulator playback
+        |
+        v
+Later RPi / STM integration (outside this module)
+```
+
+### Coordinates and robot references
+
+The planner uses centimetres in a 200 x 200 cm (20 x 20 cell) arena. One cell
+is 10 x 10 cm; Android cell `(x, y)` maps to the continuous cell centre
+`((x + 0.5) * 10, (y + 0.5) * 10)`. `x` points East, `y` points North, East is
+heading `0` radians, North is `pi/2`, and positive rotation is
+counter-clockwise. The planner `Pose(x, y, heading)` is the rear-axle centre.
+The documented `(1, 1, N)` start is therefore `(15, 15, North)` with the
+bundled zero body-centre/rear-axle offset. The authoritative start zone is
+40 x 40 cm in the lower-left corner.
+
+The camera is not the planner pose. In the current simulation profile the
+camera is front-centred, with the transform `(forward=11.5 cm, left=0 cm)`
+from the rear axle. The renderer's red marker is the configured camera/front
+point (`camera_world_position(pose, config.camera)`); its white outlined marker
+is the rear-axle pose reference.
+
+```text
+                 obstacle image face
+                 +-------------+
+                 |   10 cm     |
+                 +------|------+
+                        | outward face normal
+                        |<-- 20 cm image gap --> camera/front *
+                                                       |
+                                                       | 11.5 cm
+                                                       |
+                                      rear-axle Pose  o
+```
+
+Thus `20C` means the camera is placed at the preferred 20 cm face standoff;
+it does not mean that the rear axle itself is 20 cm from the obstacle. The
+rear-axle goal pose is derived by inverting the configured camera transform.
+
+### Image faces and observation candidates
+
+Each obstacle has an annotated image face: North, South, East, or West. The
+candidate generator places a camera point along that face's outward normal,
+then applies a tangent offset relative to the face orientation. `C` is centred,
+`L` and `R` are lateral offsets relative to that face, not global left/right.
+The current ordered candidate set is:
+
+```text
+10C 10L 10R    20C 20L 20R    30C 30L 30R
+```
+
+`20C` is preferred for recognition. The 10 cm and 30 cm alternatives are
+configurable simulation fallbacks pending physical image-recognition
+validation. Every candidate must keep the robot footprint in the arena, avoid
+obstacles, face the image, and retain a clear camera-to-face line of sight.
+For example, a South-facing image has its outward normal toward the South, so
+its camera candidates are below the obstacle and the robot heading points
+North toward the face.
+
+Multiple candidates exist because a nominal pose may be outside the arena,
+collide, lose visibility, or be disconnected under car-like motion. Geometric
+validity is checked before routing; Hybrid A* reachability is checked later.
+
+### Motion constraints and collision checking
+
+The robot is nonholonomic: it cannot move sideways or rotate in place. The
+configured commands are `FW`, `BW`, `FL`, `FR`, `BL`, and `BR`. The initial
+simulation profile uses 10 cm straight primitives and asymmetric measured
+radii: FL 31.7 cm, FR 41.3 cm, BL 31.2 cm, and BR 42.1 cm. The base turn
+definitions are 90-degree command-aligned arcs; Hybrid A* can expand the
+configured 30/45/60/90-degree search angles (the editor currently selects a
+bounded 30-degree runtime profile, while the deterministic Task 1 demo uses
+90-degree arcs). These are configuration choices, not inherent Hybrid A*
+requirements. BL/BR reverse yaw semantics and physical readiness remain
+hardware-validation items.
+
+Collision is not a centre-point grid test. The authoritative geometry builds
+an oriented rectangular footprint including the configured safety margin,
+rejects out-of-bounds poses, uses obstacle AABB broad-phase filtering and
+polygon SAT narrow-phase checks, and samples every straight/arc sweep. A turn
+can therefore collide even when the rear-axle centre line appears clear.
+Smaller turning radii make tighter curves; the larger right-turn radii create
+a wider sweep and can change local reachability and obstacle clearance.
+
+### Local planning versus global routing
+
+Hybrid A* answers: **How can the car physically move from pose A to pose B?**
+Unlike grid A*, it searches continuous `(x, y, heading)` successors while
+using discretized position/heading bins for its closed-set key. Each successor
+is a physically propagated primitive. `g(n)` is accumulated route cost,
+`h(n)` is the Euclidean lower-bound heuristic, and `f(n) = g(n) + h(n)`.
+Collision-free swept motion and the configured final heading/tolerance are
+required for success.
+
+Global routing answers: **In what order should all five image targets be
+visited, and which observation candidate should each use?** Local paths are
+directed: `A -> B` is not assumed equal to `B -> A`, because headings,
+forward/reverse motion, asymmetric radii, and obstacles differ. The directed
+cache stores each local result/cost so the optimizer does not rerun Hybrid A*
+for every route permutation.
+
+Visiting five targets is Hamiltonian-like: there are `5! = 120` target orders
+before candidate choices. The exact optimizer evaluates those orders and uses
+layered candidate-chain optimization. Its precise claim is optimal ordering
+and observation-pose chain with respect to the available candidate set and
+cached local path costs, not globally optimal physical execution beyond the
+configured model.
+
+### Continuous route materialization and captures
+
+After an order and candidate chain are selected, the route is materialized
+continuously. The actual reached pose of one local leg becomes the start pose
+of the next; the robot is never teleported back to an ideal target pose.
+Each reached observation pose contributes a `CAPTURE` event. Capture means the
+image position was reached and a capture was triggered; image classification
+belongs to the image-recognition/integration side, not this simulator.
+
+Displayed metrics have separate meanings: **Planning time** is computer wall
+time spent finding the route; **route/provisional time** is the current timing
+model's estimated execution cost; **distance** is materialized travel;
+**order/candidates** identify the selected targets and poses; primitive counts
+summarize commands; nodes expanded show Hybrid A* effort; and cache/retry
+fields expose local-search reuse and recovery. Physical execution timing and
+final B.3 shortest-time validation remain provisional, and canonical optimized
+chain cost can differ from fully materialized route cost.
+
+### Responsibilities and controls
+
+This module owns coordinate conversion, target-pose generation, collision
+geometry, local planning, route ordering, route representation, and
+deterministic simulation. Bluetooth, Wi-Fi/socket transport, serial transport,
+STM execution, and image-classifier implementation belong to their respective
+integration modules.
+
+The editor's `Enter` starts Task 1 planning, `Space` plays/pauses, `Left Arrow`
+steps to the previous primitive or capture event, `Right Arrow` steps to the
+next, and `R` resets playback. `F5` creates a raw random arena and `Shift+F5`
+requests a planner-verified solvable arena. `N` toggles candidate overlays;
+W/A/S/D edit the selected obstacle's image face; left click selects/adds/moves;
+right click or Delete removes; `+/-` changes playback speed; and `Q/Esc`
+quits. Arrow stepping navigates already materialized playback only: it does
+not replan, invert a physical command, or send an STM command.
 
 Local path planning and global target ordering are deliberately separate. The
 exhaustive optimizer provides the **optimal target order and observation-pose
@@ -418,7 +648,8 @@ Editor controls:
 | N | Show or hide 10/20/30 cm C/L/R observation markers |
 | Enter | Validate and plan all five targets |
 | Space | Play or pause a successful plan |
-| Right Arrow | Step one primitive or capture event |
+| Left Arrow | Step backward to the previous primitive or capture event |
+| Right Arrow | Step forward to the next primitive or capture event |
 | R | Reset playback execution state while retaining the valid plan and obstacles |
 | F5 | Generate an arbitrary raw five-target arena; it may be unsolvable |
 | Shift+F5 | Generate a new planner-verified solvable arena with bounded retries |
@@ -460,6 +691,30 @@ pairwise/global/total planning times. A failed map retains its specific
 `PlanningIssue`; it is never converted into partial Task 1 success. Console
 diagnostics distinguish invalid input, missing geometric candidates, local
 reachability failures, global-chain failures, and search-limit exhaustion.
+
+The editor's right panel is organized into **Route summary** and **Planner
+diagnostics** sections. `Planning time` is the wall-clock time spent finding
+the current route; it is not playback time and is separate from the route's
+provisional execution-time estimate. Playback/logical time advances only when
+the headless player executes the route. Diagnostics expose candidate,
+pairwise, global, and total planning-time components, cache counters, retries,
+and expanded-node totals. A compact primitive summary (`FW`, `BW`, `FL`, `FR`,
+`BL`, `BR`) explains the command mix used by the selected route. The visible
+sampled curve can therefore contain both straight and turning primitives even
+when turns dominate its appearance.
+
+Candidate labels identify the observation standoff and lateral class: `C` is
+center, `L` is the left offset, and `R` is the right offset. The panel expands
+these to labels such as `20 cm CENTER` where space permits. Candidate markers
+are rear-axle reference poses, not bumper tips or image-cell destinations.
+
+For a B.2 demonstration, launch `--task1-demo` for the fixed calibrated route,
+or `--task1-editor` to edit and replan an arena. In the editor, use `N` to
+toggle candidate overlays, `Enter` to plan, `Space` to play/pause, `Left/Right
+Arrow` to navigate playback, and `R` to reset playback. `W/A/S/D` change the selected image face;
+`F5` opens a raw random arena and `Shift+F5` requests a planner-verified random
+arena. These controls and the route/diagnostic sections are display aids only;
+they do not alter the planning model.
 
 Raw seeded generation is reproducible but does not promise a complete route:
 
@@ -699,7 +954,8 @@ short movement closely.
 | ----------- | ------------------------------------ |
 | Space       | Play or pause                        |
 | N           | Single-step one primitive or event   |
-| Right Arrow | Single-step one primitive or event   |
+| Left Arrow  | Step backward one primitive or event |
+| Right Arrow | Step forward one primitive or event  |
 | R           | Reset                                |
 | +           | Increase playback speed              |
 | -           | Decrease playback speed              |
@@ -754,7 +1010,8 @@ state separation, controls, and diagnostic overlays used to demonstrate them.
 21. Planned and executed trails remain logically and visually separate.
 22. Space pauses playback.
 23. Space resumes playback.
-24. N and Right Arrow each advance exactly one primitive or capture event.
+24. N and Right Arrow advance exactly one primitive or capture event; Left Arrow
+    restores the previous playback boundary without issuing inverse motion.
 25. R restores the simulation to its initial state while retaining the planned trail.
 26. + increases playback speed, up to 8x.
 27. - decreases playback speed, down to 0.25x.

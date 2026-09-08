@@ -165,6 +165,40 @@ def test_capture_marks_target_visited_once_and_only_when_executed():
     assert simulator.state.visited_target_ids == ()
 
 
+def test_backward_playback_restores_motion_and_capture_state_deterministically():
+    arena = ArenaInput(START, (Obstacle(1, GridCell(17, 17), Direction.WEST),))
+    # Use a short explicit timeline so the capture boundary is unambiguous.
+    destination = Pose(100.0, 110.0, START.heading_rad)
+    simulator = simulator_with(
+        SimulationStep.motion(destination, 1.0, "FW", ends_primitive=True),
+        SimulationStep.capture(1),
+        SimulationStep.motion(START, 1.0, "BW", ends_primitive=True),
+        arena=arena,
+    )
+
+    assert not simulator.step_backward()
+    assert simulator.step_primitive()  # motion
+    before_capture = simulator.state
+    assert simulator.step_primitive()  # capture
+    after_capture = simulator.state
+    assert after_capture.visited_target_ids == (1,)
+    assert simulator.step_backward()
+    assert simulator.state.robot_pose == before_capture.robot_pose
+    assert simulator.state.simulation_time_s == before_capture.simulation_time_s
+    assert simulator.state.visited_target_ids == ()
+    assert simulator.state.executed_path == before_capture.executed_path
+    assert simulator.step_primitive()
+    assert simulator.state == after_capture
+
+    assert simulator.step_primitive()  # final motion -> COMPLETE
+    assert simulator.state.playback_state is PlaybackState.COMPLETE
+    assert simulator.step_backward()
+    assert simulator.state.playback_state is PlaybackState.PAUSED
+    assert simulator.state.visited_target_ids == (1,)
+    assert simulator.step_primitive()
+    assert simulator.state.playback_state is PlaybackState.COMPLETE
+
+
 def test_unknown_capture_target_is_rejected():
     with pytest.raises(ValueError, match="unknown obstacles"):
         simulator_with(SimulationStep.capture(99))
@@ -287,3 +321,57 @@ def test_pygame_renderer_smoke_with_dummy_video_driver(monkeypatch):
     finally:
         renderer.shutdown()
     assert not pygame.get_init()
+
+
+def test_renderer_dashboard_sections_fit_default_and_compact_windows():
+    from algorithm.simulator.renderer import PygameRenderer
+
+    config = build_demo_simulator()[1]
+    for width, height in ((1600, 900), (1200, 720), (1920, 1080)):
+        renderer = PygameRenderer(config, width_px=width, height_px=height)
+        panel = renderer.panel_rect()
+        for has_route in (False, True):
+            sections = renderer._sidebar_sections(panel, has_route=has_route, has_editor=True)
+            ordered = tuple(sections.values())
+            assert all(section.rect.left >= panel.left for section in ordered)
+            assert all(section.rect.right <= panel.right for section in ordered)
+            assert all(section.rect.top >= panel.top for section in ordered)
+            assert all(section.rect.bottom <= panel.bottom for section in ordered)
+            for previous, current in zip(ordered, ordered[1:]):
+                assert previous.rect.bottom <= current.rect.top
+            footer_height = 18 if panel.height < 700 else 20
+            assert sections["controls"].rect.bottom <= panel.bottom - footer_height
+
+
+def test_renderer_resize_keeps_square_arena_and_rebuilds_layout(monkeypatch):
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    pygame = pytest.importorskip("pygame")
+    from algorithm.simulator.renderer import PygameRenderer, RenderOptions
+
+    simulator, config = build_demo_simulator()
+    renderer = PygameRenderer(config)
+    try:
+        renderer.initialize()
+        flags = pygame.display.get_surface().get_flags()
+        assert flags & pygame.RESIZABLE
+        assert not flags & pygame.FULLSCREEN
+        assert not flags & getattr(pygame, "NOFRAME", 0)
+        for width, height in ((1280, 760), (1920, 1080), (1200, 720)):
+            renderer.resize(width, height)
+            assert renderer.width_px == width
+            assert renderer.height_px == height
+            flags = pygame.display.get_surface().get_flags()
+            assert flags & pygame.RESIZABLE
+            assert not flags & pygame.FULLSCREEN
+            assert not flags & getattr(pygame, "NOFRAME", 0)
+            assert renderer.viewport.size_px > 0
+            assert renderer.viewport.size_px == min(height - 80, width - 480)
+            renderer.render(simulator.state, RenderOptions())
+        renderer.resize(800, 500)
+        assert (renderer.width_px, renderer.height_px) == renderer.MIN_WINDOW_SIZE
+        flags = pygame.display.get_surface().get_flags()
+        assert flags & pygame.RESIZABLE
+        assert not flags & pygame.FULLSCREEN
+        assert not flags & getattr(pygame, "NOFRAME", 0)
+    finally:
+        renderer.shutdown()

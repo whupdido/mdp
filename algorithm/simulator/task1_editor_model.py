@@ -709,9 +709,36 @@ class Task1EditorController:
             return result
         self.state = EditorState.PLANNING
         self.status_message = "Planning all five targets..."
-        result = self._plan_arena(self._arena)
-        self._accept_result(self._arena, result)
+        arena = self._arena
+        result = self.plan_snapshot(arena)
+        self.apply_planning_result(arena, result)
         return result
+
+    def plan_snapshot(self, arena: ArenaInput) -> PlanningResult:
+        """Run the configured planner for an immutable arena snapshot.
+
+        This method deliberately has no editor-state side effects.  The
+        graphical frontend may call it from its single worker thread and hand
+        the result back to :meth:`apply_planning_result` on the Pygame thread.
+        """
+        return self._plan_arena(arena)
+
+    def apply_planning_result(self, arena: ArenaInput, result: PlanningResult) -> bool:
+        """Apply a worker result only if the editor still has that arena."""
+        if arena != self._arena:
+            return False
+        self._accept_result(arena, result)
+        return True
+
+    def apply_planning_exception(self, arena: ArenaInput, error: BaseException) -> bool:
+        """Convert a worker exception into a visible editor failure state."""
+        if arena != self._arena:
+            return False
+        self.planning_result = None
+        self.simulator = None
+        self.state = EditorState.NO_ROUTE
+        self.status_message = f"Planning failed: {error}"
+        return True
 
     def announce_planning(self) -> bool:
         if self.state in {EditorState.PLAYING, EditorState.PAUSED}:
@@ -825,6 +852,13 @@ class Task1EditorController:
         if self.simulator is None or self.state is EditorState.PLAYING:
             return False
         advanced = self.simulator.step_primitive()
+        self._sync_playback_state()
+        return advanced
+
+    def step_backward(self) -> bool:
+        if self.simulator is None:
+            return False
+        advanced = self.simulator.step_backward()
         self._sync_playback_state()
         return advanced
 

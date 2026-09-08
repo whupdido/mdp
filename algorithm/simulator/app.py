@@ -6,6 +6,7 @@ import pygame
 
 from algorithm.config import PlanningConfig
 from algorithm.models.pose import Pose
+from algorithm.models.planning import PlanningResult
 
 from .headless import HeadlessSimulator, PlaybackState
 from .renderer import PygameRenderer, RenderOptions
@@ -17,6 +18,7 @@ def run_simulator(
     *,
     debug_nodes: tuple[Pose, ...] = (),
     show_debug_nodes: bool = False,
+    planning_result: PlanningResult | None = None,
 ) -> None:
     renderer = PygameRenderer(config)
     renderer.initialize()
@@ -30,6 +32,13 @@ def run_simulator(
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
+                elif event.type == pygame.VIDEORESIZE or event.type in {
+                    getattr(pygame, "WINDOWSIZECHANGED", -1),
+                    getattr(pygame, "WINDOWRESIZED", -1),
+                }:
+                    width = getattr(event, "w", 0) or pygame.display.get_window_size()[0]
+                    height = getattr(event, "h", 0) or pygame.display.get_window_size()[1]
+                    renderer.resize(width, height)
                 elif event.type == pygame.KEYDOWN:
                     if event.key in (pygame.K_ESCAPE, pygame.K_q):
                         running = False
@@ -40,8 +49,10 @@ def run_simulator(
                             simulator.play()
                     elif event.key == pygame.K_r:
                         simulator.reset()
-                    elif event.key in (pygame.K_n, pygame.K_RIGHT):
+                    elif event.key == pygame.K_RIGHT or event.key == pygame.K_n:
                         simulator.step_primitive()
+                    elif event.key == pygame.K_LEFT:
+                        simulator.step_backward()
                     elif event.key in (pygame.K_PLUS, pygame.K_KP_PLUS, pygame.K_EQUALS):
                         playback_speed = min(8.0, playback_speed * 2.0)
                     elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
@@ -66,6 +77,7 @@ def run_simulator(
                 options,
                 playback_speed=playback_speed,
                 debug_nodes=debug_nodes,
+                planning_result=planning_result,
             )
             pygame.display.flip()
     finally:

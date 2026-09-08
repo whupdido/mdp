@@ -141,7 +141,7 @@ def main() -> None:
             f"provisional time={result.route.metrics.estimated_time_s:.3f} s",
             f"planning runtime={metrics.total_planning_time_s:.3f} s",
         )
-        run_simulator(scenario.simulator, scenario.config)
+        run_simulator(scenario.simulator, scenario.config, planning_result=result)
     elif args.hybrid_demo:
         from .hybrid_demo import build_hybrid_demo
 
