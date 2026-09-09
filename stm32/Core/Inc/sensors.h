@@ -48,6 +48,11 @@ void display_ir_voltages_oled(void);
  */
 void test_ultrasonic_oled(void);
 
+/**
+ * @brief Display both IR and Ultrasonic
+ */
+void display_both_sensors_oled(void);
+
 extern volatile uint8_t image_found;
 
 /**

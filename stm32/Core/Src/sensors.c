@@ -278,6 +278,50 @@ void test_ultrasonic_oled(void)
 }
 
 /**
+ * @brief Display both IR and Ultrasonic
+ */
+void display_both_sensors_oled(void) {
+	char buf[32];
+	OLED_Clear();
+	/* 1. Send the trigger pulse */
+	trigger_ultrasonic();
+
+	/* 2. Wait for sound to travel and interrupt to fire.
+	 * The HC-SR04 requires a minimum of 50ms between triggers so
+	 * returning echoes from the previous ping don't overlap the new one. */
+	HAL_Delay(60);
+
+	/* 3. Format the distance string
+	 * We add a few trailing spaces "   " to overwrite any leftover characters
+	 * if the string length shrinks (e.g., going from 100.5 to 9.5). */
+	snprintf(buf, sizeof(buf), "Dist: %.1f cm   ", ultrasonic_distance_cm);
+
+	/* 4. Display the live reading on the next line (Y = 20) */
+	OLED_ShowString(0, 0, (const uint8_t *)buf);
+
+    float left_v   = ir_volts(IR_LEFT);
+    float right_v  = ir_volts(IR_RIGHT);
+    float left_d   = ir_volts_to_cm(IR_LEFT,  left_v);
+    float right_d  = ir_volts_to_cm(IR_RIGHT, right_v);
+
+    char line1[32];
+    char line2[32];
+    char line3[32];
+    char line4[32];
+
+    sprintf(line1, "Left : %.2fV", left_v);
+    sprintf(line3, "Distance: %.2f", left_d);
+    sprintf(line2, "Right: %.2fV", right_v);
+    sprintf(line4, "Distance: %.2f", right_d);
+
+    OLED_ShowString(0,  10, (const uint8_t *)line1);
+    OLED_ShowString(0, 20, (const uint8_t *)line3);
+    OLED_ShowString(0, 30, (const uint8_t *)line2);
+    OLED_ShowString(0, 40, (const uint8_t *)line4);
+    OLED_Refresh_Gram();
+}
+
+/**
  * @brief Checks if the forward path is blocked (Using dual IRs)
  */
 //uint8_t check_front_collision(void)

@@ -379,77 +379,90 @@ void control_tick(void)
 			enc_left_straight_accum  += abs(left_delta);
 			enc_right_straight_accum += abs(right_delta);
 
-			/* --- SENSOR FUSION: IMU + Encoders --- */
+			/* ======================================================================
+			 * SMALL DISTANCE PID BYPASS
+			 * For tiny creep loops (e.g., 30mm parking adjustments), we bypass
+			 * the steering PID to prevent wobbly wheels, and we freeze the
+			 * velocity integral to prevent sudden lurching/overshoot.
+			 * ====================================================================== */
+			const int32_t PID_BYPASS_TICKS = 60/MM_PER_COUNT;
+			uint8_t is_small_distance = (target_counts_total <= PID_BYPASS_TICKS);
 
-			/* 1. Heading Error (Degrees) */
-			float heading_error = global_yaw_deg - locked_heading_deg;
-			if (dir_forward == -1) {
-				heading_error = -heading_error;
+			if (is_small_distance) {
+				/* Lock wheels dead center for tiny movements */
+				servo_us(SERVO_CENTRE);
+			} else {
+				/* --- SENSOR FUSION: IMU + Encoders (NORMAL PID LOGIC) --- */
+
+				/* 1. Heading Error (Degrees) */
+				float heading_error = global_yaw_deg - locked_heading_deg;
+				if (dir_forward == -1) {
+					heading_error = -heading_error;
+				}
+
+				/* 2. Position Error (Ticks) */
+				int32_t pos_error = (enc_right_straight_accum - enc_left_straight_accum);
+				if (pos_error > 20)  pos_error = 20;
+				if (pos_error < -20) pos_error = -20;
+
+				/* 3. Rate Error (Derivative - Ticks per 10ms) */
+				float rate_error = (float)(abs(right_delta) - abs(left_delta));
+
+				/* --- The Direct Gains --- */
+				float HEADING_KP = 50.0f;
+				float POS_KP     = 2.5f;
+				float STEER_KI   = 0.0f;
+				float STEER_KD   = 5.0f;
+				const int16_t MAX_STEER_TRIM = 220;
+
+				int16_t reverse_bias = 0;
+
+				/* 4. Integral Accumulation (Auto-Trim) */
+				float combined_error = heading_error + ((float)pos_error * 0.1f);
+				steer_integral += combined_error * dt;
+
+				if (steer_integral > 150.0f)  steer_integral = 150.0f;
+				if (steer_integral < -150.0f) steer_integral = -150.0f;
+
+				/* Calculate dynamic steering correction */
+				int16_t steer_correction = (int16_t)((heading_error * HEADING_KP) +
+													 ((float)pos_error * POS_KP) +
+													 (steer_integral * STEER_KI) +
+													 (rate_error * STEER_KD) +
+													 reverse_bias);
+
+				/* Understeer Fade for Deceleration */
+				float speed_ratio = fabsf(current_speed_ramp) / (float)SPEED_STRAIGHT;
+				steer_correction = (int16_t)(steer_correction * speed_ratio);
+
+				/* Clamp maximum steering authority */
+				if (steer_correction > MAX_STEER_TRIM)  steer_correction = MAX_STEER_TRIM;
+				if (steer_correction < -MAX_STEER_TRIM) steer_correction = -MAX_STEER_TRIM;
+
+				/* Apply to servo */
+				uint16_t commanded_servo = (uint16_t)(SERVO_CENTRE + steer_correction);
+				servo_us(commanded_servo);
 			}
-
-			/* 2. Position Error (Ticks) */
-			int32_t pos_error = (enc_right_straight_accum - enc_left_straight_accum);
-			if (pos_error > 20)  pos_error = 20;
-			if (pos_error < -20) pos_error = -20;
-
-			/* 3. Rate Error (Derivative - Ticks per 10ms) */
-			float rate_error = (float)(abs(right_delta) - abs(left_delta));
-
-			/* --- The Direct Gains --- */
-			float HEADING_KP = 50.0f;  /* 1 degree of drift = 15us servo correction */
-			float POS_KP     = 2.5f;   /* 1 tick of drift = 1.5us servo correction */
-			float STEER_KI   = 0.0f;   /* Auto-trim */
-			float STEER_KD   = 5.0f;   /* Dampening */
-			const int16_t MAX_STEER_TRIM = 220;
-
-			int16_t reverse_bias = 0;
-//			if (dir_forward == -1) {
-//				HEADING_KP = 6.0f;
-//				POS_KP     = 0.5f;
-//				STEER_KI   = 0.0f;
-//				STEER_KD   = 0.0f;
-//				reverse_bias = -8;
-//			}
-
-			/* 4. Integral Accumulation (Auto-Trim) */
-			/* We combine heading and scaled pos_error to trim out permanent physical drift */
-			float combined_error = heading_error + ((float)pos_error * 0.1f);
-			steer_integral += combined_error * dt;
-
-			if (steer_integral > 150.0f)  steer_integral = 150.0f;
-			if (steer_integral < -150.0f) steer_integral = -150.0f;
-
-			/* Calculate dynamic steering correction */
-			int16_t steer_correction = (int16_t)((heading_error * HEADING_KP) +
-												 ((float)pos_error * POS_KP) +
-												 (steer_integral * STEER_KI) +
-												 (rate_error * STEER_KD) +
-												 reverse_bias);
-
-			/* Understeer Fade for Deceleration */
-			float speed_ratio = fabsf(current_speed_ramp) / (float)SPEED_STRAIGHT;
-			steer_correction = (int16_t)(steer_correction * speed_ratio);
-
-			/* Clamp maximum steering authority */
-			if (steer_correction > MAX_STEER_TRIM)  steer_correction = MAX_STEER_TRIM;
-			if (steer_correction < -MAX_STEER_TRIM) steer_correction = -MAX_STEER_TRIM;
-
-			/* Apply to servo */
-			uint16_t commanded_servo = (uint16_t)(SERVO_CENTRE + steer_correction);
-			servo_us(commanded_servo);
 
 			/* 3. Velocity PI Controller */
 			float err_l = current_speed_ramp - (float)left_delta;
 			float err_r = current_speed_ramp - (float)right_delta;
 
-			left_pid_integral  += err_l * dt;
-			right_pid_integral += err_r * dt;
+			if (!is_small_distance) {
+				/* Normal PI integral tracking for long distances */
+				left_pid_integral  += err_l * dt;
+				right_pid_integral += err_r * dt;
 
-			/* Anti-windup clamping */
-			if (left_pid_integral > 250.0f)  left_pid_integral = 250.0f;
-			if (left_pid_integral < -250.0f) left_pid_integral = -250.0f;
-			if (right_pid_integral > 250.0f)  right_pid_integral = 250.0f;
-			if (right_pid_integral < -250.0f) right_pid_integral = -250.0f;
+				/* Anti-windup clamping */
+				if (left_pid_integral > 250.0f)  left_pid_integral = 250.0f;
+				if (left_pid_integral < -250.0f) left_pid_integral = -250.0f;
+				if (right_pid_integral > 250.0f)  right_pid_integral = 250.0f;
+				if (right_pid_integral < -250.0f) right_pid_integral = -250.0f;
+			} else {
+				/* Freeze integrals for tiny distances so the car doesn't jerk/lurch */
+				left_pid_integral = 0.0f;
+				right_pid_integral = 0.0f;
+			}
 
 			/* Pushes baseline power so the weaker left motor doesn't stall when braking */
 			int32_t ff = (int32_t)(dir_forward * (fabsf(current_speed_ramp) * 20.0f));
@@ -473,7 +486,7 @@ void control_tick(void)
 			}
 
 			/* 2. Angle Completion Check */
-			const float BRAKING_LEAD_DEG = 2.5f; /* Compensates for chassis inertia */
+			const float BRAKING_LEAD_DEG = 0.0f; /* Compensates for chassis inertia */
 			float remaining_deg = target_deg_total - accum_deg;
 
 			if (remaining_deg <= BRAKING_LEAD_DEG) {
