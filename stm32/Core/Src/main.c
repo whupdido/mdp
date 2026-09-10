@@ -231,8 +231,24 @@ int main(void)
                 }
                 HAL_Delay(2);
             }
+			if (calibrated == 0) {
 
-            display_ir_voltages_oled();
+				OLED_Clear();
+				OLED_ShowString(0, 0, (const uint8_t *)"STABILIZING...");
+				OLED_Refresh_Gram();
+				HAL_Delay(1500);
+
+				command_send("\r\n[IMU] Calibrating Gyro Zero Bias (stationary)...\r\n");
+				OLED_ShowString(0, 20, (const uint8_t *)"Calibrating Gyro...");
+				OLED_Refresh_Gram();
+
+				icm20948_calib_gyro_bias();
+				command_send("[IMU] Gyro bias locked.\r\n");
+				calibrated = 1;
+			}
+            display_both_sensors_oled();
+            HAL_Delay(1000);
+            task_2();
         }
     }
 

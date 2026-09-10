@@ -10,4 +10,9 @@
  */
 void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm);
 
+/**
+ * @brief Function for Task 2 Fastest car task
+ */
+void task_2(void);
+
 #endif /* OBSTACLE_NAV_H */
