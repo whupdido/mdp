@@ -246,7 +246,8 @@ int main(void)
 				command_send("[IMU] Gyro bias locked.\r\n");
 				calibrated = 1;
 			}
-            //display_both_sensors_oled();
+            display_both_sensors_oled();
+            HAL_Delay(1000);
             task_2();
         }
     }

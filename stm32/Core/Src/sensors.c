@@ -225,7 +225,7 @@ uint8_t check_front_collision(void)
     trigger_ultrasonic();
 
     /* 2. Read the global variable updated by the interrupt */
-    if (ultrasonic_distance_cm > 0.0f && ultrasonic_distance_cm < 10.0f) {
+    if (ultrasonic_distance_cm > 0.0f && ultrasonic_distance_cm < 5.0f) {
     	OLED_Clear();
     	char buf[32];
     	snprintf(buf, sizeof(buf), "Object %fcm away!", ultrasonic_distance_cm);

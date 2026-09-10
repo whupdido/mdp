@@ -128,12 +128,12 @@ uint8_t move_straight_mm(int32_t mm)
     enc_left_straight_accum   = 0;
     enc_right_straight_accum  = 0;
     steer_integral            = 0.0f;
-    left_pid_integral = 0.0f;
-	right_pid_integral = 0.0f;
-	current_speed_ramp = 0.0f;
+    left_pid_integral         = 0.0f;
+	right_pid_integral        = 0.0f;
+	current_speed_ramp        = 0.0f;
     move_ticks                = 0;
     stall_ticks_count         = 0;
-    locked_heading_deg = global_yaw_deg;
+    locked_heading_deg        = global_yaw_deg;
 
     /* Lock wheels to calibrated center at launch */
     servo_us(SERVO_CENTRE);
@@ -149,11 +149,19 @@ uint8_t move_straight_mm(int32_t mm)
 		if (dir_forward == 1 && check_front_collision()) {
 			stop_hardware(MOVE_DONE);
 			busy_flag = 0;
+
+			/* GYRO FIX: Wait for chassis mechanical vibrations to stop
+			 * before returning control, preventing phantom IMU spikes! */
+			HAL_Delay(300);
+
 			command_send("\r\n[WARN] COLLISION AVOIDED! Stopping early.\r\n");
 			return 0; /* Return 0 = Aborted */
 		}
 		HAL_Delay(5);
 	}
+
+    stop_hardware(MOVE_DONE);
+    HAL_Delay(100); /* Final settle */
 	return 1;
 }
 
@@ -167,33 +175,68 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
     accum_deg           = 0.0f;
     move_ticks          = 0;
     stall_ticks_count   = 0;
-    left_pid_integral = 0.0f;
-	right_pid_integral = 0.0f;
+    left_pid_integral   = 0.0f;
+	right_pid_integral  = 0.0f;
 
     /* Set Ackermann steering angle */
-    if (left) {
-        servo_us(SERVO_LEFT);
-    } else {
-        servo_us(SERVO_RIGHT);
-    }
+    if (left) servo_us(SERVO_LEFT);
+    else      servo_us(SERVO_RIGHT);
+
     HAL_Delay(250); /* Allow servo to reach mechanical position */
 
     reset_speed_pid();
     busy_flag    = 1;
     current_mode = MODE_TURN_DEG;
 
-    /* Block until IMU confirms rotation complete */
     /* Monitor sensors while turning */
 	while (busy_flag) {
 		/* Only check for front collisions if driving FORWARD in the turn */
 		if (dir_forward == 1 && check_front_collision()) {
 			stop_hardware(MOVE_DONE);
-			busy_flag = 0;
-			command_send("\r\n[WARN] COLLISION AVOIDED MID-TURN! Stopping early.\r\n");
-			return 0; /* Return 0 = Aborted */
+
+			/* GYRO FIX: Let the physical crash shockwave dissipate so
+			 * the gyro returns to absolute 0 before calculating remaining angle! */
+			HAL_Delay(400);
+
+			float remaining_deg = target_deg_total - accum_deg;
+
+			if (remaining_deg > 3.0f) {
+				command_send("\r\n[WARN] COLLISION! Completing turn in REVERSE.\r\n");
+
+				/* To continue the same yaw rotation while driving backward,
+				 * we MUST invert the steering direction! */
+				turn_left = !turn_left;
+				dir_forward = -1;
+
+				/* Reset accumulators for the reverse phase */
+				target_deg_total = remaining_deg;
+				accum_deg = 0.0f;
+				left_pid_integral = 0.0f;
+				right_pid_integral = 0.0f;
+
+				/* Physically swing the wheels to the opposite lock */
+				if (turn_left) servo_us(SERVO_LEFT);
+				else           servo_us(SERVO_RIGHT);
+				HAL_Delay(250);
+
+				reset_speed_pid();
+
+				/* THE CRITICAL FIX: Wake the motor ISR back up!
+				 * stop_hardware() turned it off, so we must re-arm it. */
+				current_mode = MODE_TURN_DEG;
+
+				busy_flag = 1; /* Continue the while loop, now in reverse! */
+			} else {
+				busy_flag = 0; /* Turn is basically complete, safe to abort */
+				command_send("\r\n[WARN] Turn almost complete. Aborting.\r\n");
+			}
 		}
 		HAL_Delay(5);
 	}
+
+	/* Final settle to ensure gyro is completely silent before next maneuver */
+	stop_hardware(MOVE_DONE);
+	HAL_Delay(100);
 	return 1;
 }
 
@@ -486,7 +529,7 @@ void control_tick(void)
 			}
 
 			/* 2. Angle Completion Check */
-			const float BRAKING_LEAD_DEG = 0.0f; /* Compensates for chassis inertia */
+			const float BRAKING_LEAD_DEG = 2.5f; /* Compensates for chassis inertia */
 			float remaining_deg = target_deg_total - accum_deg;
 
 			if (remaining_deg <= BRAKING_LEAD_DEG) {
