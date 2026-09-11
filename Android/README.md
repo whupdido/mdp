@@ -228,9 +228,9 @@ on that image** (`A`, `7`, `↑`). Mapped from the briefing's image pool in
 
 The robot does not teleport between poses. It travels, and a turn leaves along
 the heading it was already facing before curving into the new one. Right turns
-animate wider than left because they *are* wider — `FR` 413 mm against `FL`
-317 mm, per the 31-Aug re-measurement in `stm32/STM32_motion_spec.md`. A 90°
-turn carries the car 3.1–4.2 cells along. If the map ever appears to pivot the
+animate wider than left because they *are* wider — `FR` 365 mm against `FL`
+277 mm, per the latest re-measurement in `stm32/STM32_motion_spec.md`. A 90°
+turn carries the car 2.8–3.8 cells along. If the map ever appears to pivot the
 robot on the spot, it is lying about the robot.
 
 ---
@@ -353,7 +353,7 @@ Simulator mode on the emulator, and the real tablet for anything with a radio.
   made mid-move queue in the RFCOMM buffer. Fine for a demo, worth remembering
   during a timed run.
 - **The robot cannot turn on the spot.** Ackermann steering: a 90° turn carries
-  the car 3.1–4.2 cells along, and right turns need ~30 % more space than left
+  the car 2.8–3.8 cells along, and right turns need ~30 % more space than left
   going forward, 35 % in reverse.
 - **`STALL` and `TIMEOUT` invalidate the map.** After either, the drawn position
   is stale until something re-references it.

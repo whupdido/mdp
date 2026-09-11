@@ -206,17 +206,18 @@ void MX_TIM8_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
 
   /* USER CODE BEGIN TIM8_Init 1 */
 
   /* USER CODE END TIM8_Init 1 */
   htim8.Instance = TIM8;
-  htim8.Init.Prescaler = 167;
+  htim8.Init.Prescaler = 168-1;
   htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim8.Init.Period = 19999;
+  htim8.Init.Period = 65535;
   htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim8.Init.RepetitionCounter = 0;
-  htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim8) != HAL_OK)
   {
     Error_Handler();
@@ -226,9 +227,21 @@ void MX_TIM8_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_IC_Init(&htim8) != HAL_OK)
+  {
+    Error_Handler();
+  }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim8, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim8, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -421,6 +434,7 @@ void MX_TIM12_Init(void)
 void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
 {
 
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
   if(tim_baseHandle->Instance==TIM1)
   {
   /* USER CODE BEGIN TIM1_MspInit 0 */
@@ -454,6 +468,21 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
   /* USER CODE END TIM8_MspInit 0 */
     /* TIM8 clock enable */
     __HAL_RCC_TIM8_CLK_ENABLE();
+
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    /**TIM8 GPIO Configuration
+    PC7     ------> TIM8_CH2
+    */
+    GPIO_InitStruct.Pin = ULTRA_ECHO_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF3_TIM8;
+    HAL_GPIO_Init(ULTRA_ECHO_GPIO_Port, &GPIO_InitStruct);
+
+    /* TIM8 interrupt Init */
+    HAL_NVIC_SetPriority(TIM8_CC_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(TIM8_CC_IRQn);
   /* USER CODE BEGIN TIM8_MspInit 1 */
 
   /* USER CODE END TIM8_MspInit 1 */
@@ -691,6 +720,14 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
   /* USER CODE END TIM8_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_TIM8_CLK_DISABLE();
+
+    /**TIM8 GPIO Configuration
+    PC7     ------> TIM8_CH2
+    */
+    HAL_GPIO_DeInit(ULTRA_ECHO_GPIO_Port, ULTRA_ECHO_Pin);
+
+    /* TIM8 interrupt Deinit */
+    HAL_NVIC_DisableIRQ(TIM8_CC_IRQn);
   /* USER CODE BEGIN TIM8_MspDeInit 1 */
 
   /* USER CODE END TIM8_MspDeInit 1 */
