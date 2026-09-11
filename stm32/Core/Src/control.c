@@ -543,7 +543,7 @@ void control_tick(void)
 			if (target_deg_total >= 45.0f) {
 				const float DECEL_DEG = 20.0f;
 				if (remaining_deg < DECEL_DEG) {
-					target_base_speed = (float)(dir_forward * 20.0f); /* Crawl speed */
+					target_base_speed = (float)(dir_forward * 30.0f); /* Crawl speed */
 				}
 			}
 
