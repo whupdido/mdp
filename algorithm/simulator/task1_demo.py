@@ -35,9 +35,11 @@ def task1_demo_config() -> PlanningConfig:
         robot=replace(base.robot, safety_margin_cm=3.0),
         observation_lateral_offsets_cm=(0.0,),
         guaranteed_max_candidates_per_target=1,
-        max_expanded_nodes=20,
-        adaptive_initial_expansions=20,
-        adaptive_max_expansions=20,
+        max_expanded_nodes=3000,
+        adaptive_initial_expansions=200,
+        adaptive_max_expansions=3000,
+        local_planning_timeout_s=2.0,
+        overall_planning_timeout_s=60.0,
         # Keep the fixed regression demo deterministic and fast; the editor
         # and production profile exercise the Phase 6.5 partial-angle set.
         turn_angles_deg=(90.0,),
@@ -49,11 +51,11 @@ def task1_demo_config() -> PlanningConfig:
 def task1_demo_obstacles() -> tuple[Obstacle, ...]:
     """Return the stable five-target reference layout."""
     return (
-        Obstacle(1, GridCell(8, 4), Direction.WEST),
-        Obstacle(2, GridCell(6, 10), Direction.SOUTH),
-        Obstacle(3, GridCell(13, 8), Direction.WEST),
-        Obstacle(4, GridCell(10, 14), Direction.SOUTH),
-        Obstacle(5, GridCell(16, 12), Direction.WEST),
+        Obstacle(1, GridCell(15, 12), Direction.WEST),
+        Obstacle(2, GridCell(12, 9), Direction.NORTH),
+        Obstacle(3, GridCell(2, 7), Direction.NORTH),
+        Obstacle(4, GridCell(2, 19), Direction.SOUTH),
+        Obstacle(5, GridCell(7, 14), Direction.WEST),
     )
 
 

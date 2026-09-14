@@ -42,3 +42,6 @@ Detection-Symbols-Updated-3-4/
 
 # Runtime output from yolo_task1.py (debug frames, not source)
 yolo_logs/
+
+# VSCode settings
+.vscode/settings.json
