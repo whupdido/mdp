@@ -151,10 +151,10 @@ def task1_editor_config() -> PlanningConfig:
         observation_lateral_offsets_cm=(0.0, -10.0, 10.0),
         observation_standoff_distances_cm=(20.0, 10.0, 30.0),
         guaranteed_max_candidates_per_target=9,
-        adaptive_initial_expansions=20,
+        adaptive_initial_expansions=200,
         adaptive_max_expansions=5000,
         adaptive_growth_factor=5.0,
-        local_planning_timeout_s=5.0,
+        local_planning_timeout_s=10.0,
         overall_planning_timeout_s=60.0,
         turn_angles_deg=(30.0, 45.0, 60.0, 90.0),
         search_turn_angles_deg=(30.0,),
@@ -273,34 +273,78 @@ def generate_command_reachable_task1_arena(
 
 
 def _try_command_walk_arena(config: PlanningConfig, rng: random.Random) -> ArenaInput | None:
+    """Harvest and select five reachable observation states.
+
+    This is deliberately only a proposal heuristic.  The old implementation
+    forced five consecutive ``30`` degree turns to become cardinal in one
+    step, then rejected the whole proposal when any one placement was poor.
+    The resulting generator almost always failed before ``Task1Planner`` was
+    called.  We now collect a bounded pool from a collision-checked random
+    command walk, retain only cardinal interior states, and select a spaced
+    subset whose candidates remain valid as the arena grows.  The real planner
+    still has the final authority over solvability.
+    """
     start = default_start_pose(config.robot)
     current = start
+    empty_arena = ArenaInput(start, ())
+    harvested: list[tuple[object, Obstacle]] = []
+
+    # Keep the walk bounded and deterministic.  Interior limits avoid states
+    # whose camera/footprint would necessarily be close to an arena boundary.
+    for _ in range(1800):
+        command = rng.choice(("FW", "BW", "FL", "FR", "BL", "BR"))
+        reached = _apply_commands(current, (command,), empty_arena, config)
+        if reached is None:
+            # A failed proposal step is not a planner failure; restart from the
+            # authoritative start pose and keep harvesting independently.
+            current = start
+            continue
+        current = reached
+        try:
+            Direction.from_heading_rad(
+                current.heading_rad,
+                tolerance_rad=config.goal_heading_tolerance_rad,
+            )
+        except ValueError:
+            continue
+        if not (35.0 <= current.x_cm <= 165.0 and 35.0 <= current.y_cm <= 165.0):
+            continue
+        obstacle = _obstacle_for_observation(len(harvested) + 1, current, config)
+        if obstacle is None or not (
+            1 <= obstacle.cell.x <= 18 and 1 <= obstacle.cell.y <= 18
+        ):
+            continue
+        harvested.append((current, obstacle))
+
+    if len(harvested) < REQUIRED_TASK1_TARGETS:
+        return None
+
     obstacles: list[Obstacle] = []
-    legs: list[tuple[object, tuple[str, ...], object]] = []
-    for target_id in range(1, REQUIRED_TASK1_TARGETS + 1):
-        placed = False
-        for _ in range(30):
-            if target_id == 1:
-                commands = (
-                    ("FW",) * rng.randint(0, 2)
-                    + ("FR",)
-                )
-            else:
-                commands = (
-                    ("BW",) * rng.randint(1, 2)
-                    + (rng.choice(("FL", "FR")),)
-                )
-            existing_arena = ArenaInput(start, tuple(obstacles))
-            reached = _apply_commands(current, commands, existing_arena, config)
-            if reached is None:
-                continue
-            obstacle = _obstacle_for_observation(target_id, reached, config)
-            if obstacle is None or any(
-                (obstacle.cell.x - item.cell.x) ** 2 + (obstacle.cell.y - item.cell.y) ** 2
+    selected_indices: set[int] = set()
+    used_faces: set[Direction] = set()
+    for _ in range(REQUIRED_TASK1_TARGETS):
+        selected = None
+        # Prefer unused image headings where possible; all choices remain
+        # deterministic because they come from the seeded walk pool.
+        candidate_indices = tuple(
+            index
+            for index, (_, proposed) in enumerate(harvested)
+            if index not in selected_indices and proposed.face not in used_faces
+        ) + tuple(
+            index
+            for index, (_, proposed) in enumerate(harvested)
+            if index not in selected_indices and proposed.face in used_faces
+        )
+        for index in candidate_indices:
+            reached, proposed = harvested[index]
+            if any(
+                (proposed.cell.x - item.cell.x) ** 2
+                + (proposed.cell.y - item.cell.y) ** 2
                 < MIN_RANDOM_CELL_SEPARATION_SQUARED
                 for item in obstacles
             ):
                 continue
+            obstacle = Obstacle(len(obstacles) + 1, proposed.cell, proposed.face)
             candidate_arena = ArenaInput(start, tuple(obstacles) + (obstacle,))
             group = generate_arena_observation_candidates(candidate_arena, config)[-1]
             matching = next(
@@ -308,37 +352,63 @@ def _try_command_walk_arena(config: PlanningConfig, rng: random.Random) -> Arena
                     candidate
                     for candidate in group.candidates
                     if candidate.valid
+                    and candidate.display_label == "20C"
                     and candidate.observation_pose.pose.heading_rad == reached.heading_rad
-                    and (
-                        (candidate.observation_pose.pose.x_cm - reached.x_cm) ** 2
-                        + (candidate.observation_pose.pose.y_cm - reached.y_cm) ** 2
-                    ) ** 0.5
+                    and math.hypot(
+                        candidate.observation_pose.pose.x_cm - reached.x_cm,
+                        candidate.observation_pose.pose.y_cm - reached.y_cm,
+                    )
                     <= config.goal_position_tolerance_cm
                 ),
                 None,
             )
             if matching is None:
                 continue
-            obstacles.append(obstacle)
-            goal_pose = matching.observation_pose.pose
-            legs.append((current, commands, goal_pose))
-            current = goal_pose
-            placed = True
+            # Existing selected candidates must remain geometrically valid as
+            # new obstacles are added; do not loosen any collision/LOS checks.
+            if any(
+                not prior_group.has_valid_candidate
+                for prior_group in generate_arena_observation_candidates(
+                    candidate_arena, config
+                )[:-1]
+            ):
+                continue
+            selected = (index, obstacle)
             break
-        if not placed:
+        if selected is None:
             return None
+        selected_index, obstacle = selected
+        selected_indices.add(selected_index)
+        used_faces.add(obstacle.face)
+        obstacles.append(obstacle)
+
     arena = ArenaInput(start, tuple(obstacles))
     groups = generate_arena_observation_candidates(arena, config)
-    if any(not group.has_valid_candidate for group in groups):
+    if any(
+        not group.has_valid_candidate
+        or not any(candidate.valid and candidate.display_label == "20C" for candidate in group.candidates)
+        for group in groups
+    ):
         return None
-    for leg_start, commands, goal_pose in legs:
-        reached = _apply_commands(leg_start, commands, arena, config)
-        if reached is None or reached.heading_rad != goal_pose.heading_rad:
-            return None
-        if (
-            (reached.x_cm - goal_pose.x_cm) ** 2 + (reached.y_cm - goal_pose.y_cm) ** 2
-        ) ** 0.5 > config.goal_position_tolerance_cm:
-            return None
+    # Faces are part of the random scenario, not a planner shortcut.  Where a
+    # cell supports more than one clear face, choose a deterministic shuffled
+    # orientation so repeated accepted maps exercise mixed image headings.
+    oriented = list(obstacles)
+    for index, obstacle in enumerate(oriented):
+        faces = list(Direction)
+        rng.shuffle(faces)
+        for face in faces:
+            candidate_obstacles = tuple(
+                replace(item, face=face) if item.obstacle_id == obstacle.obstacle_id else item
+                for item in oriented
+            )
+            candidate_groups = generate_arena_observation_candidates(
+                ArenaInput(start, candidate_obstacles), config
+            )
+            if all(group.has_valid_candidate for group in candidate_groups):
+                oriented = list(candidate_obstacles)
+                break
+    obstacles = oriented
     shuffled_ids = list(range(1, REQUIRED_TASK1_TARGETS + 1))
     rng.shuffle(shuffled_ids)
     randomized_obstacles = tuple(
@@ -618,27 +688,25 @@ class Task1EditorController:
     ) -> None:
         self.config = config or task1_editor_config()
         self._planner = planner or Task1Planner(self.config)
-        # Shift+F5 proposals are constructed around their preferred 20C poses.
-        # Verify and retain them with the same bounded tier-1 physical profile;
-        # manually edited arenas continue through the full adaptive B.2 planner.
-        self._random_solvable_planner = (
-            self._planner
-            if planner is not None
-            else Task1Planner(
-                replace(
-                    self.config,
-                    observation_lateral_offsets_cm=(0.0,),
-                    observation_standoff_distances_cm=(self.config.camera.image_gap_cm,),
-                    guaranteed_max_candidates_per_target=1,
-                    adaptive_initial_expansions=20,
-                    adaptive_max_expansions=20,
-                    overall_planning_timeout_s=15.0,
-                    search_turn_angles_deg=(90.0,),
-                    turn_angles_deg=(30.0, 45.0, 60.0, 90.0),
-                ),
+        # Verified random scenarios use the same real candidate model, but a
+        # fixed bounded search tier avoids spending the budget on repeated
+        # adaptive retries.  Proposal heuristics only construct candidates;
+        # this planner still performs complete feasibility verification.
+        if planner is not None:
+            self._random_solvable_planner = self._planner
+        else:
+            random_config = replace(
+                self.config,
+                adaptive_initial_expansions=3000,
+                adaptive_max_expansions=3000,
+                max_expanded_nodes=3000,
+                local_planning_timeout_s=2.0,
+                overall_planning_timeout_s=60.0,
+            )
+            self._random_solvable_planner = Task1Planner(
+                random_config,
                 routing_mode=RoutingMode.FEASIBILITY,
             )
-        )
         self._rng = random.Random(random_seed)
         self._random_request_count = 0
         self._last_random_arena: ArenaInput | None = None
@@ -781,21 +849,14 @@ class Task1EditorController:
         diagnostics: list[RandomAttemptDiagnostic] = []
         last_result: PlanningResult | None = None
         for attempt in range(1, retry_limit + 1):
+            arena = None
+            proposal_error: RuntimeError | None = None
             for _ in range(100):
                 try:
                     arena = generate_command_reachable_task1_arena(self.config, rng=source)
                 except RuntimeError as exc:
-                    last_result = PlanningResult(
-                        PlanningStatus.INVALID_INPUT,
-                        issues=(PlanningIssue("proposal_generation_failed", str(exc)),),
-                    )
-                    self.random_attempts = attempt
-                    self.last_random_diagnostics = tuple(diagnostics)
-                    self.status_message = str(exc)
-                    return RandomScenarioOutcome(
-                        previous_arena, seed, request, attempt, True,
-                        last_result, tuple(diagnostics)
-                    )
+                    proposal_error = exc
+                    continue
                 if seed is not None:
                     break
                 signature = scenario_signature(arena)
@@ -807,7 +868,17 @@ class Task1EditorController:
                 if not repeated and not too_similar:
                     break
             else:
-                raise RuntimeError("could not generate a diverse solvable proposal")
+                arena = None
+            if arena is None:
+                last_result = PlanningResult(
+                    PlanningStatus.NO_FEASIBLE_ROUTE,
+                    issues=(PlanningIssue(
+                        "proposal_generation_failed",
+                        f"{proposal_error or RuntimeError('could not generate a diverse solvable proposal')}; "
+                        "previous scenario preserved",
+                    ),),
+                )
+                continue
             started = time.perf_counter()
             result = self._plan_arena(arena, solvable_generation=True)
             elapsed = time.perf_counter() - started
