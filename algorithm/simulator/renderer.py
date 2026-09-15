@@ -93,6 +93,8 @@ class PygameRenderer:
         width_px: int = 1180,
         height_px: int = 740,
         title: str = "MDP Task 1 Simulator",
+        fastest_car_mode: bool = False,
+
     ) -> None:
         if width_px < 640 or height_px < 520:
             raise ValueError("renderer window must be at least 640x520 pixels")
@@ -100,8 +102,15 @@ class PygameRenderer:
         self.width_px = width_px
         self.height_px = height_px
         self.title = title
+        self.fastest_car_mode = fastest_car_mode
         arena_px = float(min(height_px - 80, width_px - 480))
-        self.viewport = WorldViewport(config.arena_size_cm, 40.0, 40.0, arena_px)
+        arena_width = config.arena_size_cm
+        arena_height = config.arena_height_cm or config.arena_size_cm
+        usable_w = width_px - 480
+        usable_h = height_px - 80
+        self.viewport = WorldViewport(
+            arena_width, 40.0, 40.0, float(min(usable_w, usable_h)), arena_height
+        )
         # The stylized body uses the same authoritative footprint transform,
         # but removes safety margin for display only. Collision code continues
         # to use ``config.robot`` unchanged.
@@ -140,7 +149,11 @@ class PygameRenderer:
         assert self.screen is not None
         self.screen.fill(self.BACKGROUND)
         self._draw_arena(options)
-        self._draw_start_zone()
+        if self.fastest_car_mode:
+            self._draw_fastest_car_walls(state)
+            self._draw_fastest_car_carpark(state)
+        else:
+            self._draw_start_zone()
         self._draw_obstacles(state)
         if options.show_camera_rays:
             self._draw_camera_rays(state)
@@ -161,40 +174,43 @@ class PygameRenderer:
 
     def _draw_arena(self, options: RenderOptions) -> None:
         assert self.screen is not None
+        arena_width = self.config.arena_size_cm
+        arena_height = self.config.arena_height_cm or self.config.arena_size_cm
+        top_left = self._screen_point(0.0, arena_height)
+        bottom_right = self._screen_point(arena_width, 0.0)
         rect = pygame.Rect(
-            round(self.viewport.left_px),
-            round(self.viewport.top_px),
-            round(self.viewport.size_px),
-            round(self.viewport.size_px),
+            top_left,
+            (bottom_right[0] - top_left[0], bottom_right[1] - top_left[1]),
         )
         shadow = rect.move(5, 6)
         pygame.draw.rect(self.screen, (8, 11, 16), shadow, border_radius=3)
         pygame.draw.rect(self.screen, self.ARENA, rect)
-        cell_count = round(self.config.arena_size_cm / self.config.cell_size_cm)
-        for index in range(cell_count + 1):
-            coordinate = index * self.config.cell_size_cm
-            x1, y1 = self._screen_point(coordinate, 0.0)
-            x2, y2 = self._screen_point(coordinate, self.config.arena_size_cm)
-            pygame.draw.line(self.screen, self.GRID, (x1, y1), (x2, y2), 1)
-            x1, y1 = self._screen_point(0.0, coordinate)
-            x2, y2 = self._screen_point(self.config.arena_size_cm, coordinate)
-            pygame.draw.line(self.screen, self.GRID, (x1, y1), (x2, y2), 1)
-            if options.show_grid_labels and index < cell_count:
-                x_px, bottom = self._screen_point(coordinate + self.config.cell_size_cm / 2.0, 0.0)
-                left, y_px = self._screen_point(0.0, coordinate + self.config.cell_size_cm / 2.0)
-                self._blit_text(str(index), (x_px - 4, bottom + 5), self.MUTED_TEXT, tiny=True)
-                self._blit_text(str(index), (left - 22, y_px - 6), self.MUTED_TEXT, tiny=True)
+        if self.config.grid_display and self.config.cell_size_cm > 0.0:
+            cell_count_x = round(arena_width / self.config.cell_size_cm)
+            cell_count_y = round(arena_height / self.config.cell_size_cm)
+            for index in range(cell_count_x + 1):
+                coordinate = index * self.config.cell_size_cm
+                x1, y1 = self._screen_point(coordinate, 0.0)
+                x2, y2 = self._screen_point(coordinate, arena_height)
+                pygame.draw.line(self.screen, self.GRID, (x1, y1), (x2, y2), 1)
+            for index in range(cell_count_y + 1):
+                coordinate = index * self.config.cell_size_cm
+                x1, y1 = self._screen_point(0.0, coordinate)
+                x2, y2 = self._screen_point(arena_width, coordinate)
+                pygame.draw.line(self.screen, self.GRID, (x1, y1), (x2, y2), 1)
         pygame.draw.rect(self.screen, (77, 87, 100), rect, 2)
         north_x = rect.right - 19
         self._blit_text("N", (north_x - 4, rect.top + 8), self.DARK_TEXT, small=True)
         pygame.draw.line(self.screen, self.DARK_TEXT, (north_x, rect.top + 34), (north_x, rect.top + 20), 2)
         pygame.draw.polygon(
-            self.screen,
-            self.DARK_TEXT,
+            self.screen, self.DARK_TEXT,
             ((north_x, rect.top + 17), (north_x - 4, rect.top + 23), (north_x + 4, rect.top + 23)),
         )
 
     def _draw_start_zone(self) -> None:
+    
+        if not self.config.grid_display:
+            return
         assert self.screen is not None
         top_left = self._screen_point(0.0, START_ZONE_SIZE_CM)
         bottom_right = self._screen_point(START_ZONE_SIZE_CM, 0.0)
@@ -205,6 +221,195 @@ class PygameRenderer:
         pygame.draw.rect(self.screen, (45, 143, 91), rect, 2)
         self._blit_text("START", (rect.left + 7, rect.bottom - 20), (38, 111, 73), tiny=True)
 
+    def _draw_fastest_car_carpark(self, state: SimulationState) -> None:
+        """Draw the Fastest Car carpark.
+
+        Carpark geometry:
+            - Interior: 60 x 60 cm
+            - Top wall: 60 x 20 cm
+            - Bottom wall: 60 x 20 cm
+            - Left wall: 20 x 60 cm
+            - Right side: OPEN
+            - Overall outside size: 60 x 100 cm
+        """
+        assert self.screen is not None
+
+        # ------------------------------------------------------------
+        # Carpark dimensions
+        # ------------------------------------------------------------
+        interior_width_cm = 60.0
+        interior_height_cm = 60.0
+        wall_thickness_cm = 20.0
+
+        # Robot starts at the centre of the 60 x 60 cm interior.
+        center_x = 30.0
+        center_y = state.arena.start_pose.y_cm
+
+        # 60 x 60 cm interior.
+        interior_min_x = center_x - interior_width_cm / 2.0
+        interior_max_x = center_x + interior_width_cm / 2.0
+
+        interior_min_y = center_y - interior_height_cm / 2.0
+        interior_max_y = center_y + interior_height_cm / 2.0
+
+        # ------------------------------------------------------------
+        # Draw the 60 x 60 cm interior
+        # ------------------------------------------------------------
+        interior_top_left = self._screen_point(
+            interior_min_x,
+            interior_max_y,
+        )
+
+        interior_bottom_right = self._screen_point(
+            interior_max_x,
+            interior_min_y,
+        )
+
+        interior_rect = pygame.Rect(
+            min(interior_top_left[0], interior_bottom_right[0]),
+            min(interior_top_left[1], interior_bottom_right[1]),
+            abs(interior_bottom_right[0] - interior_top_left[0]),
+            abs(interior_bottom_right[1] - interior_top_left[1]),
+        )
+
+        overlay = pygame.Surface(interior_rect.size, pygame.SRCALPHA)
+        overlay.fill((54, 177, 112, 35))
+        self.screen.blit(
+            overlay,
+            interior_rect.topleft,
+        )
+
+        # ------------------------------------------------------------
+        # Wall colour
+        # ------------------------------------------------------------
+        wall_color = (255, 0, 0)
+
+        # ============================================================
+        # WEST WALL
+        # 20 cm wide x 60 cm long
+        # ============================================================
+        west_top_left = self._screen_point(
+            interior_min_x,
+            interior_max_y,
+        )
+
+        west_bottom_right = self._screen_point(
+            interior_min_x + wall_thickness_cm,
+            interior_min_y,
+        )
+
+        west_rect = pygame.Rect(
+            min(west_top_left[0], west_bottom_right[0]),
+            min(west_top_left[1], west_bottom_right[1]),
+            abs(west_bottom_right[0] - west_top_left[0]),
+            abs(west_bottom_right[1] - west_top_left[1]),
+        )
+
+        pygame.draw.rect(
+            self.screen,
+            wall_color,
+            west_rect,
+        )
+
+        # ============================================================
+        # NORTH / TOP WALL
+        # 60 cm wide x 20 cm thick
+        # ============================================================
+        north_top_left = self._screen_point(
+            interior_min_x,
+            interior_max_y + wall_thickness_cm,
+        )
+
+        north_bottom_right = self._screen_point(
+            interior_max_x,
+            interior_max_y,
+        )
+
+        north_rect = pygame.Rect(
+            min(north_top_left[0], north_bottom_right[0]),
+            min(north_top_left[1], north_bottom_right[1]),
+            abs(north_bottom_right[0] - north_top_left[0]),
+            abs(north_bottom_right[1] - north_top_left[1]),
+        )
+
+        pygame.draw.rect(
+            self.screen,
+            wall_color,
+            north_rect,
+        )
+
+        # ============================================================
+        # SOUTH / BOTTOM WALL
+        # 60 cm wide x 20 cm thick
+        # ============================================================
+        south_top_left = self._screen_point(
+            interior_min_x,
+            interior_min_y,
+        )
+
+        south_bottom_right = self._screen_point(
+            interior_max_x,
+            interior_min_y - wall_thickness_cm,
+        )
+
+        south_rect = pygame.Rect(
+            min(south_top_left[0], south_bottom_right[0]),
+            min(south_top_left[1], south_bottom_right[1]),
+            abs(south_bottom_right[0] - south_top_left[0]),
+            abs(south_bottom_right[1] - south_top_left[1]),
+        )
+
+        pygame.draw.rect(
+            self.screen,
+            wall_color,
+            south_rect,
+        )
+
+        # ------------------------------------------------------------
+        # EAST SIDE
+        # ------------------------------------------------------------
+        # No east wall.
+        # This is the carpark opening.
+
+        self._blit_text(
+            "CARPARK",
+            (
+                interior_rect.left + 6,
+                interior_rect.top + 6,
+            ),
+            self.DARK_TEXT,
+            tiny=True,
+        )
+
+    def _draw_fastest_car_walls(self, state: SimulationState) -> None:
+        """Draw the physical Fastest Car walls from the arena geometry."""
+        assert self.screen is not None
+
+        wall_color = (45, 55, 65)
+
+        for wall in state.arena.walls:
+            top_left = self._screen_point(
+                wall.min_x_cm,
+                wall.max_y_cm,
+            )
+            bottom_right = self._screen_point(
+                wall.max_x_cm,
+                wall.min_y_cm,
+            )
+
+            rect = pygame.Rect(
+                top_left,
+                (
+                    bottom_right[0] - top_left[0],
+                    bottom_right[1] - top_left[1],
+                ),
+            )
+
+            pygame.draw.rect(
+                self.screen,
+                wall_color,
+                rect,
+            )
     def _draw_obstacles(self, state: SimulationState) -> None:
         assert self.screen is not None
         visited = set(state.visited_target_ids)
@@ -537,7 +742,12 @@ class PygameRenderer:
         self._draw_controls(x, controls_y + 23, panel.width - 40)
 
         footer_y = panel.bottom - 24
-        self._blit_text("World: 200 x 200 cm  |  Grid: 20 x 20", (x, footer_y), self.MUTED_TEXT, tiny=True)
+        arena_height = self.config.arena_height_cm or self.config.arena_size_cm
+        grid_text = "grid" if self.config.grid_display else "continuous"
+        self._blit_text(
+            f"World: {self.config.arena_size_cm:g} x {arena_height:g} cm  |  {grid_text}",
+            (x, footer_y), self.MUTED_TEXT, tiny=True
+        )
 
     def _draw_section_title(self, title: str, x: int, y: int, width: int) -> None:
         assert self.screen is not None

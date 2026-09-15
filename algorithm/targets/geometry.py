@@ -7,12 +7,12 @@ from algorithm.enums import Direction
 from algorithm.geometry import obstacle_bounds, segment_intersects_rectangle
 from algorithm.geometry.shapes import Point
 from algorithm.models.arena import ArenaInput
-from algorithm.models.obstacle import Obstacle
+from algorithm.models.obstacle import Obstacle, RectangleObstacle
 from algorithm.models.pose import Pose
 
 
 def image_face_target_point(
-    obstacle: Obstacle,
+    obstacle: Obstacle | RectangleObstacle,
     face: Direction,
     cell_size_cm: float,
 ) -> Point:
@@ -29,7 +29,7 @@ def image_face_target_point(
 
 
 def desired_camera_position(
-    obstacle: Obstacle,
+    obstacle: Obstacle | RectangleObstacle,
     face: Direction,
     lateral_offset_cm: float,
     config: PlanningConfig,

@@ -6,7 +6,7 @@ import math
 
 from algorithm.config import RobotGeometry
 from algorithm.coordinates import planner_pose_to_body_center
-from algorithm.models.obstacle import Obstacle
+from algorithm.models.obstacle import Obstacle, RectangleObstacle
 from algorithm.models.pose import Pose
 
 from .shapes import AxisAlignedRectangle, Point
@@ -40,10 +40,21 @@ def robot_footprint(pose: Pose, geometry: RobotGeometry) -> tuple[Point, Point, 
     )
 
 
-def obstacle_bounds(obstacle: Obstacle, cell_size_cm: float) -> AxisAlignedRectangle:
-    """Return an obstacle's exact cell rectangle in centimetres."""
+def obstacle_bounds(
+    obstacle: Obstacle | RectangleObstacle,
+    cell_size_cm: float,
+) -> AxisAlignedRectangle:
+    """Return an obstacle's physical bounds in centimetres.
+
+    Grid obstacles use their GridCell and the configured cell size.
+    Rectangle obstacles use their explicit continuous coordinates.
+    """
     if not math.isfinite(cell_size_cm) or cell_size_cm <= 0.0:
         raise ValueError("cell_size_cm must be positive and finite")
+
+    if isinstance(obstacle, RectangleObstacle):
+        return obstacle.bounds
+
     return AxisAlignedRectangle(
         min_x_cm=obstacle.cell.x * cell_size_cm,
         min_y_cm=obstacle.cell.y * cell_size_cm,

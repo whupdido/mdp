@@ -1,6 +1,7 @@
 """Command-line entrypoint for the optional Pygame simulator."""
 
 from __future__ import annotations
+from .app import run_simulator
 
 import argparse
 
@@ -30,6 +31,21 @@ def main() -> None:
         help="open the editor with a seeded random five-target arena",
     )
     scenarios.add_argument(
+        "--fastest-car-demo",
+        action="store_true",
+        help="run the continuous-coordinate Fastest Car development demo",
+    )
+    scenarios.add_argument(
+        "--fastest-car-edit",
+        action="store_true",
+        help="edit the Fastest Car geometry",
+    )
+    scenarios.add_argument(
+        "--fastest-car-geometry",
+        action="store_true",
+        help="show the Fastest Car geometry without path planning",
+    )
+    scenarios.add_argument(
         "--local-plan-demo",
         action="store_true",
         help="run one headless local Hybrid A* diagnostic query",
@@ -51,6 +67,67 @@ def main() -> None:
     if (args.seed is not None or args.solvable or args.retry_limit != 50) and not args.task1_random:
         parser.error("--seed, --solvable, and --retry-limit require --task1-random")
 
+    if args.fastest_car_geometry:
+        from .task2_demo import build_fastest_car_geometry_preview
+
+        scenario = build_fastest_car_geometry_preview()
+        arena = scenario.simulator.state.arena
+
+        print("Fastest Car geometry preview")
+        print(
+            f"Arena: {scenario.config.arena_size_cm:.1f} x "
+            f"{scenario.config.arena_height_cm:.1f} cm"
+        )
+        print(
+            f"Robot start: ({arena.start_pose.x_cm:.1f}, "
+            f"{arena.start_pose.y_cm:.1f}) cm"
+        )
+        print("Carpark: 60 x 60 cm, centred on robot start")
+        for obstacle in arena.obstacles:
+            print(
+                f"Obstacle {obstacle.obstacle_id}: "
+                f"x={obstacle.min_x_cm:.1f}..{obstacle.max_x_cm:.1f}, "
+                f"y={obstacle.min_y_cm:.1f}..{obstacle.max_y_cm:.1f}, "
+                f"face={obstacle.face.value}"
+            )
+
+        run_simulator(
+            scenario.simulator,
+            scenario.config,
+            fastest_car_mode=True,
+        )
+        return
+
+    if args.fastest_car_edit:
+        from .task2_editor import run_task2_editor
+        from .task2_editor_model import Task2EditorController
+
+        controller = Task2EditorController()
+        run_task2_editor(controller)
+        return
+
+    if args.fastest_car_demo:
+        from .task2_demo import build_fastest_car_demo
+
+        scenario = build_fastest_car_demo()
+        result = scenario.planning_result
+        assert result.route is not None
+        print(
+            "Fastest Car:", result.status.value,
+            f"targets={len(result.route.target_order)}",
+            f"distance={result.route.metrics.geometric_distance_cm:.1f} cm",
+            f"estimated_time={result.route.metrics.estimated_time_s:.2f} s",
+            f"planning_time={result.metrics.total_planning_time_s:.2f} s",
+        )
+        print("Order:", " -> ".join(map(str, result.route.target_order)))
+        print("Commands:", " ".join(p.command for p in result.route.primitives))
+        run_simulator(
+            scenario.simulator,
+            scenario.config,
+            fastest_car_mode=True,
+        )
+        return
+
     if args.local_plan_demo:
         from .local_plan_demo import run_local_plan_demo
         run_local_plan_demo()
@@ -59,10 +136,6 @@ def main() -> None:
         from .local_plan_demo import run_open_arena_local_diagnostic
         run_open_arena_local_diagnostic()
         return
-
-    # Importing these modules is intentionally delayed until the Pygame
-    # executable is requested. Core simulator imports remain dependency-free.
-    from .app import run_simulator
 
     if args.task1_editor or args.task1_random:
         from .task1_demo import task1_demo_obstacles

@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from algorithm.config import PlanningConfig
 from algorithm.models.arena import ArenaInput
 from algorithm.models.pose import Pose
+from algorithm.models.obstacle import RectangleObstacle
 
 from .footprint import robot_footprint
 from .shapes import NUMERIC_TOLERANCE_CM, Point
@@ -55,13 +56,32 @@ def polygons_intersect(first: Sequence[Point], second: Sequence[Point]) -> bool:
     return True
 
 
-def footprint_within_arena(footprint: Sequence[Point], arena_size_cm: float) -> bool:
-    """Return whether every footprint corner lies inside the square arena."""
-    if not math.isfinite(arena_size_cm) or arena_size_cm <= 0.0:
-        raise ValueError("arena_size_cm must be positive and finite")
+def footprint_within_arena(
+    footprint: Sequence[Point],
+    arena_width_cm: float,
+    arena_height_cm: float | None = None,
+) -> bool:
+    """Return whether every footprint point lies inside the arena.
+
+    If arena_height_cm is omitted, the arena is treated as square for
+    backwards compatibility with the original Task 1 implementation.
+    """
+    if arena_height_cm is None:
+        arena_height_cm = arena_width_cm
+
+    if not math.isfinite(arena_width_cm) or arena_width_cm <= 0.0:
+        raise ValueError("arena_width_cm must be positive and finite")
+
+    if not math.isfinite(arena_height_cm) or arena_height_cm <= 0.0:
+        raise ValueError("arena_height_cm must be positive and finite")
+
     return all(
-        -NUMERIC_TOLERANCE_CM <= point.x_cm <= arena_size_cm + NUMERIC_TOLERANCE_CM
-        and -NUMERIC_TOLERANCE_CM <= point.y_cm <= arena_size_cm + NUMERIC_TOLERANCE_CM
+        -NUMERIC_TOLERANCE_CM
+        <= point.x_cm
+        <= arena_width_cm + NUMERIC_TOLERANCE_CM
+        and -NUMERIC_TOLERANCE_CM
+        <= point.y_cm
+        <= arena_height_cm + NUMERIC_TOLERANCE_CM
         for point in footprint
     )
 
@@ -69,18 +89,32 @@ def footprint_within_arena(footprint: Sequence[Point], arena_size_cm: float) -> 
 def is_pose_collision_free(pose: Pose, arena: ArenaInput, config: PlanningConfig) -> bool:
     """Authoritative collision query for a robot pose in an arena."""
     footprint = robot_footprint(pose, config.robot)
-    if not footprint_within_arena(footprint, config.arena_size_cm):
+    arena_width = arena.width_cm if arena.width_cm is not None else config.arena_size_cm
+    arena_height = arena.height_cm if arena.height_cm is not None else config.arena_height_cm
+    if not footprint_within_arena(footprint, arena_width, arena_height):
         return False
     footprint_min_x = min(point.x_cm for point in footprint)
     footprint_max_x = max(point.x_cm for point in footprint)
     footprint_min_y = min(point.y_cm for point in footprint)
     footprint_max_y = max(point.y_cm for point in footprint)
     for obstacle in arena.obstacles:
-        bounds = _cached_obstacle_bounds(obstacle.cell.x, obstacle.cell.y, config.cell_size_cm)
-        if (bounds[2] < footprint_min_x or bounds[0] > footprint_max_x or
-                bounds[3] < footprint_min_y or bounds[1] > footprint_max_y):
+        if isinstance(obstacle, RectangleObstacle):
+            rectangle = obstacle.bounds
+            bounds_min_x, bounds_min_y = rectangle.min_x_cm, rectangle.min_y_cm
+            bounds_max_x, bounds_max_y = rectangle.max_x_cm, rectangle.max_y_cm
+            polygon = (
+                Point(bounds_min_x, bounds_min_y),
+                Point(bounds_max_x, bounds_min_y),
+                Point(bounds_max_x, bounds_max_y),
+                Point(bounds_min_x, bounds_max_y),
+            )
+        else:
+            cached = _cached_obstacle_bounds(obstacle.cell.x, obstacle.cell.y, config.cell_size_cm)
+            bounds_min_x, bounds_min_y, bounds_max_x, bounds_max_y, polygon = cached
+        if (bounds_max_x < footprint_min_x or bounds_min_x > footprint_max_x or
+                bounds_max_y < footprint_min_y or bounds_min_y > footprint_max_y):
             continue
-        if polygons_intersect(footprint, bounds[4]):
+        if polygons_intersect(footprint, polygon):
             return False
     return True
 

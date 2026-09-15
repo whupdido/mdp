@@ -113,7 +113,9 @@ class PlanningConfig:
     camera: CameraGeometry
     motion: MotionModel
     arena_size_cm: float = ARENA_SIZE_CM
+    arena_height_cm: float | None = None
     cell_size_cm: float = CELL_SIZE_CM
+    grid_display: bool = True
     observation_lateral_offsets_cm: tuple[float, ...] = (0.0, -10.0, 10.0)
     observation_standoff_distances_cm: tuple[float, ...] = ()
     collision_translation_step_cm: float = 1.0
@@ -167,6 +169,10 @@ class PlanningConfig:
         }
         for name, value in positive_values.items():
             _positive_finite(name, value)
+        if self.arena_height_cm is not None:
+            _positive_finite("arena_height_cm", self.arena_height_cm)
+        if not isinstance(self.grid_display, bool):
+            raise TypeError("grid_display must be a bool")
         if not offsets:
             raise ValueError("at least one observation offset is required")
         if offsets[0] != 0.0:
@@ -257,3 +263,67 @@ UNCALIBRATED_SIMULATION_CONFIG = PlanningConfig(
     motion=_simulation_motion_model(),
     observation_standoff_distances_cm=(20.0, 10.0, 30.0),
 )
+
+
+# Fastest Car development profile. The arena dimensions and motion calibration
+# below are deliberately explicit and easy to replace once the official arena
+# dimensions and measured robot data are confirmed. Values marked provisional
+# are not claims about competition hardware.
+def fastest_car_config(
+    *,
+    arena_width_cm: float = 500.0,
+    arena_height_cm: float = 350.0,
+    robot_length_cm: float = 30.0,
+    robot_width_cm: float = 30.0,
+    safety_margin_cm: float = 5.0,
+    turning_radius_cm: float = 26.1,
+    straight_speed_cm_s: float = 27.3,
+    turn_duration_s: float = 2.5,
+    image_gap_cm: float = 20.0,
+) -> PlanningConfig:
+    """Return a continuous-coordinate Fastest Car lab profile.
+
+    The screenshots supplied for this project specify 60 cm obstacle dimensions,
+    60--150 cm example spacing, and a 50 cm minimum-clearance annotation, but
+    they do not specify the complete arena width/height or measured car motion
+    constants. Those remain function arguments rather than hidden assumptions.
+    """
+    quarter = math.pi / 2.0
+    motion = MotionModel(
+        primitives=(
+            MotionPrimitive("FW", Gear.FORWARD, Steering.STRAIGHT, travel_cm=10.0),
+            MotionPrimitive("BW", Gear.REVERSE, Steering.STRAIGHT, travel_cm=10.0),
+            MotionPrimitive("FL", Gear.FORWARD, Steering.LEFT, turn_angle_rad=quarter, radius_cm=turning_radius_cm, estimated_duration_s=turn_duration_s),
+            MotionPrimitive("FR", Gear.FORWARD, Steering.RIGHT, turn_angle_rad=-quarter, radius_cm=turning_radius_cm, estimated_duration_s=turn_duration_s),
+            MotionPrimitive("BL", Gear.REVERSE, Steering.LEFT, turn_angle_rad=-quarter, radius_cm=turning_radius_cm, estimated_duration_s=turn_duration_s),
+            MotionPrimitive("BR", Gear.REVERSE, Steering.RIGHT, turn_angle_rad=quarter, radius_cm=turning_radius_cm, estimated_duration_s=turn_duration_s),
+        ),
+        straight_speed_cm_s=straight_speed_cm_s,
+    )
+    return PlanningConfig(
+        robot=RobotGeometry(
+            length_cm=robot_length_cm,
+            width_cm=robot_width_cm,
+            safety_margin_cm=safety_margin_cm,
+        ),
+        camera=CameraGeometry(
+            forward_offset_cm=11.5,
+            left_offset_cm=0.0,
+            image_gap_cm=image_gap_cm,
+        ),
+        motion=motion,
+        arena_size_cm=arena_width_cm,
+        arena_height_cm=arena_height_cm,
+        cell_size_cm=10.0,
+        grid_display=True,
+        observation_lateral_offsets_cm=(0.0,),
+        observation_standoff_distances_cm=(image_gap_cm,),
+        max_expanded_nodes=50_000,
+        adaptive_initial_expansions=100,
+        adaptive_max_expansions=5_000,
+        local_planning_timeout_s=10.0,
+        overall_planning_timeout_s=60.0,
+    )
+
+
+FASTEST_CAR_CONFIG = fastest_car_config()

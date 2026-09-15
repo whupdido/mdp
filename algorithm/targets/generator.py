@@ -5,7 +5,7 @@ from __future__ import annotations
 from algorithm.config import PlanningConfig
 from algorithm.geometry import is_pose_collision_free
 from algorithm.models.arena import ArenaInput
-from algorithm.models.obstacle import Obstacle
+from algorithm.models.obstacle import Obstacle, RectangleObstacle
 from algorithm.models.planning import ObservationPose, PlanningIssue
 
 from .geometry import (
@@ -43,7 +43,7 @@ def _candidate_kind(distance_index: int, lateral: ObservationLateralClass) -> Ob
     }.get(lateral, ObservationCandidateKind.ALTERNATIVE)
 
 
-def _missing_face_issue(obstacle: Obstacle, arena: ArenaInput) -> PlanningIssue:
+def _missing_face_issue(obstacle: Obstacle | RectangleObstacle, arena: ArenaInput) -> PlanningIssue:
     for issue in arena.task1_issues():
         if issue.obstacle_id == obstacle.obstacle_id:
             return issue
@@ -51,7 +51,7 @@ def _missing_face_issue(obstacle: Obstacle, arena: ArenaInput) -> PlanningIssue:
 
 
 def generate_observation_candidates(
-    obstacle: Obstacle,
+    obstacle: Obstacle | RectangleObstacle,
     arena: ArenaInput,
     config: PlanningConfig,
 ) -> ObservationCandidateGroup:

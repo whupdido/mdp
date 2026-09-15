@@ -816,3 +816,37 @@ without it. Renderer smoke tests skip cleanly when Pygame is unavailable.
 Phases 1 through 6.2 supply shared contracts, collision validation, observation
 targets, B.1 visualization/playback, local planning, and complete software-level
 Task 1 routing. They do not claim physical readiness.
+
+## Fastest Car development profile
+
+A separate continuous-coordinate development profile is included for adapting the
+planner to the Fastest Car task. It is intentionally **not** presented as an
+official competition-map encoding: the supplied task slides give example 60 cm
+obstacle dimensions, 60--150 cm spacing, and a 50 cm minimum-clearance annotation,
+but do not provide the complete arena dimensions or measured robot calibration.
+
+### New pieces
+
+- `algorithm/models/obstacle.py`: `RectangleObstacle` supports arbitrary continuous
+  obstacle rectangles instead of requiring a 20x20 grid cell.
+- `algorithm/config.py`: `fastest_car_config()` / `FASTEST_CAR_CONFIG` provide a
+  separate profile with configurable arena dimensions, robot geometry, turn radius,
+  straight speed, and a single symmetric 90-degree turn time.
+- `algorithm/simulator/fastest_car_demo.py`: small continuous-coordinate lab scenario.
+- `python -m algorithm.simulator --fastest-car-demo`: run the new lab scenario.
+
+### Calibration before competition use
+
+Replace the defaults in `fastest_car_config()` with measured values for:
+
+1. official arena width/height;
+2. actual robot length/width and axle reference;
+3. actual minimum turning radius;
+4. measured forward/reverse speeds;
+5. representative turn time;
+6. the actual camera/image capture distance required by the rules.
+
+The 20 cm image gap in the development profile is inherited from the previous
+simulator profile and is **not** established by the supplied Fastest Car slides.
+Likewise, the slide's 50 cm minimum-clearance annotation is not silently treated
+as a camera standoff or robot safety margin.

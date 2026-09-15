@@ -17,8 +17,12 @@ def run_simulator(
     *,
     debug_nodes: tuple[Pose, ...] = (),
     show_debug_nodes: bool = False,
+    fastest_car_mode: bool = False,
 ) -> None:
-    renderer = PygameRenderer(config)
+    renderer = PygameRenderer(
+        config,
+        fastest_car_mode=fastest_car_mode
+        )
     renderer.initialize()
     clock = pygame.time.Clock()
     options = RenderOptions(show_debug_nodes=show_debug_nodes)

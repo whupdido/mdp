@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Mapping, Protocol
 
 from algorithm.config import PlanningConfig
-from algorithm.enums import CostMetric, RoutingMode
+from algorithm.enums import CostMetric, RoutingMode, Steering
 from algorithm.models.arena import ArenaInput
 from algorithm.models.planning import ObservationPose
 from algorithm.models.pose import Pose
@@ -122,6 +122,7 @@ class PairwiseCacheKey:
     objective: CostMetric
     start: RouteEndpoint
     goal: RouteEndpoint
+    required_first_steering: Steering | None = None
 
     def __post_init__(self) -> None:
         if self.start.pose == self.goal.pose and self.start == self.goal:
@@ -312,6 +313,7 @@ class PairwisePathProvider(Protocol):
         objective: CostMetric,
         *,
         minimum_expansion_budget: int | None = None,
+        required_first_steering: Steering | None = None,
     ) -> PairwiseCacheEntry:
         """Return an existing directed query or invoke the local planner once."""
 

@@ -6,7 +6,7 @@ import math
 import time
 
 from algorithm.config import PlanningConfig
-from algorithm.enums import CostMetric
+from algorithm.enums import CostMetric, Steering
 from algorithm.models.arena import ArenaInput
 from algorithm.pathfinding.models import PathPlanner
 from algorithm.pathfinding.hybrid_astar import HybridAStarPlanner
@@ -63,8 +63,16 @@ class DirectedPairwisePathCache:
         objective: CostMetric,
         *,
         minimum_expansion_budget: int | None = None,
+        required_first_steering: Steering | None = None,
     ) -> PairwiseCacheEntry:
-        key = PairwiseCacheKey(arena, config, objective, start, goal)
+        key = PairwiseCacheKey(
+            arena,
+            config,
+            objective,
+            start,
+            goal,
+            required_first_steering=required_first_steering,
+        )
         self._requests += 1
         cached = self._entries.get(key)
         requested_budget = minimum_expansion_budget or config.adaptive_max_expansions
@@ -106,7 +114,7 @@ class DirectedPairwisePathCache:
         while True:
             if attempts:
                 self._retries += 1
-            result = self._plan(start, goal, arena, config, objective, budget, deadline)
+            result = self._plan(start, goal, arena, config, objective, budget, deadline, required_first_steering,)
             attempts += 1
             cumulative_nodes += result.metrics.nodes_expanded
             cumulative_time += result.metrics.planning_time_s
@@ -153,6 +161,8 @@ class DirectedPairwisePathCache:
         objective: CostMetric,
         budget: int,
         deadline: float,
+        required_first_steering: Steering | None,
+
     ):
         if isinstance(self._planner, HybridAStarPlanner):
             return self._planner.plan(
@@ -162,6 +172,7 @@ class DirectedPairwisePathCache:
                 objective=objective,
                 max_expanded_nodes=budget,
                 max_planning_time_s=max(0.001, deadline - time.perf_counter()),
+                required_first_steering=required_first_steering,
             )
         try:
             return self._planner.plan(

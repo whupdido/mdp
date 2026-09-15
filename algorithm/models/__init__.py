@@ -2,7 +2,7 @@
 
 from .arena import Arena, ArenaInput
 from .motion import CaptureStep, ExecutionStep, MotionPrimitive, MotionSegment, MoveStep
-from .obstacle import Obstacle
+from .obstacle import Obstacle, RectangleObstacle, ObstacleLike
 from .planning import (
     ObservationPose,
     PairwisePath,
@@ -15,6 +15,7 @@ from .planning import (
 )
 from .pose import GridCell, Pose, normalize_heading
 from .robot import Robot, RobotState
+from .wall import Wall
 
 __all__ = [
     "Arena",
@@ -27,6 +28,8 @@ __all__ = [
     "MoveStep",
     "ObservationPose",
     "Obstacle",
+    "RectangleObstacle",
+    "ObstacleLike",
     "PairwisePath",
     "PathMetrics",
     "PlanningIssue",

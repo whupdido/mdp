@@ -465,3 +465,143 @@ def test_hybrid_demo_renderer_smoke_with_debug_states(monkeypatch):
 def test_pathfinding_import_does_not_load_pygame():
     script = "import sys; import algorithm.pathfinding; assert 'pygame' not in sys.modules"
     subprocess.run([sys.executable, "-c", script], check=True)
+
+@pytest.mark.parametrize(
+    ("required_steering", "turn_command"),
+    [
+        (Steering.LEFT, "FL"),
+        (Steering.RIGHT, "FR"),
+    ],
+)
+def test_required_first_steering_is_respected(
+    required_steering,
+    turn_command,
+):
+    config = compact_config()
+
+    start = Pose(80.0, 80.0, 0.0)
+
+    # Give the planner a goal that requires a turn to reach.
+    goal = endpoint(
+        start,
+        ("FW", turn_command),
+        config,
+    )
+
+    arena = ArenaInput(start)
+
+    result = HybridAStarPlanner(config).plan(
+        start,
+        goal,
+        arena,
+        objective=CostMetric.DISTANCE,
+        required_first_steering=required_steering,
+    )
+
+    assert_successful_path(result, arena, config)
+
+    # Find the first actual turn in the resulting path.
+    first_turn = next(
+        (
+            primitive.steering
+            for primitive in result.path.primitives
+            if primitive.steering is not Steering.STRAIGHT
+        ),
+        None,
+    )
+
+    assert first_turn is required_steering
+
+
+def test_straight_motion_is_allowed_before_required_first_turn():
+    config = compact_config()
+
+    start = Pose(80.0, 80.0, 0.0)
+
+    goal = endpoint(
+        start,
+        ("FW", "FL"),
+        config,
+    )
+
+    arena = ArenaInput(start)
+
+    result = HybridAStarPlanner(config).plan(
+        start,
+        goal,
+        arena,
+        objective=CostMetric.DISTANCE,
+        required_first_steering=Steering.LEFT,
+    )
+
+    assert_successful_path(result, arena, config)
+
+    primitives = result.path.primitives
+
+    # Straight movement before the first turn is allowed.
+    assert primitives[0].steering is Steering.STRAIGHT
+
+    # The first actual turn must be LEFT.
+    first_turn = next(
+        primitive.steering
+        for primitive in primitives
+        if primitive.steering is not Steering.STRAIGHT
+    )
+
+    assert first_turn is Steering.LEFT
+
+
+def test_required_first_steering_none_preserves_normal_planning():
+    config = compact_config()
+
+    start = Pose(80.0, 80.0, 0.0)
+    goal = endpoint(start, ("FL",), config)
+    arena = ArenaInput(start)
+
+    normal_result = HybridAStarPlanner(config).plan(
+        start,
+        goal,
+        arena,
+        objective=CostMetric.DISTANCE,
+    )
+
+    explicit_none_result = HybridAStarPlanner(config).plan(
+        start,
+        goal,
+        arena,
+        objective=CostMetric.DISTANCE,
+        required_first_steering=None,
+    )
+
+    assert_successful_path(
+        normal_result,
+        arena,
+        config,
+    )
+
+    assert_successful_path(
+        explicit_none_result,
+        arena,
+        config,
+    )
+
+    assert (
+        normal_result.path.primitives
+        == explicit_none_result.path.primitives
+    )
+
+
+def test_required_first_steering_rejects_straight():
+    config = compact_config()
+
+    start = Pose(80.0, 80.0, 0.0)
+    goal = Pose(100.0, 80.0, 0.0)
+    arena = ArenaInput(start)
+
+    with pytest.raises(ValueError):
+        HybridAStarPlanner(config).plan(
+            start,
+            goal,
+            arena,
+            required_first_steering=Steering.STRAIGHT,
+        )
