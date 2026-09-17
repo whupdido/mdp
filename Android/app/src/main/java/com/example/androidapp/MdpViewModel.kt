@@ -99,6 +99,13 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
     private var runStartedAt = 0L
 
     /**
+     * Set when the board reports it cut a move short, cleared by the DONE that
+     * follows. Without it that DONE would print "Move complete." right under
+     * the collision warning, and the two would contradict each other.
+     */
+    private var moveCutShort = false
+
+    /**
      * Elapsed time since the robot first moved, as mm:ss.
      *
      * Task 1 times out at 6 minutes and the fastest-car run at 3, so during an
@@ -216,7 +223,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
             is Inbound.Rejected -> warn("Robot rejected our message: ${msg.reason}")
 
-            is Inbound.StmReply -> onStmReply(msg.reply)
+            is Inbound.StmReply -> onStmReply(msg)
 
             is Inbound.Unknown -> Unit // logged above, never surfaced, never thrown
         }
@@ -229,17 +236,33 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
      * says position is unknown afterwards. That makes the robot drawn on the
      * map a lie until someone re-references it, so those two get a toast rather
      * than a quiet line in the status box.
+     *
+     * A collision stop is the same situation wearing a different reply: the
+     * board sends `[WARN] COLLISION …` and then DONE, so it is the warning
+     * line that carries the truth and the DONE that has to be talked down.
      */
-    private fun onStmReply(reply: String) = when (reply) {
+    private fun onStmReply(msg: Inbound.StmReply) = when (msg.reply) {
         "READY" -> say("Robot ready.")
-        "DONE" -> say("Move complete.")
+        "DONE" -> if (moveCutShort) {
+            moveCutShort = false
+            say("Move ended early.")
+        } else {
+            say("Move complete.")
+        }
         "ACK" -> say("Stop acknowledged.")
         "BUSY" -> warn("Robot was still moving — that command was discarded.")
         "STALL" -> warn("Robot stalled. Its position on the map is no longer trustworthy.")
         "TIMEOUT" -> warn("Move timed out. Its position on the map is no longer trustworthy.")
         "ERR" -> warn("Robot did not recognise that command.")
         "NO_REPLY" -> warn("No reply from the robot within 25 s.")
-        else -> say("Robot: $reply")
+        else -> when {
+            msg.stoppedShort -> {
+                moveCutShort = true
+                warn("Robot stopped short of an obstacle. Its position on the map is no longer trustworthy.")
+            }
+            msg.isWarning -> warn("Robot: ${msg.reply}")
+            else -> say("Robot: ${msg.reply}")
+        }
     }
 
     // -----------------------------------------------------------------
@@ -283,6 +306,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
     /** C.3 */
     fun move(move: Move, distanceCm: Int, angleDeg: Int) {
+        moveCutShort = false // a fresh move gets a fresh verdict
         transmit(move.toCommand(distanceCm, angleDeg))
     }
 

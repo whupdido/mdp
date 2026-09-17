@@ -162,6 +162,18 @@ for reply in ["STALL", "TIMEOUT", "BUSY", "ERR", "ACK"]:
     to_android, _ = run(["FW010"], [reply])
     check(f"board reply {reply} is relayed", to_android[-1:], [f"STM,{reply}"])
 
+# --- board stops short of an obstacle -----------------------------------
+# Since the IR sensors went in, control.c cuts a move short rather than hit
+# something -- and reports it as a [WARN] line *then* DONE. Both must reach
+# the tablet, in that order: Android reads the warning as "position lost"
+# and uses it to talk down the DONE that follows.
+to_android, _ = run(["FW010"], ["", "[WARN] COLLISION AVOIDED! Stopping early.", "DONE"])
+check(
+    "collision warning and its DONE are both relayed, in order",
+    to_android[-2:],
+    ["STM,[WARN] COLLISION AVOIDED! Stopping early.", "STM,DONE"],
+)
+
 # --- blank input is ignored ---------------------------------------------
 to_android, to_stm = run(["", "   "])
 check("blank lines are ignored", to_android, ["STATUS,RPi bridge ready"])

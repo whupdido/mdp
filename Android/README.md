@@ -104,12 +104,21 @@ leaves B3 called B3, because the robot has already been told about B3.
 | `STATUS,SENT,<cmd>` | "Sent `<cmd>` to the robot." | — |
 | `STATUS,MAP,<msg>` | receipt for one of our own map edits; Traffic only | — |
 | `STM,<reply>` | relayed board reply | — |
+| `STM,[WARN] <text>` | board diagnostic; a warning, not a status line | — |
 | `ERR,<reason>` | warning — something we sent was refused | — |
 
 `STM,<reply>` covers `READY` `DONE` `ACK` `BUSY` `STALL` `TIMEOUT` `ERR`
 `NO_REPLY`. **`STALL` and `TIMEOUT` raise a visible warning**, because the STM
 spec says position is unknown after either — the robot drawn on the map is wrong
 until something re-references it.
+
+**`[WARN] COLLISION …` is treated the same way.** Since the IR sensors went in,
+the board stops short of an obstacle rather than hit it — but it reports that
+as a `[WARN]` line *followed by `DONE`* (`stm32/Core/Src/control.c`,
+`move_straight_mm`). The `DONE` alone would say the move succeeded. The app
+reads the warning as "position lost", raises the same warning as a stall, and
+prints "Move ended early" for the `DONE` that follows instead of "Move
+complete". Any other `[WARN]` line is shown as a warning verbatim.
 
 ### Parsing is deliberately forgiving
 
@@ -148,7 +157,7 @@ sdk.dir=C:/path/to/your/Android/Sdk
 ```bash
 ./gradlew installDebug     # build and push to a connected device
 ./gradlew assembleDebug    # just build the APK
-./gradlew test             # 45 unit tests, no device needed
+./gradlew test             # 49 unit tests, no device needed
 ```
 
 **Toolchain:** AGP 9.3.1, Gradle 9.5, JDK 25, `compileSdk` 37, `minSdk` 24.
