@@ -253,6 +253,16 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         "BUSY" -> warn("Robot was still moving — that command was discarded.")
         "STALL" -> warn("Robot stalled. Its position on the map is no longer trustworthy.")
         "TIMEOUT" -> warn("Move timed out. Its position on the map is no longer trustworthy.")
+        // The board's own word for a collision stop, once command.c reports
+        // how a move ended. The [WARN] line has normally already raised the
+        // toast, so this only speaks up if it arrives alone (older firmware
+        // that sends the line but not the code, or a dropped line).
+        "BLOCKED" -> if (moveCutShort) {
+            moveCutShort = false
+            say("Move ended early.")
+        } else {
+            warn("Robot stopped short of an obstacle. Its position on the map is no longer trustworthy.")
+        }
         "ERR" -> warn("Robot did not recognise that command.")
         "NO_REPLY" -> warn("No reply from the robot within 25 s.")
         else -> when {

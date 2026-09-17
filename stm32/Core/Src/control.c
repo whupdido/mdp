@@ -120,7 +120,7 @@ move_result_t motion_result(void)
 
 uint8_t move_straight_mm(int32_t mm)
 {
-    if (mm == 0) return 1;
+    if (mm == 0) { last_result = MOVE_DONE; return 1; } /* Zhenxi: see report_result() in command.c */
 
     target_counts_total       = (int32_t)(fabsf((float)mm) / MM_PER_COUNT);
     dir_forward               = (mm > 0) ? 1 : -1;
@@ -134,6 +134,7 @@ uint8_t move_straight_mm(int32_t mm)
     move_ticks                = 0;
     stall_ticks_count         = 0;
     locked_heading_deg        = global_yaw_deg;
+    last_result               = MOVE_NONE; /* Zhenxi: this move has no verdict yet */
 
     /* Lock wheels to calibrated center at launch */
     servo_us(SERVO_CENTRE);
@@ -145,9 +146,25 @@ uint8_t move_straight_mm(int32_t mm)
 
     /* Monitor sensors while moving */
 	while (busy_flag) {
+		/* Zhenxi: keep reading the UART while the move runs.
+		 *
+		 * This loop blocks dispatch(), and dispatch() is the only place a
+		 * STOP is acted on -- so a STOP from the tablet sat in the UART
+		 * buffer until the move finished by itself. obstacle_nav.c already
+		 * polls inside its own wait loops for exactly this reason; the two
+		 * moves the tablet can drive need the same. A STOP now lands in
+		 * motion_stop() within one loop pass, which drops busy_flag and
+		 * ends this loop. Any other command arriving mid-move gets BUSY
+		 * from dispatch(), as before.                                    */
+		command_poll();
+
 		/* Only check for front collisions if we are driving forward */
 		if (dir_forward == 1 && check_front_collision()) {
-			stop_hardware(MOVE_DONE);
+			/* Zhenxi: was MOVE_DONE, which made a 15 cm move that stopped at
+			 * 3 cm indistinguishable from one that completed. The [WARN]
+			 * line below still goes out; BLOCKED is what the Pi and tablet
+			 * key off.                                                    */
+			stop_hardware(MOVE_BLOCKED);
 			busy_flag = 0;
 
 			/* GYRO FIX: Wait for chassis mechanical vibrations to stop
@@ -160,14 +177,23 @@ uint8_t move_straight_mm(int32_t mm)
 		HAL_Delay(5);
 	}
 
-    stop_hardware(MOVE_DONE);
+    /* Zhenxi: only claim DONE if nothing else already claimed the result.
+     *
+     * Every way out of the loop above has already been through
+     * stop_hardware(): the ISR on DONE / STALL / TIMEOUT, motion_stop() on
+     * a STOP. Calling stop_hardware(MOVE_DONE) unconditionally here then
+     * overwrote that verdict -- a stall became DONE before command.c could
+     * report it, and the tablet's "position no longer trustworthy" warning
+     * could never fire. The hardware is already stopped; the settle delay
+     * is all that is still needed.                                       */
+    if (last_result == MOVE_NONE) stop_hardware(MOVE_DONE);
     HAL_Delay(100); /* Final settle */
 	return 1;
 }
 
 uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 {
-    if (degrees <= 0) return 1;
+    if (degrees <= 0) { last_result = MOVE_DONE; return 1; } /* Zhenxi: see report_result() in command.c */
 
     turn_left           = left;
     dir_forward         = forward ? 1 : -1;
@@ -177,6 +203,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
     stall_ticks_count   = 0;
     left_pid_integral   = 0.0f;
 	right_pid_integral  = 0.0f;
+    last_result         = MOVE_NONE; /* Zhenxi: this move has no verdict yet */
 
     /* Set Ackermann steering angle */
     if (left) servo_us(SERVO_LEFT);
@@ -190,6 +217,9 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 
     /* Monitor sensors while turning */
 	while (busy_flag) {
+		/* Zhenxi: same as move_straight_mm -- let a STOP in mid-turn. */
+		command_poll();
+
 		/* Only check for front collisions if driving FORWARD in the turn */
 		if (dir_forward == 1 && check_front_collision()) {
 			stop_hardware(MOVE_DONE);
@@ -235,7 +265,12 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 	}
 
 	/* Final settle to ensure gyro is completely silent before next maneuver */
-	stop_hardware(MOVE_DONE);
+	/* Zhenxi: guarded for the same reason as in move_straight_mm -- do not
+	 * overwrite a STALL / TIMEOUT / ABORT the ISR or STOP already recorded.
+	 * The collision branch above deliberately leaves MOVE_DONE in place: a
+	 * turn that finished in reverse, or was within 3 degrees, did reach its
+	 * heading. The tablet learns about the displacement from the [WARN].  */
+	if (last_result == MOVE_NONE) stop_hardware(MOVE_DONE);
 	HAL_Delay(100);
 	return 1;
 }

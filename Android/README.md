@@ -107,18 +107,20 @@ leaves B3 called B3, because the robot has already been told about B3.
 | `STM,[WARN] <text>` | board diagnostic; a warning, not a status line | — |
 | `ERR,<reason>` | warning — something we sent was refused | — |
 
-`STM,<reply>` covers `READY` `DONE` `ACK` `BUSY` `STALL` `TIMEOUT` `ERR`
-`NO_REPLY`. **`STALL` and `TIMEOUT` raise a visible warning**, because the STM
-spec says position is unknown after either — the robot drawn on the map is wrong
-until something re-references it.
+`STM,<reply>` covers `READY` `DONE` `ACK` `BUSY` `STALL` `TIMEOUT` `BLOCKED`
+`ERR` `NO_REPLY`. **`STALL`, `TIMEOUT` and `BLOCKED` raise a visible
+warning**, because the STM spec says position is unknown after any of them —
+the robot drawn on the map is wrong until something re-references it.
 
 **`[WARN] COLLISION …` is treated the same way.** Since the IR sensors went in,
-the board stops short of an obstacle rather than hit it — but it reports that
-as a `[WARN]` line *followed by `DONE`* (`stm32/Core/Src/control.c`,
-`move_straight_mm`). The `DONE` alone would say the move succeeded. The app
-reads the warning as "position lost", raises the same warning as a stall, and
-prints "Move ended early" for the `DONE` that follows instead of "Move
-complete". Any other `[WARN]` line is shown as a warning verbatim.
+the board stops short of an obstacle rather than hit it, and announces that
+with a `[WARN]` line before the reply code (`stm32/Core/Src/control.c`,
+`move_straight_mm`). On current firmware the code is `BLOCKED`; on firmware
+from before `command.c` reported *how* a move ended it was a plain `DONE`,
+which on its own said the move succeeded. The app reads the warning line as
+"position lost" so it is right either way, and prints "Move ended early" for
+the code that follows instead of "Move complete". Any other `[WARN]` line is
+shown as a warning verbatim.
 
 ### Parsing is deliberately forgiving
 

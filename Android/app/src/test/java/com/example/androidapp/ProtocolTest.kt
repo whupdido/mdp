@@ -86,7 +86,7 @@ class ProtocolTest {
     }
 
     @Test fun `stm replies come through as stm replies`() {
-        listOf("READY", "DONE", "STALL", "TIMEOUT", "ACK", "BUSY", "ERR", "NO_REPLY").forEach {
+        listOf("READY", "DONE", "STALL", "TIMEOUT", "BLOCKED", "ACK", "BUSY", "ERR", "NO_REPLY").forEach {
             assertEquals("failed on $it", Inbound.StmReply(it), parseInbound("STM,$it"))
         }
     }
