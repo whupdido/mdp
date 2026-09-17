@@ -6,8 +6,6 @@ from algorithm.config import (
     PlanningConfig,
     RobotGeometry,
     UNCALIBRATED_SIMULATION_CONFIG,
-    FASTEST_CAR_CONFIG,
-    fastest_car_config,
 )
 from algorithm.coordinates import default_start_pose
 from algorithm.enums import CostMetric, Direction, Gear, PlanningStatus, RoutingMode, Steering
@@ -34,6 +32,4 @@ __all__ = [
     "Steering",
     "Task1Planner",
     "UNCALIBRATED_SIMULATION_CONFIG",
-    "FASTEST_CAR_CONFIG",
-    "fastest_car_config",
 ]

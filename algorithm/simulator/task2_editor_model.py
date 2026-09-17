@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import random
+from random import Random
 
 from algorithm.config import FASTEST_CAR_CONFIG, PlanningConfig
 from algorithm.enums import Steering
@@ -12,39 +13,79 @@ from .headless import HeadlessSimulator
 
 @dataclass(frozen=True, slots=True)
 class FastestCarSetup:
-    """Editable geometry and fixed arrow directions for Fastest Car."""
+    """DEFAULT, Editable geometry and arrow directions for Fastest Car Task."""
 
-    top_clearance_cm: int = 120
-    bottom_clearance_cm: int = 120
-    carpark_to_obstacle_1_cm: int = 150
-    obstacle_1_to_obstacle_2_cm: int = 150
+    # Arena / route geometry
+    arena_width_cm: float = 500.0
+    arena_height_cm: float = 350.0
+    top_clearance_cm: int = 100
+    bottom_clearance_cm: int = 100
+    carpark_to_obstacle_1_cm: int = 100
+    obstacle_1_to_obstacle_2_cm: int = 100
 
+    # Obstacle / carpark dimensions
+    obstacle_width_cm: float = 40.0
+    obstacle_height_cm: float = 60.0
+    carpark_width_cm: float = 60.0
+
+    # Robot starting position
+    start_x_cm: float = 45.0
+
+    # Arena wall geometry
+    wall_width_cm: float = 20.0
+
+    # O2 loop geometry
+    loop_clearance_cm: float = 10.0
+    loop_exit_lane_offset_cm: float = 30.0
+    loop_exit_x_offset_cm: float = 20.0
+
+    # Obstacle arrow directions
     obstacle_1_direction: Steering = Steering.LEFT
     obstacle_2_direction: Steering = Steering.RIGHT
 
 
-def random_fastest_car_setup() -> FastestCarSetup:
+FASTEST_CAR_LIMITS = {
+    "top_clearance_cm": (50, 120),
+    "bottom_clearance_cm": (50, 120),
+    "carpark_to_obstacle_1_cm": (50, 130),
+    "obstacle_1_to_obstacle_2_cm": (50, 130),
+}
+
+def random_fastest_car_setup(
+    rng: random.Random | None = None,
+) -> FastestCarSetup:
     """Generate a random Fastest Car setup."""
 
+    rng = rng or random
+
+def random_fastest_car_setup(
+    rng: Random | None = None,
+) -> FastestCarSetup:
+    """Generate a random Fastest Car setup."""
+
+    if rng is None:
+        rng = Random()
+
     return FastestCarSetup(
-        top_clearance_cm=random.randint(50, 120),
-        bottom_clearance_cm=random.randint(50, 120),
-        carpark_to_obstacle_1_cm=random.randint(50, 130),
-        obstacle_1_to_obstacle_2_cm=random.randint(50, 130),
-        obstacle_1_direction=random.choice(
-            (
-                Steering.LEFT,
-                Steering.RIGHT,
-            )
+        top_clearance_cm=rng.randint(
+            *FASTEST_CAR_LIMITS["top_clearance_cm"]
         ),
-        obstacle_2_direction=random.choice(
-            (
-                Steering.LEFT,
-                Steering.RIGHT,
-            )
+        bottom_clearance_cm=rng.randint(
+            *FASTEST_CAR_LIMITS["bottom_clearance_cm"]
+        ),
+        carpark_to_obstacle_1_cm=rng.randint(
+            *FASTEST_CAR_LIMITS["carpark_to_obstacle_1_cm"]
+        ),
+        obstacle_1_to_obstacle_2_cm=rng.randint(
+            *FASTEST_CAR_LIMITS["obstacle_1_to_obstacle_2_cm"]
+        ),
+        obstacle_1_direction=rng.choice(
+            (Steering.LEFT, Steering.RIGHT)
+        ),
+        obstacle_2_direction=rng.choice(
+            (Steering.LEFT, Steering.RIGHT)
         ),
     )
-
 
 class Task2EditorController:
     """Controls the editable Fastest Car geometry and replanning."""
@@ -183,4 +224,5 @@ __all__ = [
     "FastestCarSetup",
     "Task2EditorController",
     "random_fastest_car_setup",
+    "FASTEST_CAR_LIMITS",
 ]

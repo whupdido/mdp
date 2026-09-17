@@ -80,6 +80,7 @@ class MotionModel:
     capture_delay_s: float = 0.0
     direction_change_penalty_s: float = 0.0
     steering_change_penalty_s: float = 0.0
+    reverse_distance_penalty_s_per_cm: float = 0.03
 
     def __post_init__(self) -> None:
         primitives = tuple(self.primitives)
@@ -95,6 +96,7 @@ class MotionModel:
             self.capture_delay_s,
             self.direction_change_penalty_s,
             self.steering_change_penalty_s,
+            self.reverse_distance_penalty_s_per_cm,
         )
         if not all(math.isfinite(value) for value in timings) or any(value < 0.0 for value in timings):
             raise ValueError("motion timing values must be finite and non-negative")
@@ -238,10 +240,10 @@ def _simulation_motion_model() -> MotionModel:
         primitives=(
             MotionPrimitive("FW", Gear.FORWARD, Steering.STRAIGHT, travel_cm=10.0),
             MotionPrimitive("BW", Gear.REVERSE, Steering.STRAIGHT, travel_cm=10.0),
-            MotionPrimitive("FL", Gear.FORWARD, Steering.LEFT, turn_angle_rad=quarter_turn, radius_cm=26.1, estimated_duration_s=2.4),
-            MotionPrimitive("FR", Gear.FORWARD, Steering.RIGHT, turn_angle_rad=-quarter_turn, radius_cm=31.8, estimated_duration_s=2.9),
-            MotionPrimitive("BL", Gear.REVERSE, Steering.LEFT, turn_angle_rad=-quarter_turn, radius_cm=24.6, estimated_duration_s=2.3),
-            MotionPrimitive("BR", Gear.REVERSE, Steering.RIGHT, turn_angle_rad=quarter_turn, radius_cm=30.3, estimated_duration_s=2.8),
+            MotionPrimitive("FL", Gear.FORWARD, Steering.LEFT, turn_angle_rad=quarter_turn, radius_cm=31.7, estimated_duration_s=2.4),
+            MotionPrimitive("FR", Gear.FORWARD, Steering.RIGHT, turn_angle_rad=-quarter_turn, radius_cm=41.3, estimated_duration_s=2.9),
+            MotionPrimitive("BL", Gear.REVERSE, Steering.LEFT, turn_angle_rad=-quarter_turn, radius_cm=31.2, estimated_duration_s=2.3),
+            MotionPrimitive("BR", Gear.REVERSE, Steering.RIGHT, turn_angle_rad=quarter_turn, radius_cm=42.1, estimated_duration_s=2.8),
         ),
         straight_speed_cm_s=27.3,
     )
@@ -264,11 +266,7 @@ UNCALIBRATED_SIMULATION_CONFIG = PlanningConfig(
     observation_standoff_distances_cm=(20.0, 10.0, 30.0),
 )
 
-
-# Fastest Car development profile. The arena dimensions and motion calibration
-# below are deliberately explicit and easy to replace once the official arena
-# dimensions and measured robot data are confirmed. Values marked provisional
-# are not claims about competition hardware.
+# Fastest Car development profile.
 def fastest_car_config(
     *,
     arena_width_cm: float = 500.0,
@@ -281,13 +279,7 @@ def fastest_car_config(
     turn_duration_s: float = 2.5,
     image_gap_cm: float = 20.0,
 ) -> PlanningConfig:
-    """Return a continuous-coordinate Fastest Car lab profile.
-
-    The screenshots supplied for this project specify 60 cm obstacle dimensions,
-    60--150 cm example spacing, and a 50 cm minimum-clearance annotation, but
-    they do not specify the complete arena width/height or measured car motion
-    constants. Those remain function arguments rather than hidden assumptions.
-    """
+    """Return the historical continuous-coordinate Fastest Car profile."""
     quarter = math.pi / 2.0
     motion = MotionModel(
         primitives=(

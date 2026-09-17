@@ -1,6 +1,8 @@
 from __future__ import annotations
+import logging
 import math
 from dataclasses import dataclass, replace
+
 from .task2_editor_model import (
     FastestCarSetup,
     random_fastest_car_setup,
@@ -25,6 +27,10 @@ from algorithm.targets.geometry import (
 )
 from .headless import HeadlessSimulator, simulation_steps_from_execution
 
+# Setup Logger
+logger = logging.getLogger("FastestCarPlanner")
+logging.basicConfig(level=logging.INFO)
+
 
 @dataclass(frozen=True, slots=True)
 class FastestCarScenario:
@@ -40,17 +46,6 @@ def fastest_car_demo_arena(
 ) -> ArenaInput:
     """Build a Fastest Car arena from a geometry setup."""
 
-    # ------------------------------------------------------------
-    # Fixed geometry
-    # ------------------------------------------------------------
-    carpark_width_cm = 60.0
-
-    obstacle_width_cm = 40.0
-    obstacle_height_cm = 60.0
-
-    # ------------------------------------------------------------
-    # Default clearance unless randomized
-    # ------------------------------------------------------------
     if setup is None:
         setup = FastestCarSetup()
 
@@ -58,68 +53,26 @@ def fastest_car_demo_arena(
     bottom_clearance_cm = setup.bottom_clearance_cm
     carpark_to_obstacle_1_cm = setup.carpark_to_obstacle_1_cm
     obstacle_1_to_obstacle_2_cm = setup.obstacle_1_to_obstacle_2_cm
-
-    # ------------------------------------------------------------
-    # Arena height
-    # ------------------------------------------------------------
-    arena_height_cm = config.arena_height_cm
-
+    carpark_width_cm = setup.carpark_width_cm
+    obstacle_width_cm = setup.obstacle_width_cm
+    obstacle_height_cm = setup.obstacle_height_cm
+    arena_height_cm = setup.arena_height_cm
     center_y = arena_height_cm / 2.0
 
-    # ------------------------------------------------------------
-    # Robot starts at the right side of the carpark.
-    # Carpark interior = 60 x 60 cm.
-    # Robot = 30 x 30 cm.
-    # Right edge of robot aligns with x = 60 cm entrance.
-    # ------------------------------------------------------------
     robot_start = Pose(
-        x_cm=45.0,
+        x_cm=setup.start_x_cm,
         y_cm=center_y,
         heading_rad=0.0,
     )
 
-    # ------------------------------------------------------------
-    # Obstacle 1
-    #
-    # Carpark right edge = x = 60.
-    # ------------------------------------------------------------
-    obstacle_1_min_x = (
-        carpark_width_cm
-        + carpark_to_obstacle_1_cm
-    )
+    obstacle_1_min_x = carpark_width_cm + carpark_to_obstacle_1_cm
+    obstacle_1_max_x = obstacle_1_min_x + obstacle_width_cm
 
-    obstacle_1_max_x = (
-        obstacle_1_min_x
-        + obstacle_width_cm
-    )
+    obstacle_2_min_x = obstacle_1_max_x + obstacle_1_to_obstacle_2_cm
+    obstacle_2_max_x = obstacle_2_min_x + obstacle_width_cm
 
-    # ------------------------------------------------------------
-    # Obstacle 2
-    #
-    # Gap measured from obstacle 1's right edge.
-    # ------------------------------------------------------------
-    obstacle_2_min_x = (
-        obstacle_1_max_x
-        + obstacle_1_to_obstacle_2_cm
-    )
-
-    obstacle_2_max_x = (
-        obstacle_2_min_x
-        + obstacle_width_cm
-    )
-
-    # ------------------------------------------------------------
-    # Centre obstacles vertically.
-    # ------------------------------------------------------------
-    obstacle_min_y = (
-        center_y
-        - obstacle_height_cm / 2.0
-    )
-
-    obstacle_max_y = (
-        center_y
-        + obstacle_height_cm / 2.0
-    )
+    obstacle_min_y = center_y - obstacle_height_cm / 2.0
+    obstacle_max_y = center_y + obstacle_height_cm / 2.0
 
     obstacles = (
         RectangleObstacle(
@@ -141,46 +94,30 @@ def fastest_car_demo_arena(
     )
 
     walls = (
-        # Bottom physical wall — 20 cm thick.
         Wall(
             wall_id="arena_bottom",
-            min_x_cm=60.0,
-            min_y_cm=(
-                obstacle_min_y
-                - bottom_clearance_cm
-                - 20.0
-            ),
+            min_x_cm=carpark_width_cm,
+            min_y_cm=obstacle_min_y - bottom_clearance_cm - setup.wall_width_cm,
             max_x_cm=obstacle_2_max_x,
-            max_y_cm=(
-                obstacle_min_y
-                - bottom_clearance_cm
-            ),
+            max_y_cm=obstacle_min_y - bottom_clearance_cm,
         ),
-
-        # Top physical wall — 20 cm thick.
         Wall(
             wall_id="arena_top",
-            min_x_cm=60.0,
-            min_y_cm=(
-                obstacle_max_y
-                + top_clearance_cm
-            ),
+            min_x_cm=carpark_width_cm,
+            min_y_cm=obstacle_max_y + top_clearance_cm,
             max_x_cm=obstacle_2_max_x,
-            max_y_cm=(
-                obstacle_max_y
-                + top_clearance_cm
-                + 20.0
-            ),
+            max_y_cm=obstacle_max_y + top_clearance_cm + setup.wall_width_cm,
         ),
     )
 
     return ArenaInput(
         robot_start,
         obstacles,
-        config.arena_size_cm,
+        setup.arena_width_cm,
         arena_height_cm,
         walls=walls,
     )
+
 
 def build_fastest_car_demo(
     setup: FastestCarSetup | None = None,
@@ -192,8 +129,6 @@ def build_fastest_car_demo(
 
     planner = Task1Planner(config)
 
-    # Fastest Car: fixed target order
-    # START -> Obstacle 1 -> Obstacle 2
     candidates = generate_arena_observation_candidates(
         arena,
         config,
@@ -216,14 +151,9 @@ def build_fastest_car_demo(
         if candidate.valid
     )
 
-    if not obstacle_1_candidates:
+    if not obstacle_1_candidates or not obstacle_2_candidates:
         raise RuntimeError(
-            "Obstacle 1 has no valid observation candidates"
-        )
-
-    if not obstacle_2_candidates:
-        raise RuntimeError(
-            "Obstacle 2 has no valid observation candidates"
+            "Missing valid observation candidates"
         )
 
     start = RouteEndpoint.start(arena.start_pose)
@@ -231,17 +161,9 @@ def build_fastest_car_demo(
     best_solution = None
     best_cost = None
 
-    # Try:
-    #
-    #     START -> Obstacle 1 candidate -> Obstacle 2 candidate
-    #
-    # We deliberately do NOT try Obstacle 2 -> Obstacle 1.
-    for obstacle_1 in obstacle_1_candidates:
+    logger.info(f"Starting search across {len(obstacle_1_candidates)} O1 candidates and {len(obstacle_2_candidates)} O2 candidates...")
 
-        print(
-            f"\nTrying START -> O1: "
-            f"{obstacle_1.candidate_label}"
-        )
+    for i, obstacle_1 in enumerate(obstacle_1_candidates):
 
         first_leg = planner.pairwise_cache.get_or_plan(
             start,
@@ -251,16 +173,12 @@ def build_fastest_car_demo(
             CostMetric.ESTIMATED_TIME,
         )
 
-        print(
-            f"  START -> O1: "
-            f"succeeded={first_leg.succeeded}, "
-            f"status={first_leg.result.status}"
-        )
-
         if not first_leg.succeeded or first_leg.result.path is None:
+            logger.warning(f"[O1 Candidate {i}] Leg 1 (Start -> O1) FAILED")
             continue
+        
+        logger.info(f"[O1 Candidate {i}] Leg 1 (Start -> O1) SUCCEEDED | Cost: {first_leg.selected_cost:.2f}")
 
-        # Use the actual pose reached after obstacle 1.
         reached_obstacle_1 = RouteEndpoint(
             obstacle_1.kind,
             first_leg.result.path.final_pose,
@@ -274,18 +192,7 @@ def build_fastest_car_demo(
             candidate_label=obstacle_1.candidate_label,
         )
 
-        print(
-            f"  Reached O1 at: "
-            f"x={first_leg.result.path.final_pose.x_cm:.1f}, "
-            f"y={first_leg.result.path.final_pose.y_cm:.1f}"
-        )
-
-        for obstacle_2 in obstacle_2_candidates:
-
-            print(
-                f"  Trying O1 -> O2: "
-                f"{obstacle_2.candidate_label}"
-            )
+        for j, obstacle_2 in enumerate(obstacle_2_candidates):
 
             second_leg = planner.pairwise_cache.get_or_plan(
                 reached_obstacle_1,
@@ -296,14 +203,11 @@ def build_fastest_car_demo(
                 required_first_steering=setup.obstacle_1_direction,
             )
 
-            print(
-                f"    O1 -> O2: "
-                f"succeeded={second_leg.succeeded}, "
-                f"status={second_leg.result.status}"
-            )
-
             if not second_leg.succeeded or second_leg.result.path is None:
+                logger.warning(f"  [O2 Candidate {j}] Leg 2 (O1 -> O2) FAILED")
                 continue
+
+            logger.info(f"  [O2 Candidate {j}] Leg 2 (O1 -> O2) SUCCEEDED | Cost: {second_leg.selected_cost:.2f}")
 
             reached_obstacle_2 = RouteEndpoint(
                 obstacle_2.kind,
@@ -318,49 +222,96 @@ def build_fastest_car_demo(
                 candidate_label=obstacle_2.candidate_label,
             )
 
-            # The robot has reached the front of O2.
-            # Now plan to a waypoint on the back side of O2.
             obstacle_2_geometry = next(
                 obstacle
                 for obstacle in arena.obstacles
-                if obstacle.obstacle_id == obstacle_2.obstacle_id
+                if isinstance(obstacle, RectangleObstacle)
+                and obstacle.obstacle_id == obstacle_2.obstacle_id
             )
 
-            back_camera_position = desired_camera_position(
-                obstacle_2_geometry,
-                Direction.EAST,
-                0.0,
-                config,
+            collision_half_length = config.robot.collision_length_cm / 2.0
+            corner_offset_x = collision_half_length + setup.loop_clearance_cm
+            corner_offset_y = setup.loop_clearance_cm
+            exit_lane_offset_y = setup.loop_exit_lane_offset_cm
+
+            is_right_turn = setup.obstacle_2_direction is Steering.RIGHT
+
+            # 1. Turning around Obstacle 2 to enter loop
+            loop_x = obstacle_2_geometry.max_x_cm + corner_offset_x
+            if is_right_turn:
+                loop_y = obstacle_2_geometry.min_y_cm - corner_offset_y
+                loop_heading = math.pi / 2.0  # Facing North
+                exit_y = obstacle_2_geometry.max_y_cm + exit_lane_offset_y
+            else:
+                loop_y = obstacle_2_geometry.max_y_cm + corner_offset_y
+                loop_heading = -math.pi / 2.0  # Facing South
+                exit_y = obstacle_2_geometry.min_y_cm - exit_lane_offset_y
+
+            loop_pose = Pose(
+                x_cm=loop_x,
+                y_cm=loop_y,
+                heading_rad=loop_heading,
             )
 
-            back_of_o2 = rear_axle_pose_for_camera(
-                back_camera_position,
-                Direction.WEST,
-                config.camera,
+            # 2. Waypoint to exit out of Obstacle 2
+            exit_x = obstacle_2_geometry.min_x_cm - setup.loop_exit_x_offset_cm
+            exit_pose = Pose(
+                x_cm=exit_x,
+                y_cm=exit_y,
+                heading_rad=math.pi,  # Facing West
             )
 
-            required_steering = setup.obstacle_2_direction
+            # 3. Final Carpark Return Pose (Facing West into the Carpark)
+            return_pose = Pose(
+                x_cm=arena.start_pose.x_cm,
+                y_cm=arena.start_pose.y_cm,
+                heading_rad=math.pi,
+            )
 
-            third_result = planner.path_planner.plan(
+            # Leg 3A: O2 -> Rear Corner Apex Waypoint
+            third_leg_a = planner.path_planner.plan(
                 reached_obstacle_2.pose,
-                back_of_o2,
+                loop_pose,
                 arena,
                 objective=CostMetric.ESTIMATED_TIME,
-                required_first_steering=required_steering,
             )
 
-            print(
-                f"    O2 -> back of O2: "
-                f"succeeded={third_result.succeeded}, "
-                f"status={third_result.status}"
-            )
-
-            if not third_result.succeeded or third_result.path is None:
+            if not third_leg_a.succeeded or third_leg_a.path is None:
+                logger.warning(f"  [O2 Candidate {j}] Leg 3A (O2 -> Corner) FAILED")
                 continue
+
+            # Leg 3B: Rear Corner Apex -> Return Lane Alignment
+            third_leg_b = planner.path_planner.plan(
+                third_leg_a.path.final_pose,
+                exit_pose,
+                arena,
+                objective=CostMetric.ESTIMATED_TIME,
+            )
+
+            if not third_leg_b.succeeded or third_leg_b.path is None:
+                logger.warning(f"  [O2 Candidate {j}] Leg 3B (Corner -> Exit) FAILED")
+                continue
+
+            # Leg 3C: Return Lane -> Final Carpark Start
+            third_leg_c = planner.path_planner.plan(
+                third_leg_b.path.final_pose,
+                return_pose,
+                arena,
+                objective=CostMetric.ESTIMATED_TIME,
+            )
+
+            if not third_leg_c.succeeded or third_leg_c.path is None:
+                logger.warning(f"  [O2 Candidate {j}] Leg 3C (Exit -> Start) FAILED")
+                continue
+
+            logger.info(f"  [O2 Candidate {j}] Leg 3 Return Sequence SUCCEEDED")
 
             total_cost = (
                 (first_leg.selected_cost or 0.0)
                 + (second_leg.selected_cost or 0.0)
+                + third_leg_a.path.objective_cost
+                + third_leg_b.path.objective_cost
+                + third_leg_c.path.objective_cost
             )
 
             if best_cost is None or total_cost < best_cost:
@@ -370,31 +321,29 @@ def build_fastest_car_demo(
                     obstacle_2,
                     first_leg,
                     second_leg,
-                    third_result,
+                    third_leg_a,
+                    third_leg_b,
+                    third_leg_c,
                 )
 
     if best_solution is None:
+        logger.error("Planning completed: No valid route found across all legs.")
         raise RuntimeError(
             "Fastest Car could not find a route "
-            "from START -> Obstacle 1 -> Obstacle 2"
+            "from START -> Obstacle 1 -> Obstacle 2 -> Loop Exit -> START"
         )
 
-    obstacle_1, obstacle_2, first_leg, second_leg, third_result = best_solution
+    logger.info(f"Planning complete! Optimal route found with total cost: {best_cost:.2f}")
 
-    # Build the continuous route using the actual reached pose
-    # from the first leg.
-    reached_obstacle_1 = RouteEndpoint(
-        obstacle_1.kind,
-        first_leg.result.path.final_pose,
-        obstacle_id=obstacle_1.obstacle_id,
-        candidate_index=obstacle_1.candidate_index,
-        candidate_kind=obstacle_1.candidate_kind,
-        nominal=obstacle_1.nominal,
-        standoff_cm=obstacle_1.standoff_cm,
-        lateral_class=obstacle_1.lateral_class,
-        preference_rank=obstacle_1.preference_rank,
-        candidate_label=obstacle_1.candidate_label,
-    )
+    (
+        obstacle_1,
+        obstacle_2,
+        first_leg,
+        second_leg,
+        third_leg_a,
+        third_leg_b,
+        third_leg_c,
+    ) = best_solution
 
     continuous_solution = planner._materialize_continuous_solution(
         arena,
@@ -423,24 +372,37 @@ def build_fastest_car_demo(
         CostMetric.ESTIMATED_TIME,
     )
 
-    # Append O2 -> back of O2 to the displayed/executed route.
-    third_path = third_result.path
-    assert third_path is not None
+    path_3a, path_3b, path_3c = third_leg_a.path, third_leg_b.path, third_leg_c.path
+    assert path_3a is not None and path_3b is not None and path_3c is not None
 
     route = replace(
         route,
         sampled_poses=(
             route.sampled_poses
-            + third_path.sampled_poses[1:]
+            + path_3a.sampled_poses[1:]
+            + path_3b.sampled_poses[1:]
+            + path_3c.sampled_poses[1:]
         ),
         execution_steps=(
             route.execution_steps
             + tuple(
                 MoveStep(segment, segment.primitive.command)
-                for segment in third_path.segments
+                for segment in path_3a.segments
+            )
+            + tuple(
+                MoveStep(segment, segment.primitive.command)
+                for segment in path_3b.segments
+            )
+            + tuple(
+                MoveStep(segment, segment.primitive.command)
+                for segment in path_3c.segments
             )
         ),
     )
+
+    time_3a = getattr(third_leg_a.metrics, "planning_time_s", 0.0) if hasattr(third_leg_a, "metrics") else 0.0
+    time_3b = getattr(third_leg_b.metrics, "planning_time_s", 0.0) if hasattr(third_leg_b, "metrics") else 0.0
+    time_3c = getattr(third_leg_c.metrics, "planning_time_s", 0.0) if hasattr(third_leg_c, "metrics") else 0.0
 
     planning_result = PlanningResult(
         PlanningStatus.SUCCESS,
@@ -451,6 +413,9 @@ def build_fastest_car_demo(
             planning_time_s=(
                 first_leg.result.metrics.planning_time_s
                 + second_leg.result.metrics.planning_time_s
+                + time_3a
+                + time_3b
+                + time_3c
             ),
             route=route,
             optimized_cost=best_cost,
@@ -486,6 +451,5 @@ def build_fastest_car_demo(
 __all__ = [
     "FastestCarScenario",
     "build_fastest_car_demo",
-    "build_fastest_car_geometry_preview",
     "fastest_car_demo_arena",
 ]

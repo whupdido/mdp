@@ -3,8 +3,10 @@ from __future__ import annotations
 import pygame
 
 from .renderer import PygameRenderer, RenderOptions
-from .task2_editor_model import Task2EditorController
-
+from .task2_editor_model import (
+    FASTEST_CAR_LIMITS,
+    Task2EditorController,
+)
 
 class Task2EditorApp:
     """Pygame frontend for editing, planning, and playing Fastest Car."""
@@ -18,6 +20,8 @@ class Task2EditorApp:
             height_px=740,
             title="MDP Fastest Car Scenario Editor",
             fastest_car_mode=True,
+            arena_width_cm=controller.setup.arena_width_cm,
+            arena_height_cm=controller.setup.arena_height_cm,
         )
 
         self.options = RenderOptions(
@@ -90,6 +94,10 @@ class Task2EditorApp:
             simulator = self.controller.preview_simulator()
             simulator.step_primitive()
 
+        elif event.key == pygame.K_LEFT:
+            simulator = self.controller.preview_simulator()
+            simulator.step_backward()
+
         elif event.key == pygame.K_BACKSPACE:
             simulator = self.controller.preview_simulator()
             simulator.reset()
@@ -131,48 +139,44 @@ class Task2EditorApp:
         setup = self.controller.setup
 
         if self.selected_field == 0:
+            minimum, maximum = FASTEST_CAR_LIMITS["top_clearance_cm"]
+
             self.controller.set_top_clearance(
                 max(
-                    50,
-                    min(
-                        120,
-                        setup.top_clearance_cm + amount,
-                    ),
+                    minimum,
+                    min(maximum, setup.top_clearance_cm + amount),
                 )
             )
 
         elif self.selected_field == 1:
+            minimum, maximum = FASTEST_CAR_LIMITS["bottom_clearance_cm"]
+
             self.controller.set_bottom_clearance(
                 max(
-                    50,
-                    min(
-                        120,
-                        setup.bottom_clearance_cm + amount,
-                    ),
+                    minimum,
+                    min(maximum, setup.bottom_clearance_cm + amount),
                 )
             )
 
         elif self.selected_field == 2:
+            minimum, maximum = FASTEST_CAR_LIMITS["carpark_to_obstacle_1_cm"]
+
             self.controller.set_carpark_to_obstacle_1(
                 max(
-                    50,
-                    min(
-                        130,
-                        setup.carpark_to_obstacle_1_cm + amount,
-                    ),
+                    minimum,
+                    min(maximum, setup.carpark_to_obstacle_1_cm + amount),
                 )
             )
 
         elif self.selected_field == 3:
+            minimum, maximum = FASTEST_CAR_LIMITS["obstacle_1_to_obstacle_2_cm"]
+
             self.controller.set_obstacle_1_to_obstacle_2(
                 max(
-                    50,
-                    min(
-                        130,
-                        setup.obstacle_1_to_obstacle_2_cm + amount,
-                    ),
+                    minimum,
+                    min(maximum, setup.obstacle_1_to_obstacle_2_cm + amount),
                 )
-            )
+            ) 
 
     def render(self) -> None:
         simulator = self.controller.preview_simulator()
@@ -231,7 +235,7 @@ class Task2EditorApp:
             y,
         )
 
-        y += 35
+        y += 20
 
         self._small(
             "EDIT + PLANNING + PLAYBACK",
@@ -239,34 +243,34 @@ class Task2EditorApp:
             y,
         )
 
-        y += 45
+        y += 30
 
         setup = self.controller.setup
 
         fields = (
-            (
-                "Top clearance",
-                setup.top_clearance_cm,
-                "50–120 cm",
-            ),
-            (
-                "Bottom clearance",
-                setup.bottom_clearance_cm,
-                "50–120 cm",
-            ),
-            (
-                "Carpark → O1",
-                setup.carpark_to_obstacle_1_cm,
-                "50–130 cm",
-            ),
-            (
-                "O1 → O2",
-                setup.obstacle_1_to_obstacle_2_cm,
-                "50–130 cm",
-            ),
-        )
+        (
+            "Top clearance",
+            setup.top_clearance_cm,
+            FASTEST_CAR_LIMITS["top_clearance_cm"],
+        ),
+        (
+            "Bottom clearance",
+            setup.bottom_clearance_cm,
+            FASTEST_CAR_LIMITS["bottom_clearance_cm"],
+        ),
+        (
+            "Carpark → Obs 1",
+            setup.carpark_to_obstacle_1_cm,
+            FASTEST_CAR_LIMITS["carpark_to_obstacle_1_cm"],
+        ),
+        (
+            "Obs 1 → Obs 2",
+            setup.obstacle_1_to_obstacle_2_cm,
+            FASTEST_CAR_LIMITS["obstacle_1_to_obstacle_2_cm"],
+        ),
+    )
 
-        for index, (label, value, limits) in enumerate(fields):
+        for index, (label, value, (minimum, maximum)) in enumerate(fields):
             selected = index == self.selected_field
 
             prefix = "> " if selected else "  "
@@ -280,12 +284,12 @@ class Task2EditorApp:
             y += 25
 
             self._small(
-                f"{value} cm    ({limits})",
+                f"{value} cm    ({minimum}–{maximum} cm)",
                 x + 20,
                 y,
             )
 
-            y += 45
+            y += 30
 
         self._text(
             "ARROWS",
@@ -309,7 +313,7 @@ class Task2EditorApp:
             y,
         )
 
-        y += 35
+        y += 20
 
         self._text(
             "PLANNING",
@@ -333,7 +337,7 @@ class Task2EditorApp:
             y,
         )
 
-        y += 35
+        y += 20
 
         self._text(
             "ROBOT",
@@ -352,7 +356,15 @@ class Task2EditorApp:
         y += 23
 
         self._small(
-            "RIGHT     Step one primitive",
+            "RIGHT     Forward one primitive",
+            x,
+            y,
+        )
+
+        y += 23
+
+        self._small(
+            "LEFT      Back one primitive",
             x,
             y,
         )
@@ -365,7 +377,7 @@ class Task2EditorApp:
             y,
         )
 
-        y += 35
+        y += 20
 
         self._text(
             "EDIT",
@@ -405,7 +417,7 @@ class Task2EditorApp:
             y,
         )
 
-        y += 35
+        y += 20
 
         simulator = self.controller.preview_simulator()
 
@@ -433,7 +445,7 @@ class Task2EditorApp:
             y,
         )
 
-        y += 35
+        y += 20
 
         self._small(
             self.controller.status_message,
