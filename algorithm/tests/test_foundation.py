@@ -151,7 +151,7 @@ def test_motion_model_accepts_multiple_configurable_angles_for_one_command():
         Gear.FORWARD,
         Steering.LEFT,
         turn_angle_rad=math.pi / 4.0,
-        radius_cm=26.1,
+        radius_cm=31.7,
     )
     model = MotionModel(
         primitives=base.primitives + (forty_five,),
@@ -198,7 +198,7 @@ def test_configuration_can_replace_the_command_aligned_primitive_set():
         Gear.FORWARD,
         Steering.LEFT,
         turn_angle_rad=math.pi / 4.0,
-        radius_cm=26.1,
+        radius_cm=31.7,
     )
     new_motion = replace(
         UNCALIBRATED_SIMULATION_CONFIG.motion,

@@ -248,8 +248,8 @@ class ArenaView @JvmOverloads constructor(
         // turn — a straight line is the honest picture there.
         //
         // Left and right are not symmetric. Kush re-measured the turn radii on
-        // 31-Aug-2026 (stm32/STM32_motion_spec.md): FL 317 mm against FR
-        // 413 mm, so a right turn genuinely swings about 30 % wider than a
+        // 31-Aug-2026 (stm32/STM32_motion_spec.md): FL 277 mm against FR
+        // 365 mm, so a right turn genuinely swings about 30 % wider than a
         // left. Drawing them the same would misrepresent the one asymmetry
         // that actually costs us space in the arena.
         val turning = distance > 0.01f && abs(b1 - b0) > 1f
@@ -708,9 +708,9 @@ class ArenaView @JvmOverloads constructor(
         (color and 0x00FFFFFF) or (alpha.coerceIn(0, 255) shl 24)
 
     private companion object {
-        /** Turn radii measured 31-Aug-2026, stm32/STM32_motion_spec.md. */
-        const val RADIUS_FL_MM = 317f
-        const val RADIUS_FR_MM = 413f
+        /** Turn radii measured latest re-measurement, stm32/STM32_motion_spec.md. */
+        const val RADIUS_FL_MM = 277f
+        const val RADIUS_FR_MM = 365f
         const val LEAD_LEFT = 0.48f
 
         const val BOARD = 0xFF080D11.toInt()

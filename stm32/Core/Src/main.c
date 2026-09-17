@@ -18,6 +18,9 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "adc.h"
+#include "dma.h"
+#include "i2c.h"
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
@@ -30,6 +33,10 @@
 #include "control.h"
 #include "command.h"
 #include "calib.h"
+#include "oled.h"
+#include "icm20948.h"
+#include "obstacle_nav.h"
+#include "sensors.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -63,6 +70,7 @@
    26 PINRSTF, 25 BORRSTF. BORRSTF or PORRSTF appearing after a motor stall
    means the supply is collapsing, not that the firmware is wrong. */
 volatile uint32_t reset_flags;
+int calibrated = 0;
 
 /* USER CODE END PV */
 
@@ -76,6 +84,62 @@ static void selftest(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void testMaxSpeed(){
+	/* 1. Put the robot on the actual floor you will compete on */
+	command_send("Measuring MAX speed in 3s...\r\n");
+	HAL_Delay(3000);
+
+	/* 2. Command maximum possible PWM to both motors */
+	motor_left(16799);
+	motor_right(16799);
+	HAL_Delay(500); /* Allow 500 ms for momentum to peak */
+
+	/* 3. Measure encoder ticks over exactly 100 ms (which is 10 control ticks) */
+	int32_t start_l = enc_left_total;
+	int32_t start_r = enc_right_total;
+	HAL_Delay(100);
+	int32_t end_l = enc_left_total;
+	int32_t end_r = enc_right_total;
+
+	/* 4. Stop motors */
+	motor_left(0);
+	motor_right(0);
+
+	/* 5. Calculate average ticks per 10 ms tick */
+	int32_t max_ticks_l = (end_l - start_l) / 10;
+	int32_t max_ticks_r = (end_r - start_r) / 10;
+
+	char buf[64];
+	snprintf(buf, sizeof(buf), "Max L: %ld, Max R: %ld ticks/10ms\r\n", max_ticks_l, max_ticks_r);
+	OLED_Clear();
+	OLED_ShowString(0,0,(const uint8_t* ) buf);
+	OLED_Refresh_Gram();
+	command_send(buf);
+}
+void testSequence(){
+	OLED_Clear();
+	OLED_ShowString(10,30,(const uint8_t* )"Running Test Sequence");
+	OLED_Refresh_Gram();
+	move_straight_mm(800); // 80cm forward
+	HAL_Delay(500);
+	move_turn_deg(1, 1, 90); // turn left forward 90
+	HAL_Delay(500);
+	move_turn_deg(0, 0, 90); // turn right back 90
+	HAL_Delay(500);
+	move_straight_mm(800); //80cm forward
+	HAL_Delay(500);
+	move_turn_deg(0, 1, 90); // turn right forward 90
+	HAL_Delay(500);
+	move_turn_deg(1, 0, 90); // turn left back 90
+	//HAL_Delay(500);
+	//move_pivot_deg(1, 90);
+	//HAL_Delay(500);
+	//move_pivot_deg(0, 90);
+//	HAL_Delay(500);
+//	move_turn_deg(0, 1, 180); // turn right forward 180
+//	HAL_Delay(500);
+//	move_turn_deg(1, 1, 180); // turn left forward 180
+}
 
 /* USER CODE END 0 */
 
@@ -109,6 +173,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_TIM1_Init();
   MX_TIM6_Init();
   MX_TIM8_Init();
@@ -119,12 +184,17 @@ int main(void)
   MX_TIM12_Init();
   MX_TIM10_Init();
   MX_TIM11_Init();
+  MX_I2C2_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   motors_init();
   encoders_init();
   servo_init();
   control_init();
   command_init();
+  OLED_Init();
+  ir_sensors_init();
+  icm20948_init(&hi2c2);
   HAL_TIM_Base_Start_IT(&htim6);       /* starts the 100 Hz control loop */     
 #if SELFTEST
   selftest();
@@ -141,6 +211,46 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
     command_poll();
+    /* --- User Button (SW1 / PE0) --- *
+     * Debounced, and waits for release before acting. The original read the
+     * pin bare and called straight into the display, so one press redrew the
+     * screen hundreds of times; and with PE0 configured NOPULL the pin floated
+     * when the button was open, so it also fired on noise. The pull-up is now
+     * set in gpio.c and in the .ioc, and the press is confirmed here.       */
+    if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET)
+    {
+        HAL_Delay(30);                                   /* debounce         */
+        if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET)
+        {
+            uint32_t high_since = HAL_GetTick();
+            while (HAL_GetTick() - high_since < 60u)     /* confirmed release */
+            {
+                if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET)
+                {
+                    high_since = HAL_GetTick();
+                }
+                HAL_Delay(2);
+            }
+			if (calibrated == 0) {
+
+				OLED_Clear();
+				OLED_ShowString(0, 0, (const uint8_t *)"STABILIZING...");
+				OLED_Refresh_Gram();
+				HAL_Delay(1500);
+
+				command_send("\r\n[IMU] Calibrating Gyro Zero Bias (stationary)...\r\n");
+				OLED_ShowString(0, 20, (const uint8_t *)"Calibrating Gyro...");
+				OLED_Refresh_Gram();
+
+				icm20948_calib_gyro_bias();
+				command_send("[IMU] Gyro bias locked.\r\n");
+				calibrated = 1;
+			}
+            display_both_sensors_oled();
+            HAL_Delay(1000);
+            task_2();
+        }
+    }
 
     /* Heartbeat. If LED3 stops blinking the firmware has trapped -- most
        likely in Error_Handler(), which now blinks fast instead of dying
