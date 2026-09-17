@@ -37,6 +37,13 @@ class FakePort:
         self.written = []
         self.when_empty = when_empty
 
+    @property
+    def in_waiting(self):
+        # pyserial's "bytes waiting" -- the bridge uses it to peek at the
+        # tablet without blocking while a move is running. Anything still
+        # scripted counts as waiting; an exhausted script is a quiet port.
+        return len(self.script)
+
     def readline(self):
         if not self.script:
             if self.when_empty == "silence":
@@ -161,6 +168,60 @@ check("no reply from the board is reported", to_android[-1:], ["STM,NO_REPLY"])
 for reply in ["STALL", "TIMEOUT", "BUSY", "ERR", "ACK"]:
     to_android, _ = run(["FW010"], [reply])
     check(f"board reply {reply} is relayed", to_android[-1:], [f"STM,{reply}"])
+
+# --- board stops short of an obstacle -----------------------------------
+# Since the IR sensors went in, control.c cuts a move short rather than hit
+# something -- and reports it as a [WARN] line *then* DONE. Both must reach
+# the tablet, in that order: Android reads the warning as "position lost"
+# and uses it to talk down the DONE that follows.
+to_android, _ = run(["FW010"], ["", "[WARN] COLLISION AVOIDED! Stopping early.", "DONE"])
+check(
+    "collision warning and its DONE are both relayed, in order",
+    to_android[-2:],
+    ["STM,[WARN] COLLISION AVOIDED! Stopping early.", "STM,DONE"],
+)
+
+# With the command.c fix the same stop reports BLOCKED instead of DONE. It
+# must end the wait: if the bridge did not know BLOCKED, it would sit until
+# STM_TIMEOUT_SECONDS and then tack on a spurious NO_REPLY.
+to_android, _ = run(["FW010"], ["", "[WARN] COLLISION AVOIDED! Stopping early.", "BLOCKED"])
+check(
+    "BLOCKED is relayed and ends the wait",
+    to_android[-2:],
+    ["STM,[WARN] COLLISION AVOIDED! Stopping early.", "STM,BLOCKED"],
+)
+
+# --- STOP while a move is running -----------------------------------------
+# The board is silent for one poll (None), during which the tablet's STOP
+# arrives. It must reach the board *before* the board's reply, not after.
+to_android, to_stm = run(["FW010", "STOP"], [None, "ACK"])
+check("STOP mid-move reaches the board at once", to_stm, ["FW010", "STOP"])
+check(
+    "STOP mid-move is receipted before the board answers",
+    to_android,
+    ["STATUS,RPi bridge ready", "STATUS,SENT,FW010", "STATUS,SENT,STOP", "STM,ACK"],
+)
+
+# --- anything else mid-move waits its turn --------------------------------
+to_android, to_stm = run(["FW010", "FL090"], [None, "DONE", "DONE"])
+check("a second move sent mid-move is held, not lost", to_stm, ["FW010", "FL090"])
+check(
+    "and is forwarded only after the first move ends",
+    to_android,
+    [
+        "STATUS,RPi bridge ready",
+        "STATUS,SENT,FW010", "STM,DONE",
+        "STATUS,SENT,FL090", "STM,DONE",
+    ],
+)
+
+to_android, to_stm = run(["FW010", "ADD,B1,(10,6)"], [None, "DONE"])
+check("a map edit sent mid-move never reaches the board", to_stm, ["FW010"])
+check(
+    "and is acknowledged once the move ends",
+    to_android[-2:],
+    ["STM,DONE", "STATUS,MAP,ADD,B1,(10,6)"],
+)
 
 # --- blank input is ignored ---------------------------------------------
 to_android, to_stm = run(["", "   "])

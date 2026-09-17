@@ -19,6 +19,11 @@ typedef enum {
     MOVE_STALL,      /* both wheels stopped turning -> aborted     */
     MOVE_TIMEOUT,    /* exceeded MOVE_TIMEOUT_TICKS -> aborted     */
     MOVE_ABORT,       /* cancelled by motion_stop() / STOP command  */
+    /* Zhenxi: the IR collision stop in move_straight_mm used to record
+       MOVE_DONE, so a move that stopped 15 cm short replied DONE and the
+       tablet drew the robot where the planner expected it, not where it
+       was. Its own result lets command.c say BLOCKED instead. */
+    MOVE_BLOCKED,    /* stopped short: IR saw an obstacle -> aborted */
 } move_result_t;
 
 void    control_init(void);

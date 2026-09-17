@@ -28,11 +28,24 @@ Not the USB-C port — that's USART1, reserved for FlyMCU. Pi GPIO14→PD9, GPIO
 | `DONE` | Completed. Sent after motion finishes, not on receipt. |
 | `STALL` | Aborted — wheels stopped for 1 s. **Position unknown.** |
 | `TIMEOUT` | Aborted — exceeded 20 s. **Position unknown.** |
+| `BLOCKED` | Aborted — front IR saw an obstacle, stopped short. **Position unknown.** |
 | `ACK` | `STOP` acknowledged. |
 | `BUSY` | Move already running; command **discarded**. |
 | `ERR` | Unrecognised command. |
 
 One command at a time. Send, wait for reply, send next. No queue.
+
+**`STOP` is the exception.** It is read *during* a move (`control.c` polls the
+UART inside its move loops) and answered with `ACK` at once; the interrupted
+move then ends without a reply of its own. Any other command sent mid-move
+gets `BUSY` and is dropped.
+
+**The board also emits free-text diagnostics** on the same UART, each on its
+own line and starting with `[WARN]` — for example
+`[WARN] COLLISION AVOIDED! Stopping early.` just before `BLOCKED`. They are
+informational; the reply code that follows is what to act on. Anyone parsing
+replies must skip lines they do not recognise rather than treat them as the
+reply.
 
 ## Straight line
 
