@@ -1,5 +1,73 @@
 # MDP Task 1 Algorithm and Simulator
 
+## Quick Start
+
+Run the following commands from the repository root. The project is currently
+used as a source tree rather than an installed package, so the root directory
+must be on Python's import path for the absolute `algorithm.*` imports to work.
+The simulator does not otherwise depend on working-directory-relative data
+files.
+
+The recommended desktop environment is Python 3.11; Python 3.11.9 is the
+known-tested version. On Windows PowerShell:
+
+```powershell
+git clone https://github.com/whupdido/mdp.git
+cd mdp
+
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+python --version
+python -c "import pygame; print(pygame.version.ver)"
+python -m pytest --version
+
+python -m algorithm.simulator --task1-editor
+python -m pytest algorithm/tests
+deactivate
+```
+
+If PowerShell blocks activation, use the session-scoped workaround
+`Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then activate
+the environment again. In VS Code, select `.venv\Scripts\python.exe` as the
+interpreter if it is not detected automatically.
+
+On macOS or Linux, use the equivalent setup from the repository root:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python --version
+python -c "import pygame; print(pygame.version.ver)"
+python -m pytest --version
+python -m algorithm.simulator --task1-editor
+python -m pytest algorithm/tests
+deactivate
+```
+
+The interactive simulator requires a graphical display. Renderer tests can
+use Pygame's dummy video driver in headless environments. The Raspberry Pi's
+Python 3.7.3 is a separate compatibility concern and is not the desktop target
+of this setup.
+
+## Project Structure
+
+```text
+algorithm/
+    config.py, constants.py, coordinates.py, enums.py  # shared configuration
+    models/                                             # immutable domain models
+    geometry/                                           # footprint and collision geometry
+    targets/                                            # image faces and observation poses
+    pathfinding/                                        # local Hybrid A* planner
+    routing/                                            # directed cache and Task 1 ordering
+    simulator/                                          # headless playback and Pygame UI
+    tests/                                              # foundation, planner, routing, and UI tests
+```
+
 ## Command cheat sheet
 
 ```text
@@ -8,14 +76,15 @@ python -m algorithm.simulator --task1-demo                   # B.2 calibrated Ta
 python -m algorithm.simulator --task1-editor                 # edit and plan an arena
 python -m algorithm.simulator --task1-random --seed 42       # seeded random arena
 python -m algorithm.simulator --task1-random --seed 42 --solvable
-python -m algorithm.simulator --hybrid-demo                  # Hybrid A* debug demo1
+python -m algorithm.simulator --hybrid-demo                  # Hybrid A* debug demo
 python -m algorithm.simulator --local-plan-demo              # local primitive smoke test
 python -m algorithm.simulator --local-arena-diagnostic       # local real-arena debug
 ```
 
-Editor: W/A/S/D set image face North/West/South/East; N toggles candidates; R
-resets playback; Left/Right Arrow navigate playback backward/forward; F5
-generates raw random; Shift+F5 requests a verified solvable arena; Enter plans;
+Editor: W/A/S/D set image face North/West/South/East; N toggles candidates;
+Delete/Backspace remove the selected obstacle; R resets playback; Left/Right
+Arrow navigate playback backward/forward; F5 generates raw random; Shift+F5
+requests a verified solvable arena; Enter plans;
 Space plays/pauses. Arrow keys only navigate the simulator timeline: they do
 not replan, send inverse robot commands, or modify the STM protocol. B.3
 shortest-time support remains provisional because STM timing is not physically
@@ -648,8 +717,7 @@ Editor controls:
 | N                                          | Show or hide 10/20/30 cm C/L/R observation markers                          |
 | Enter                                      | Validate and plan all five targets                                          |
 | Space                                      | Play or pause a successful plan                                             |
-| Left Arrow                                 | Step backward to the previous primitive or capture event                    |
-| Right Arrow                                | Step forward to the next primitive or capture event                         |
+| Right Arrow                                | Step one primitive or capture event                                         |
 | R                                          | Reset playback execution state while retaining the valid plan and obstacles |
 | F5                                         | Generate an arbitrary raw five-target arena; it may be unsolvable           |
 | Shift+F5                                   | Generate a new planner-verified solvable arena with bounded retries         |
@@ -882,11 +950,11 @@ trails, current command, and visited targets. It uses `WorldViewport` to invert
 screen y while preserving the planner's bottom-left world origin. Rendering
 never mutates or advances simulator state.
 
-Install Pygame locally and run the collision-checked demonstration from the
-repository root:
+Install the declared dependencies and run the collision-checked demonstration
+from the repository root:
 
 ```powershell
-python -m pip install pygame
+python -m pip install -r requirements.txt
 python -m algorithm.simulator --demo
 ```
 
@@ -1045,29 +1113,49 @@ not transport-layer errors.
 
 ## Dependencies and Development Setup
 
-Development environment: Python 3.11.
+Development environment: Python 3.11 (known-tested version: 3.11.9).
 
 Supported Python baseline: Python 3.10+.
 
-The planning core, Hybrid A\*, and headless simulator use only the supported standard
-library. The repository currently has no established Python dependency
-manifest, so Phases 4 through 6 do not create one. Code must continue avoiding features
-that require a newer baseline unless the team deliberately changes the project
-requirement.
+The planning core, Hybrid A\*, and headless simulator use only the supported
+standard library. The interactive simulator requires Pygame, and the test suite
+requires pytest. Both direct dependencies are declared in the root
+`requirements.txt`; it intentionally contains no unrelated packages or full
+`pip freeze` output.
 
 A local environment may be created without committing it:
 
 ```powershell
-py -3.10 -m venv .venv
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install pytest pygame
+python -m pip install -r requirements.txt
 python -m pytest algorithm/tests
 ```
 
-Before later phases add dependency metadata, re-check for a repository-wide
-convention and reuse it. Pygame is a simulator-only dependency: planning,
-geometry, routing, integration contracts, and headless playback import and run
-without it. Renderer smoke tests skip cleanly when Pygame is unavailable.
+Pygame is a simulator-only dependency: planning, geometry, routing, integration
+contracts, and headless playback import and run without it. Renderer smoke tests
+skip cleanly when Pygame is unavailable.
+
+## Raspberry Pi Compatibility Notes
+
+Desktop onboarding targets Python 3.11. The Raspberry Pi currently reports
+Python 3.7.3; that runtime needs a separate compatibility audit and is not
+claimed by the desktop requirements or test result.
+
+## Troubleshooting
+
+- Check `python --version` and use the virtual-environment interpreter, not a
+  global or WindowsApps shim.
+- If activation is blocked, apply the session-only PowerShell policy workaround
+  shown in Quick Start; do not change the machine-wide policy.
+- If `pygame` cannot be imported, activate `.venv` and reinstall
+  `python -m pip install -r requirements.txt` with that interpreter.
+- In VS Code, select `.venv\Scripts\python.exe` explicitly when needed.
+- Run module, simulator, and test commands from the repository root so
+  `algorithm` is importable; alternatively, an installed package or explicit
+  `PYTHONPATH` would be required, but neither is part of this workflow.
+- A display is required for interactive Pygame windows. In headless CI, use the
+  existing dummy-driver renderer tests instead of expecting a visible window.
 
 ## Checklist Mapping
 

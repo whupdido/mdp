@@ -26,8 +26,10 @@ def task1_demo_config() -> PlanningConfig:
     """Return the bounded simulation profile used by the five-target demo.
 
     The 3 cm margin matches the existing B.1 visual profile. One nominal
-    candidate per target keeps startup to 25 deterministic directed searches;
-    the production router and automated tests retain full 8 x 3 support.
+    candidate per target keeps the fixed demo's search space compact; the
+    bounded expansion/time budget is generous enough to materialize the
+    calibrated-radius route reliably. The production router and automated
+    tests retain full 8 x 3 support.
     """
     base = UNCALIBRATED_SIMULATION_CONFIG
     return replace(
@@ -35,13 +37,13 @@ def task1_demo_config() -> PlanningConfig:
         robot=replace(base.robot, safety_margin_cm=3.0),
         observation_lateral_offsets_cm=(0.0,),
         guaranteed_max_candidates_per_target=1,
-        max_expanded_nodes=3000,
+        max_expanded_nodes=5000,
         adaptive_initial_expansions=200,
-        adaptive_max_expansions=3000,
-        local_planning_timeout_s=2.0,
+        adaptive_max_expansions=5000,
+        local_planning_timeout_s=5.0,
         overall_planning_timeout_s=60.0,
-        # Keep the fixed regression demo deterministic and fast; the editor
-        # and production profile exercise the Phase 6.5 partial-angle set.
+        # Keep the fixed regression demo deterministic; the editor and
+        # production profile exercise the Phase 6.5 partial-angle set.
         turn_angles_deg=(90.0,),
         search_turn_angles_deg=(90.0,),
         heading_bin_rad=3.141592653589793 / 2.0,

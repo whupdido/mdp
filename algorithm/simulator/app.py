@@ -18,6 +18,7 @@ def run_simulator(
     *,
     debug_nodes: tuple[Pose, ...] = (),
     show_debug_nodes: bool = False,
+    planning_result: PlanningResult | None = None,
     fastest_car_mode: bool = False,
 ) -> None:
     renderer = PygameRenderer(

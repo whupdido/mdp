@@ -26,7 +26,6 @@ jobs:
           import json
           import os
           import subprocess
-          import urllib.error
           import urllib.request
 
           # ---------------------------------------------------------
@@ -58,7 +57,7 @@ jobs:
                   before = after
 
           # ---------------------------------------------------------
-          # 2. Determine the ACTUAL resulting Git changes
+          # 2. Determine the actual resulting Git changes
           # ---------------------------------------------------------
 
           def run_git(args):
@@ -92,8 +91,6 @@ jobs:
               after
           ])
 
-          # A bounded patch is provided to the LLM.
-          # Git facts remain authoritative.
           patch = run_git([
               "diff",
               "--unified=1",
@@ -140,15 +137,14 @@ jobs:
 
               if len(parts) >= 2:
                   raw_status = parts[0]
+
                   status = status_names.get(
                       raw_status[0],
                       raw_status
                   )
 
                   if raw_status.startswith("R") and len(parts) >= 3:
-                      filename = (
-                          f"{parts[1]} -> {parts[2]}"
-                      )
+                      filename = f"{parts[1]} -> {parts[2]}"
                   else:
                       filename = parts[1]
 
@@ -164,10 +160,12 @@ jobs:
 
           for commit in commits:
               commit_id = commit.get("id", "")[:7]
+
               commit_message = (
                   commit.get("message", "")
                   .splitlines()[0]
               )
+
               author = (
                   commit.get("author", {})
                   .get("name", "Unknown")
@@ -311,7 +309,8 @@ jobs:
           or numerical diff statistics unless necessary to explain the change.
           Those are displayed separately by the Telegram bot.
 
-          9. Write a concise but informative summary of up to 200 words. Less is better. Avoid verbosity. Avoid filler words. Avoid repeating the same information in multiple ways.
+          9. Write a concise but informative summary of up to 200 words.
+          Less is better. Avoid verbosity, filler, and repetition.
 
           10. Prefer complete paragraphs and complete sentences.
 
@@ -320,6 +319,14 @@ jobs:
           12. Always finish the final sentence. Never end mid-sentence.
 
           13. Return only the summary. Do not add a heading.
+
+          14. Do not reveal your reasoning process, analysis, planning,
+          chain of thought, or internal steps.
+
+          15. Do not output phrases such as "Here's a thinking process",
+          "Analysis", "Reasoning", "Step 1", or similar meta commentary.
+
+          16. Output only the final user-facing summary.
           """
 
               request_body = {
@@ -344,9 +351,7 @@ jobs:
                       request_body
                   ).encode("utf-8"),
                   headers={
-                      "Authorization": (
-                          "Bearer " + api_key
-                      ),
+                      "Authorization": "Bearer " + api_key,
                       "Content-Type": "application/json",
                       "HTTP-Referer": (
                           "https://github.com/" + repo
@@ -365,18 +370,58 @@ jobs:
                           response.read().decode("utf-8")
                       )
 
+                  print(
+                      "OpenRouter response model:",
+                      result.get("model", "unknown")
+                  )
+
                   choices = result.get(
                       "choices",
                       []
                   )
 
                   if choices:
-                      ai_summary = (
+                      message_data = (
                           choices[0]
                           .get("message", {})
-                          .get("content", "")
-                          .strip()
                       )
+
+                      content = message_data.get(
+                          "content"
+                      )
+
+                      if isinstance(content, str):
+                          ai_summary = content.strip()
+
+                          bad_prefixes = (
+                              "here's a thinking process",
+                              "here is a thinking process",
+                              "analysis:",
+                              "reasoning:",
+                              "step 1",
+                              "1. analyze",
+                              "1. analyse"
+                          )
+
+                          if ai_summary.lower().startswith(
+                              bad_prefixes
+                          ):
+                              print(
+                                  "OpenRouter returned reasoning "
+                                  "instead of final summary."
+                              )
+                              ai_summary = ""
+
+                      else:
+                          print(
+                              "OpenRouter returned no text content:",
+                              json.dumps(
+                                  choices[0],
+                                  ensure_ascii=False
+                              )[:1000]
+                          )
+
+                          ai_summary = ""
 
               except Exception as exc:
                   print(
@@ -391,22 +436,49 @@ jobs:
                   "The Git change information below is still authoritative."
               )
 
-          # Prevent an unexpectedly verbose model response from
-          # consuming the Telegram message limit.
+          # ---------------------------------------------------------
+          # 7. Keep AI summary within a safe Telegram size
+          # ---------------------------------------------------------
 
           if len(ai_summary) > 1800:
-              ai_summary = (
-                  ai_summary[:1200].rstrip()
-                  + "..."
+              shortened = ai_summary[:1800]
+
+              last_sentence_end = max(
+                  shortened.rfind("."),
+                  shortened.rfind("!"),
+                  shortened.rfind("?")
+              )
+
+              if last_sentence_end > 1000:
+                  ai_summary = (
+                      shortened[:last_sentence_end + 1]
+                      .strip()
+                  )
+              else:
+                  ai_summary = (
+                      shortened.rstrip()
+                      + "..."
+                  )
+
+          # ---------------------------------------------------------
+          # 8. Build Telegram commit list
+          # ---------------------------------------------------------
+
+          telegram_commit_lines = commit_lines[:15]
+
+          if len(commit_lines) > 15:
+              telegram_commit_lines.append(
+                  f"• ... and "
+                  f"{len(commit_lines) - 15} more commits"
               )
 
           # ---------------------------------------------------------
-          # 7. Build Telegram file list
+          # 9. Build Telegram file list
           # ---------------------------------------------------------
 
           file_lines = []
 
-          for status, filename in changed_files[:25]:
+          for status, filename in changed_files[:15]:
               file_lines.append(
                   f"• [{status}] {filename}"
               )
@@ -416,14 +488,14 @@ jobs:
                   "• No resulting file changes"
               )
 
-          if len(changed_files) > 25:
+          if len(changed_files) > 15:
               file_lines.append(
                   f"• ... and "
-                  f"{len(changed_files) - 25} more files"
+                  f"{len(changed_files) - 15} more files"
               )
 
           # ---------------------------------------------------------
-          # 8. Build improved Telegram message
+          # 10. Build Telegram message
           # ---------------------------------------------------------
 
           compare_url = event.get(
@@ -466,7 +538,7 @@ jobs:
           -{deletions} text deletions
 
           💬 Commits Incorporated In This Push
-          {chr(10).join(commit_lines)}
+          {chr(10).join(telegram_commit_lines)}
 
           📁 Actual Resulting File Changes
           {chr(10).join(file_lines)}
@@ -480,7 +552,7 @@ jobs:
               for line in message.splitlines()
           ).strip()
 
-          # Telegram sendMessage has a message size limit.
+          # Telegram sendMessage limit is approximately 4096 characters.
           # Keep some room for the comparison link.
 
           if len(message) > 4000:
@@ -519,7 +591,9 @@ jobs:
           ) as f:
               message = f.read()
 
-          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          token = os.environ[
+              "TELEGRAM_BOT_TOKEN"
+          ]
 
           url = (
               "https://api.telegram.org/bot"

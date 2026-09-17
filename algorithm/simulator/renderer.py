@@ -134,7 +134,7 @@ class PygameRenderer:
         self.arena_height_cm = arena_height_cm
 
         arena_px = float(min(height_px - 80, width_px - 480))
-        self.viewport = self._viewport_for_size(width_px, height_px)
+        self.viewport = WorldViewport(config.arena_size_cm, 40.0, 40.0, arena_px)
         # The stylized body uses the same authoritative footprint transform,
         # but removes safety margin for display only. Collision code continues
         # to use ``config.robot`` unchanged.
@@ -1048,20 +1048,41 @@ class PygameRenderer:
             return
         self._draw_legend(rect.left, rect.top + 27, rect.width, compact=False)
 
-    def _draw_controls_section(
-        self,
-        section: PanelSection,
-        *,
-        compact: bool,
-        editor: bool,
-    ) -> None:
-        """Draw controls inside a preallocated sidebar section."""
+    def _draw_controls_section(self, section: PanelSection, *, compact: bool, editor: bool) -> None:
+        rect = section.rect
         self._draw_section_title("CONTROLS", section)
-        self._draw_controls(
-            section.rect.left,
-            section.rect.top + 23,
-            section.rect.width,
-        )
+        if editor:
+            controls = (
+                ("Enter", "plan route"), ("Space", "play / pause"),
+                ("Left", "previous"), ("Right", "next"),
+                ("R", "reset playback"), ("F5", "random arena"), ("Shift+F5", "verified random"),
+                ("N", "toggle candidates"), ("W/A/S/D", "change image face"),
+                ("Left click", "select / add / move"), ("Right click", "remove obstacle"),
+                ("+ / -", "playback speed"), ("Q / Esc", "quit"),
+            )
+        else:
+            controls = (
+                ("Space", "play / pause"), ("Left", "previous"), ("Right", "next"), ("R", "reset playback"),
+                ("+ / -", "playback speed"), ("N", "candidates"), ("G", "grid labels"),
+                ("C / L", "candidates / rays"), ("F", "footprint"), ("P / E", "planned / executed"),
+                ("D", "debug nodes"), ("Q / Esc", "quit"),
+            )
+        columns = 2 if rect.width < 520 else (2 if compact else 3)
+        row_height = max(15, min(23, (rect.height - 28) // max(1, (len(controls) + columns - 1) // columns)))
+        for index, (key, action) in enumerate(controls):
+            column = index % columns
+            row = index // columns
+            x = rect.left + column * (rect.width // columns)
+            y = rect.top + 24 + row * row_height
+            self._blit_text(key, (x, y), (118, 199, 239), tiny=True)
+            key_width = self._tiny_font.size(key)[0] if self._tiny_font is not None else 52
+            action_x = x + max(52, key_width + 10)
+            self._blit_text(
+                self._fit_text(action, self._tiny_font, rect.width // columns - (action_x - x)),
+                (action_x, y),
+                self.TEXT,
+                tiny=True,
+            )
 
     def _draw_section_title(self, title: str, section: PanelSection) -> None:
         rect = section.rect
