@@ -102,10 +102,36 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
  *   DONE      move completed normally
  *   STALL     aborted: both wheels stopped turning for 1 s
  *   TIMEOUT   aborted: exceeded 20 s
+ *   BLOCKED   aborted: IR saw an obstacle, stopped short (Zhenxi)
  *   ACK       STOP acknowledged
  *   BUSY      a move was already running; this command was DISCARDED
  *   ERR       unrecognised command
  */
+
+/* Zhenxi: the one place a move result becomes a reply.
+ *
+ * Since the moves in control.c became blocking (08-26), dispatch() only
+ * gets control back once the move is over -- so its "not busy, so DONE"
+ * shortcut below fired for every move, and the switch that used to live
+ * in command_poll() (and told STALL from DONE) was never reached. The
+ * tablet has a "position no longer trustworthy" warning that keys off
+ * STALL / TIMEOUT; it had gone silent. Both paths now come through here.
+ *
+ * MOVE_ABORT is deliberately silent: the STOP that caused it was answered
+ * with ACK by its own dispatch() call, from inside the move's poll loop.
+ * Reporting it again here would give the tablet two ACKs for one STOP. */
+static void report_result(void)
+{
+    switch (motion_result()) {
+        case MOVE_DONE:    command_send("DONE\r\n");    break;
+        case MOVE_STALL:   command_send("STALL\r\n");   break;
+        case MOVE_TIMEOUT: command_send("TIMEOUT\r\n"); break;
+        case MOVE_BLOCKED: command_send("BLOCKED\r\n"); break;
+        case MOVE_ABORT:   /* already ACKed, see above */ break;
+        default:           command_send("ACK\r\n");     break;
+    }
+}
+
 static void dispatch(const char *cmd)
 {
     if (strncmp(cmd, "STOP", 4) == 0) { motion_stop(); command_send("ACK\r\n"); return; }
@@ -120,12 +146,17 @@ static void dispatch(const char *cmd)
     else if (!strncmp(cmd, "FR", 2)) move_turn_deg(0, 1, arg);
     else if (!strncmp(cmd, "BL", 2)) move_turn_deg(1, 0, arg);
     else if (!strncmp(cmd, "BR", 2)) move_turn_deg(0, 0, arg);
-    else if (!strncmp(cmd, "IM", 2)) image_found = (uint8_t)arg;
+    /* Zhenxi: IM is not a move, so it must not go through report_result()
+       -- that would echo whatever the *previous* move's verdict was. It
+       replied DONE before (by falling through) and still does.          */
+    else if (!strncmp(cmd, "IM", 2)) { image_found = (uint8_t)arg; command_send("DONE\r\n"); return; }
     else { command_send("ERR\r\n"); return; }
 
-    /* A zero-length move (e.g. FW000) never arms the state machine, so it
-       would otherwise sit here waiting for a motion that never starts. */
-    if (!motion_busy()) { command_send("DONE\r\n"); return; }
+    /* Zhenxi: with blocking moves this is the normal path, not just the
+       zero-length one. Report how it ended, not just that it ended.
+       (A zero-length move sets MOVE_DONE itself before returning, so it
+       still reads as DONE here.)                                         */
+    if (!motion_busy()) { report_result(); return; }
 
     awaiting_ack = 1u;
 }
@@ -142,14 +173,11 @@ void command_poll(void)
     /* Report only once the movement has genuinely finished, and say HOW it
        finished. A stalled move used to be indistinguishable from a completed
        one, so the Pi would keep dead-reckoning from a position the robot
-       never reached. */
+       never reached.
+       Zhenxi: unreachable while the moves block, kept for the day they stop
+       blocking again; routed through report_result() so the two agree.  */
     if (awaiting_ack && !motion_busy()) {
         awaiting_ack = 0u;
-        switch (motion_result()) {
-            case MOVE_DONE:    command_send("DONE\r\n");    break;
-            case MOVE_STALL:   command_send("STALL\r\n");   break;
-            case MOVE_TIMEOUT: command_send("TIMEOUT\r\n"); break;
-            default:           command_send("ACK\r\n");     break;
-        }
+        report_result();
     }
 }

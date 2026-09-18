@@ -36,7 +36,23 @@ ADD_PATTERN = re.compile(r"^ADD,B(\d+),\((\d+),(\d+)\)$")
 SUB_PATTERN = re.compile(r"^SUB,B(\d+)$")
 FACE_PATTERN = re.compile(r"^FACE,B(\d+),([NESW])$")
 
-FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "ACK", "BUSY", "ERR"}
+# Zhenxi: BLOCKED added. The board now stops short when its IR sees an
+# obstacle (stm32/Core/Src/control.c) and, since command.c reports how a
+# move ended rather than just that it ended, that comes back as BLOCKED.
+# Without it here the bridge would relay BLOCKED and then keep waiting for
+# a DONE that never comes, until STM_TIMEOUT_SECONDS -> NO_REPLY.
+FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "BLOCKED", "ACK", "BUSY", "ERR"}
+
+# Zhenxi: how long one stm.readline() blocks inside the wait loop below.
+# It was 1 s (the port's open timeout), which is also how long a STOP from
+# the tablet could sit unread. 0.1 s keeps a STOP under 100 ms and is still
+# 25x longer than the longest line the board sends takes at 115200 baud.
+STM_POLL_SECONDS = 0.1
+
+# Zhenxi: commands that arrived from the tablet while a move was running,
+# other than STOP. They are handled after the move, in order, exactly as if
+# they had arrived then -- see the wait loop in main().
+inbox: list[str] = []
 
 # obstacle_number -> {"pos": (x, y), "face": "N"/"E"/"S"/"W"/None}
 # This is what image recognition needs before it can call report_obstacle():
@@ -89,6 +105,44 @@ def send_line(port, message):
     port.flush()
 
 
+def read_command(port):
+    """One line from the tablet, normalised the way the main loop expects,
+    or None if the port had nothing / only whitespace."""
+    raw = port.readline()
+    if not raw:
+        return None
+    command = raw.decode("ascii", errors="ignore").strip().upper()
+    return command or None
+
+
+def forward_stop_if_pending(android, stm):
+    """
+    Zhenxi: let a STOP through while a move is running.
+
+    The wait loop in main() used to read only the board until the move
+    ended, so a STOP pressed on the tablet mid-move sat in the RFCOMM
+    buffer until the robot had finished on its own -- which is the one
+    moment a STOP button must not wait. The board can now act on a STOP
+    mid-move (control.c polls the UART inside its move loops), so this
+    side has to hand it over promptly too.
+
+    Only STOP jumps the queue. Anything else that arrives mid-move goes
+    into `inbox` and is handled after the move, in order, as before --
+    forwarding it now would just earn a BUSY from the board and lose it.
+    """
+    while android.in_waiting:
+        command = read_command(android)
+        if command is None:
+            continue
+        if command == "STOP":
+            print("Android -> RPi: STOP (mid-move)")
+            send_line(stm, "STOP")
+            send_line(android, "STATUS,SENT,STOP")
+            print("RPi -> STM32: STOP")
+        else:
+            inbox.append(command)
+
+
 def main(on_face_known=None):
     """Run the bridge. `on_face_known(stm, android, obstacle_number)`, if
     given, is called once -- not on every resend -- the moment an obstacle
@@ -96,19 +150,17 @@ def main(on_face_known=None):
     and android connections this loop already holds. Left as None by
     default so test_a1_bridge.py's existing behaviour is unchanged."""
     print(f"Opening STM32 on {STM_DEVICE} at {BAUD_RATE} baud")
-    with serial.Serial(STM_DEVICE, BAUD_RATE, timeout=1) as stm:
+    with serial.Serial(STM_DEVICE, BAUD_RATE, timeout=STM_POLL_SECONDS) as stm:
         print(f"Waiting for Android RFCOMM device {BT_DEVICE}")
         with serial.Serial(BT_DEVICE, BAUD_RATE, timeout=1) as android:
             send_line(android, "STATUS,RPi bridge ready")
             print("Bridge ready")
 
             while True:
-                raw = android.readline()
-                if not raw:
-                    continue
-
-                command = raw.decode("ascii", errors="ignore").strip().upper()
-                if not command:
+                # Zhenxi: anything that queued up during the last move comes
+                # first, so ordering from the tablet's point of view is kept.
+                command = inbox.pop(0) if inbox else read_command(android)
+                if command is None:
                     continue
 
                 print(f"Android -> RPi: {command}")
@@ -153,14 +205,14 @@ def main(on_face_known=None):
                 send_line(android, f"STATUS,SENT,{command}")
                 print(f"RPi -> STM32: {command}")
 
-                # Zhenxi: worth knowing before the timed runs -- while this loop
-                # waits (up to STM_TIMEOUT_SECONDS) nothing is read from Android,
-                # so anything the tablet sends mid-move queues in the RFCOMM
-                # buffer until the move finishes. Fine for a checklist demo,
-                # a problem once obstacles are being edited during a run.
+                # Zhenxi: while this loop waits for the board it now also
+                # watches the tablet -- a STOP is forwarded at once, anything
+                # else is queued in `inbox` for after the move. Map edits made
+                # mid-run therefore still land, in order, once the move ends.
                 deadline = time.monotonic() + STM_TIMEOUT_SECONDS
                 while time.monotonic() < deadline:
-                    reply_raw = stm.readline()
+                    forward_stop_if_pending(android, stm)
+                    reply_raw = stm.readline()  # blocks STM_POLL_SECONDS at most
                     if not reply_raw:
                         continue
 

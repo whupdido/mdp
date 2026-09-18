@@ -283,6 +283,43 @@ class HeadlessSimulator:
                 break
         return advanced
 
+    def step_backward(self) -> bool:
+        """Restore the previous primitive/capture boundary exactly.
+
+        Playback navigation is reconstructed from the immutable timeline rather
+        than by issuing inverse motion commands.  This preserves poses,
+        logical time, executed-path samples, and capture/visited state exactly,
+        including when the previous event is an image capture.
+        """
+        current_index = self._state.current_step_index
+        if current_index <= 0:
+            return False
+        boundaries = [0]
+        for index, step in enumerate(self._steps):
+            if step.capture_obstacle_id is not None or step.ends_primitive:
+                boundaries.append(index + 1)
+        previous = max((boundary for boundary in boundaries if boundary < current_index), default=0)
+        if previous == current_index:
+            return False
+        self._rebuild_to_index(previous)
+        return True
+
+    def _rebuild_to_index(self, target_index: int) -> None:
+        if target_index < 0 or target_index > len(self._steps):
+            raise ValueError("target playback index is outside the timeline")
+        self._elapsed_in_step_s = 0.0
+        self._state = self._initial_state()
+        for _ in range(target_index):
+            self.step_once()
+        if target_index == 0:
+            self._state = replace(self._state, playback_state=PlaybackState.READY)
+        elif target_index < len(self._steps):
+            self._state = replace(
+                self._state,
+                playback_state=PlaybackState.PAUSED,
+                current_motion_command=self._pending_motion_command(),
+            )
+
     def advance(self, delta_s: float) -> None:
         """Advance logical time; rendering frame count has no authority here."""
         if not math.isfinite(delta_s) or delta_s < 0.0:

@@ -232,10 +232,10 @@ def _simulation_motion_model() -> MotionModel:
         primitives=(
             MotionPrimitive("FW", Gear.FORWARD, Steering.STRAIGHT, travel_cm=10.0),
             MotionPrimitive("BW", Gear.REVERSE, Steering.STRAIGHT, travel_cm=10.0),
-            MotionPrimitive("FL", Gear.FORWARD, Steering.LEFT, turn_angle_rad=quarter_turn, radius_cm=26.1, estimated_duration_s=2.4),
-            MotionPrimitive("FR", Gear.FORWARD, Steering.RIGHT, turn_angle_rad=-quarter_turn, radius_cm=31.8, estimated_duration_s=2.9),
-            MotionPrimitive("BL", Gear.REVERSE, Steering.LEFT, turn_angle_rad=-quarter_turn, radius_cm=24.6, estimated_duration_s=2.3),
-            MotionPrimitive("BR", Gear.REVERSE, Steering.RIGHT, turn_angle_rad=quarter_turn, radius_cm=30.3, estimated_duration_s=2.8),
+            MotionPrimitive("FL", Gear.FORWARD, Steering.LEFT, turn_angle_rad=quarter_turn, radius_cm=31.7, estimated_duration_s=2.4),
+            MotionPrimitive("FR", Gear.FORWARD, Steering.RIGHT, turn_angle_rad=-quarter_turn, radius_cm=41.3, estimated_duration_s=2.9),
+            MotionPrimitive("BL", Gear.REVERSE, Steering.LEFT, turn_angle_rad=-quarter_turn, radius_cm=31.2, estimated_duration_s=2.3),
+            MotionPrimitive("BR", Gear.REVERSE, Steering.RIGHT, turn_angle_rad=quarter_turn, radius_cm=42.1, estimated_duration_s=2.8),
         ),
         straight_speed_cm_s=27.3,
     )

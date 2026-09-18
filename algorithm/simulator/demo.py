@@ -42,9 +42,12 @@ def build_demo_simulator() -> tuple[HeadlessSimulator, PlanningConfig]:
         obstacles=(
             # Keep the primary visual scenario comfortably inside the arena;
             # boundary-rejection cases belong to geometry/target tests.
-            Obstacle(1, GridCell(14, 4), Direction.WEST),
-            Obstacle(2, GridCell(9, 15), Direction.SOUTH),
-            Obstacle(3, GridCell(14, 11), Direction.WEST),
+            Obstacle(1, GridCell(18, 18), Direction.WEST),
+            # Calibrated-radius regression fixture: this placement keeps the
+            # scripted FL capture pose within the configured 5 cm goal
+            # tolerance while retaining the full command-coverage sequence.
+            Obstacle(2, GridCell(10, 17), Direction.SOUTH),
+            Obstacle(3, GridCell(18, 12), Direction.WEST),
         ),
     )
     if not is_pose_collision_free(start, arena, config):

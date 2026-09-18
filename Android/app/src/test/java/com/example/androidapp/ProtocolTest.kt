@@ -5,6 +5,7 @@ import com.example.androidapp.protocol.Inbound
 import com.example.androidapp.protocol.Outbound
 import com.example.androidapp.protocol.parseInbound
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -85,13 +86,54 @@ class ProtocolTest {
     }
 
     @Test fun `stm replies come through as stm replies`() {
-        listOf("READY", "DONE", "STALL", "TIMEOUT", "ACK", "BUSY", "ERR", "NO_REPLY").forEach {
+        listOf("READY", "DONE", "STALL", "TIMEOUT", "BLOCKED", "ACK", "BUSY", "ERR", "NO_REPLY").forEach {
             assertEquals("failed on $it", Inbound.StmReply(it), parseInbound("STM,$it"))
         }
     }
 
     @Test fun `stm reply is upper cased so the view model can match on it`() {
         assertEquals(Inbound.StmReply("DONE"), parseInbound("stm,done"))
+    }
+
+    // The board's free-text lines, verbatim from stm32/Core/Src/control.c.
+    // A collision stop arrives as the [WARN] line and then DONE, so the DONE
+    // cannot be trusted on its own — the classification has to come from here.
+
+    @Test fun `a collision stop is a warning that loses the robot's position`() {
+        listOf(
+            "STM,[WARN] COLLISION AVOIDED! Stopping early.",
+            "STM,[WARN] COLLISION! Completing turn in REVERSE.",
+        ).forEach {
+            val reply = parseInbound(it) as Inbound.StmReply
+            assertTrue("not a warning: $it", reply.isWarning)
+            assertTrue("position not marked lost: $it", reply.stoppedShort)
+        }
+    }
+
+    @Test fun `other board warnings are warnings but keep the position`() {
+        listOf(
+            "STM,[WARN] Turn almost complete. Aborting.",
+            "STM,[WARN] Reverse arc blocked!",
+        ).forEach {
+            val reply = parseInbound(it) as Inbound.StmReply
+            assertTrue("not a warning: $it", reply.isWarning)
+            assertFalse("wrongly marked lost: $it", reply.stoppedShort)
+        }
+    }
+
+    @Test fun `plain replies and chatter are neither`() {
+        listOf("STM,DONE", "STM,STALL", "STM,>> Target Matched!", "STM,[IMU] Gyro bias locked.").forEach {
+            val reply = parseInbound(it) as Inbound.StmReply
+            assertFalse("wrongly a warning: $it", reply.isWarning)
+            assertFalse("wrongly marked lost: $it", reply.stoppedShort)
+        }
+    }
+
+    @Test fun `the warning text survives the comma split intact`() {
+        assertEquals(
+            Inbound.StmReply("[WARN] COLLISION AVOIDED! STOPPING EARLY."),
+            parseInbound("STM,[WARN] COLLISION AVOIDED! Stopping early."),
+        )
     }
 
     @Test fun `map acknowledgement is a receipt, not a status line`() {

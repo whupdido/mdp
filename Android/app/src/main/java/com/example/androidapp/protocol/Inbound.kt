@@ -25,10 +25,29 @@ sealed class Inbound {
 
     /**
      * STM,<reply> — the Pi bridge relaying whatever the STM board said, one of
-     * READY, DONE, STALL, TIMEOUT, ACK, BUSY, ERR, or NO_REPLY when the bridge
+     * READY, DONE, STALL, TIMEOUT, BLOCKED, ACK, BUSY, ERR, or NO_REPLY when the bridge
      * gave up waiting. See rpi/a1_bridge.py.
+     *
+     * The board also talks in free text. Since the IR sensors went in it will
+     * cut a move short rather than hit something, and says so with a line
+     * like `[WARN] COLLISION AVOIDED! Stopping early.` — followed by BLOCKED
+     * on current firmware, or by a plain DONE on firmware from before
+     * command.c reported how a move ended (stm32/Core/Src/control.c,
+     * move_straight_mm). The warning line is classified here rather than just
+     * echoed so the app is right either way.
      */
-    data class StmReply(val reply: String) : Inbound()
+    data class StmReply(val reply: String) : Inbound() {
+
+        /** The board's diagnostics all start with `[WARN]`. */
+        val isWarning: Boolean get() = reply.startsWith("[WARN]")
+
+        /**
+         * The board stopped, or reversed out, because it saw an obstacle. The
+         * robot is somewhere other than where the planner thinks it is, so the
+         * map is no longer trustworthy — the same situation as STALL.
+         */
+        val stoppedShort: Boolean get() = isWarning && "COLLISION" in reply
+    }
 
     /** STATUS,SENT,<command> — the bridge confirming it forwarded a command. */
     data class Forwarded(val command: String) : Inbound()
