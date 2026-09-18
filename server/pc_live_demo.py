@@ -15,7 +15,7 @@ NAMES_PATH = HERE / "image_names.json"
 PORT = 6000
 
 # Placeholder ID for the bullseye/marker class -- not a scorable image.
-BULLSEYE_PLACEHOLDER = 41
+BULLSEYE_PLACEHOLDER = 0
 
 
 def load_mapping() -> dict[int, int]:

@@ -32,7 +32,7 @@ from capture_and_report import capture_frame, detect, send_to_stm
 STM_DEVICE = "/dev/ttyACM0"
 BAUD_RATE = 115200
 
-BULLSEYE_ID = 41       # the marker itself -- not a valid face, keep searching
+BULLSEYE_ID = 0        # the marker itself -- not a valid face, keep searching
 MAX_ATTEMPTS = 8        # give up after this many steps around the obstacle
 STEP_FORWARD_CM = 15     # how far to creep forward each step
 TURN_DEGREES = 30         # how much to turn each step -- FL preferred, needs less clearance (see STM32_motion_spec.md)
