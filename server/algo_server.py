@@ -14,13 +14,13 @@ The RPi side is rpi/algo_client.py's plan_route().
 import math
 import socket
 
-from algorithm.config import UNCALIBRATED_SIMULATION_CONFIG
 from algorithm.enums import Direction, PlanningStatus, Steering
 from algorithm.models.arena import ArenaInput
 from algorithm.models.motion import CaptureStep, MoveStep
 from algorithm.models.obstacle import Obstacle
 from algorithm.models.pose import GridCell, Pose
 from algorithm.routing.planner import Task1Planner
+from algorithm.simulator.task1_demo import task1_demo_config
 
 from server.utils import recv_json, send_json
 
@@ -105,7 +105,12 @@ def handle_client(conn: socket.socket, planner: Task1Planner) -> None:
 
 
 def serve() -> None:
-    planner = Task1Planner(UNCALIBRATED_SIMULATION_CONFIG)
+    # The Android protocol places the robot centre at (1, 1), i.e. 15 cm
+    # from each lower arena edge.  The general uncalibrated profile expands
+    # the 23 cm body by 5 cm per side, which puts that documented start pose
+    # outside the arena.  The bounded Task 1 profile uses the repository's
+    # validated 3 cm integration margin and conservative search settings.
+    planner = Task1Planner(task1_demo_config())
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
