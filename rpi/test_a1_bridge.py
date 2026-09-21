@@ -98,11 +98,14 @@ FAILURES = []
 
 
 def check(label, actual, expected):
-    ok = actual == expected
+    comparable = actual if any(item.startswith("ROBOT,") for item in expected) else [
+        item for item in actual if not item.startswith("ROBOT,")
+    ]
+    ok = comparable == expected
     print(f"  {'PASS' if ok else 'FAIL'}  {label}")
     if not ok:
         print(f"          expected: {expected}")
-        print(f"          actual:   {actual}")
+        print(f"          actual:   {comparable}")
         FAILURES.append(label)
 
 
@@ -120,6 +123,11 @@ check(
     "receipts and relays the board reply",
     to_android,
     ["STATUS,RPi bridge ready", "STATUS,SENT,FW010", "STM,DONE"],
+)
+check(
+    "reports the updated robot cell after a confirmed move",
+    [item for item in to_android if item.startswith("ROBOT,")],
+    ["ROBOT,1,2,N"],
 )
 
 # --- every motion verb ---------------------------------------------------
@@ -183,8 +191,8 @@ check(
 )
 check(
     "next move waits for DONE after delayed STOP ACK",
-    to_android[-2:],
-    ["STM,ACK", "STM,DONE"],
+    [item for item in to_android if item.startswith("STM,")],
+    ["STM,DONE", "STM,ACK", "STM,DONE"],
 )
 
 # STOP clears commands already queued in the bridge and commands still
@@ -212,7 +220,7 @@ check(
 to_android, _ = run(["FW010"], ["", "[WARN] COLLISION AVOIDED! Stopping early.", "DONE"])
 check(
     "collision warning and its DONE are both relayed, in order",
-    to_android[-2:],
+    [item for item in to_android if item.startswith("STM,")],
     ["STM,[WARN] COLLISION AVOIDED! Stopping early.", "STM,DONE"],
 )
 
@@ -254,7 +262,7 @@ to_android, to_stm = run(["FW010", "ADD,B1,(10,6)"], [None, "DONE"])
 check("a map edit sent mid-move never reaches the board", to_stm, ["FW010"])
 check(
     "and is acknowledged once the move ends",
-    to_android[-2:],
+    [item for item in to_android if item.startswith("STM,") or item.startswith("STATUS,MAP,")],
     ["STM,DONE", "STATUS,MAP,ADD,B1,(10,6)"],
 )
 
