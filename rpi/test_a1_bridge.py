@@ -170,21 +170,38 @@ for reply in ["STALL", "TIMEOUT", "BUSY", "ERR"]:
     check(f"board reply {reply} is relayed", to_android[-1:], [f"STM,{reply}"])
 
 # ACK is a STOP acknowledgement, not a movement completion. A delayed ACK
-# from the previous STOP must not make the next move look complete before its
-# DONE arrives.
+# from a previous STOP must not make the next movement look complete before
+# its DONE arrives.
 to_android, to_stm = run(
-    ["FW010", "STOP", "FW020"],
-    [None, "ACK", "ACK", "DONE"],
+    ["FW010", "FL090"],
+    ["DONE", "ACK", "DONE"],
 )
 check(
     "delayed STOP ACK does not finish the next move",
     to_stm,
-    ["FW010", "STOP", "FW020"],
+    ["FW010", "FL090"],
 )
 check(
     "next move waits for DONE after delayed STOP ACK",
     to_android[-2:],
     ["STM,ACK", "STM,DONE"],
+)
+
+# STOP clears commands already queued in the bridge and commands still
+# buffered on the Android link. Neither command after STOP may reach STM32.
+to_android, to_stm = run(
+    ["FW010", "FL090", "STOP", "BR090"],
+    [None, "ACK"],
+)
+check(
+    "STOP clears queued and buffered commands",
+    to_stm,
+    ["FW010", "STOP"],
+)
+check(
+    "STOP queue clear still returns its acknowledgement",
+    to_android[-2:],
+    ["STATUS,SENT,STOP", "STM,ACK"],
 )
 
 # --- board stops short of an obstacle -----------------------------------

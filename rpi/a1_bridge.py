@@ -120,6 +120,51 @@ def read_command(port):
     return command or None
 
 
+def discard_pending_android(android):
+    """Discard complete commands already buffered by the tablet.
+
+    STOP is a queue reset: commands that arrived before it must not run after
+    the current move ends. The serial driver may already have copied some of
+    those commands into its receive buffer, so clearing ``inbox`` alone is
+    insufficient.
+    """
+    discarded = 0
+    while android.in_waiting:
+        if read_command(android) is not None:
+            discarded += 1
+    return discarded
+
+
+def next_command(android):
+    """Return the next command, giving a buffered STOP priority.
+
+    After a move completes, queued commands may be waiting in ``inbox`` while
+    a STOP is still in Android's receive buffer. Drain available Android data
+    first so STOP can clear the queue instead of waiting behind it.
+    """
+    # With no queued command, read exactly one new command so a STOP that is
+    # already behind the first movement still interrupts that movement. Once
+    # a queue exists, drain the available Android data to give STOP priority
+    # over the queued work.
+    if not inbox:
+        return read_command(android)
+
+    stop_seen = False
+    while android.in_waiting:
+        command = read_command(android)
+        if command is None:
+            continue
+        if command == "STOP":
+            stop_seen = True
+        else:
+            inbox.append(command)
+
+    if stop_seen:
+        inbox.clear()
+        return "STOP"
+    return inbox.pop(0)
+
+
 def forward_stop_if_pending(android, stm):
     """
     Zhenxi: let a STOP through while a move is running.
@@ -141,7 +186,11 @@ def forward_stop_if_pending(android, stm):
         if command is None:
             continue
         if command == "STOP":
+            cleared = len(inbox) + discard_pending_android(android)
+            inbox.clear()
             print("Android -> RPi: STOP (mid-move)")
+            if cleared:
+                print(f"[QUEUE] cleared {cleared} pending command(s)")
             send_line(stm, "STOP")
             send_line(android, "STATUS,SENT,STOP")
             print("RPi -> STM32: STOP")
@@ -167,7 +216,7 @@ def main(on_face_known=None):
             while True:
                 # Zhenxi: anything that queued up during the last move comes
                 # first, so ordering from the tablet's point of view is kept.
-                command = inbox.pop(0) if inbox else read_command(android)
+                command = next_command(android)
                 if command is None:
                     continue
 
