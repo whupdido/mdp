@@ -165,9 +165,27 @@ to_android, _ = run(["FW010"], [])  # board never answers at all
 check("no reply from the board is reported", to_android[-1:], ["STM,NO_REPLY"])
 
 # --- board aborts --------------------------------------------------------
-for reply in ["STALL", "TIMEOUT", "BUSY", "ERR", "ACK"]:
+for reply in ["STALL", "TIMEOUT", "BUSY", "ERR"]:
     to_android, _ = run(["FW010"], [reply])
     check(f"board reply {reply} is relayed", to_android[-1:], [f"STM,{reply}"])
+
+# ACK is a STOP acknowledgement, not a movement completion. A delayed ACK
+# from the previous STOP must not make the next move look complete before its
+# DONE arrives.
+to_android, to_stm = run(
+    ["FW010", "STOP", "FW020"],
+    [None, "ACK", "ACK", "DONE"],
+)
+check(
+    "delayed STOP ACK does not finish the next move",
+    to_stm,
+    ["FW010", "STOP", "FW020"],
+)
+check(
+    "next move waits for DONE after delayed STOP ACK",
+    to_android[-2:],
+    ["STM,ACK", "STM,DONE"],
+)
 
 # --- board stops short of an obstacle -----------------------------------
 # Since the IR sensors went in, control.c cuts a move short rather than hit

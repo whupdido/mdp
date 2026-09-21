@@ -41,7 +41,12 @@ FACE_PATTERN = re.compile(r"^FACE,B(\d+),([NESW])$")
 # move ended rather than just that it ended, that comes back as BLOCKED.
 # Without it here the bridge would relay BLOCKED and then keep waiting for
 # a DONE that never comes, until STM_TIMEOUT_SECONDS -> NO_REPLY.
-FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "BLOCKED", "ACK", "BUSY", "ERR"}
+# ACK is only a terminal reply for a STOP.  A delayed ACK from a previous
+# STOP can arrive before the next movement's result; treating every ACK as
+# terminal lets the bridge send the next command while that movement is still
+# running.  The wait loop handles ACK explicitly and only ends on it when the
+# current command actually included STOP.
+FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "BLOCKED", "BUSY", "ERR"}
 
 # Zhenxi: how long one stm.readline() blocks inside the wait loop below.
 # It was 1 s (the port's open timeout), which is also how long a STOP from
@@ -130,6 +135,7 @@ def forward_stop_if_pending(android, stm):
     into `inbox` and is handled after the move, in order, as before --
     forwarding it now would just earn a BUSY from the board and lose it.
     """
+    stop_forwarded = False
     while android.in_waiting:
         command = read_command(android)
         if command is None:
@@ -139,8 +145,10 @@ def forward_stop_if_pending(android, stm):
             send_line(stm, "STOP")
             send_line(android, "STATUS,SENT,STOP")
             print("RPi -> STM32: STOP")
+            stop_forwarded = True
         else:
             inbox.append(command)
+    return stop_forwarded
 
 
 def main(on_face_known=None):
@@ -209,9 +217,10 @@ def main(on_face_known=None):
                 # watches the tablet -- a STOP is forwarded at once, anything
                 # else is queued in `inbox` for after the move. Map edits made
                 # mid-run therefore still land, in order, once the move ends.
+                stop_requested = command == "STOP"
                 deadline = time.monotonic() + STM_TIMEOUT_SECONDS
                 while time.monotonic() < deadline:
-                    forward_stop_if_pending(android, stm)
+                    stop_requested = forward_stop_if_pending(android, stm) or stop_requested
                     reply_raw = stm.readline()  # blocks STM_POLL_SECONDS at most
                     if not reply_raw:
                         continue
@@ -222,6 +231,13 @@ def main(on_face_known=None):
 
                     print(f"STM32 -> RPi: {reply}")
                     send_line(android, f"STM,{reply}")
+                    if reply == "ACK":
+                        if stop_requested:
+                            break
+                        # ACK belongs to a STOP, not to the movement currently
+                        # being waited on. Relay it for diagnostics but keep
+                        # waiting for this movement's actual result.
+                        continue
                     if reply in FINAL_REPLIES:
                         break
                 else:
