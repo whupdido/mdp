@@ -87,7 +87,11 @@ def run_route(steps, stm, android):
             if reply == "DONE":
                 pose.apply(command)
                 a1_bridge.send_pose(android, pose)
-            if reply in ("BLOCKED", "STALL", "NO_REPLY"):
+            # Any non-success terminal reply means the planner's pose is no
+            # longer trustworthy.  In particular, continuing after BUSY can
+            # flood the STM32 with commands that it will reject while the
+            # route runner incorrectly proceeds to later captures.
+            if reply in ("BLOCKED", "STALL", "TIMEOUT", "BUSY", "ERR", "NO_REPLY"):
                 print(f"[TASK1] Move ended in {reply} -- stopping route early.")
                 return
         elif step["type"] == "capture":
