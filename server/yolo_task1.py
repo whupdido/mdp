@@ -144,6 +144,11 @@ class Server:
     # ==========================================================
     def handle_client(self, conn: socket.socket):
         try:
+            # Explicitly keep the accepted connection blocking.  The
+            # listening socket has a one-second accept timeout, but inference
+            # and frame transfer can legitimately take longer than that.
+            conn.setblocking(True)
+            conn.settimeout(None)
             # Send class names metadata immediately upon connection
             metadata = {"names": self.main_model.names}
             send_json(conn, metadata)
