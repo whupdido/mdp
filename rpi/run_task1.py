@@ -75,6 +75,8 @@ def wait_for_stm_reply(stm, android):
 
 
 def run_route(steps, stm, android):
+    pose = a1_bridge.PoseTracker()
+    a1_bridge.send_pose(android, pose)
     for step in steps:
         if step["type"] == "move":
             command = step["command"]
@@ -82,6 +84,9 @@ def run_route(steps, stm, android):
             a1_bridge.send_line(android, f"STATUS,SENT,{command}")
             print(f"RPi -> STM32: {command}")
             reply = wait_for_stm_reply(stm, android)
+            if reply == "DONE":
+                pose.apply(command)
+                a1_bridge.send_pose(android, pose)
             if reply in ("BLOCKED", "STALL", "NO_REPLY"):
                 print(f"[TASK1] Move ended in {reply} -- stopping route early.")
                 return
