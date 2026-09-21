@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import sys
 import time
+import math
 
 import serial
 
@@ -65,6 +66,71 @@ inbox: list[str] = []
 # arrived at obstacle N, go check it" (the real navigation loop -- not
 # written yet) should read from this dict once the robot is in position.
 obstacles: dict[int, dict] = {}
+
+
+class PoseTracker:
+    """Estimate the Android map pose from commands confirmed by the STM32.
+
+    This is command odometry: it is useful for keeping the app's map in sync,
+    but it is not a substitute for wheel encoders or a physical re-reference.
+    Coordinates are kept continuously in centimetres and reported as the
+    nearest Android cell centre.
+    """
+
+    _HEADINGS = ("E", "N", "W", "S")
+    _RADIUS_CM = {"FL": 27.7, "FR": 36.5, "BL": 28.1, "BR": 38.3}
+
+    def __init__(self):
+        self.x_cm = 15.0
+        self.y_cm = 15.0
+        self.heading_rad = math.pi / 2.0
+
+    def wire_pose(self) -> str:
+        # Android's grid uses cell centres at 5, 15, ... cm.  The robot centre
+        # cell is the nearest centre to the estimated continuous position.
+        x = max(1, min(18, math.floor(self.x_cm / 10.0)))
+        y = max(1, min(18, math.floor(self.y_cm / 10.0)))
+        heading = min(
+            self._HEADINGS,
+            key=lambda token: abs((self.heading_rad - self._heading(token) + math.pi) % (2 * math.pi) - math.pi),
+        )
+        return f"ROBOT,{x},{y},{heading}"
+
+    @classmethod
+    def _heading(cls, token: str) -> float:
+        return {"E": 0.0, "N": math.pi / 2.0, "W": math.pi, "S": -math.pi / 2.0}[token]
+
+    def apply(self, command: str) -> str | None:
+        match = re.fullmatch(r"(FW|BW|FL|FR|BL|BR)(\d{3})", command)
+        if not match:
+            return None
+        verb, raw = match.groups()
+        magnitude = float(raw)
+        if verb in ("FW", "BW"):
+            distance = magnitude if verb == "FW" else -magnitude
+            self.x_cm += distance * math.cos(self.heading_rad)
+            self.y_cm += distance * math.sin(self.heading_rad)
+            return self.wire_pose()
+
+        angle = math.radians(magnitude)
+        if verb in ("FR", "BL"):
+            angle = -angle
+        gear_sign = -1.0 if verb.startswith("B") else 1.0
+        radius = self._RADIUS_CM[verb]
+        # Keep the signed turn angle: FR/BL use a negative mathematical
+        # heading change while FL/BR use a positive one.  Dropping that sign
+        # mirrors right turns and sends the reported map pose to the wrong
+        # side of the arena.
+        signed_radius = gear_sign * abs(angle) * radius / angle
+        start_heading = self.heading_rad
+        self.x_cm += signed_radius * (math.sin(start_heading + angle) - math.sin(start_heading))
+        self.y_cm -= signed_radius * (math.cos(start_heading + angle) - math.cos(start_heading))
+        self.heading_rad = (start_heading + angle + math.pi) % (2 * math.pi) - math.pi
+        return self.wire_pose()
+
+
+def send_pose(android, tracker: PoseTracker) -> None:
+    send_line(android, tracker.wire_pose())
 
 
 def handle_map_message(command: str) -> str:
@@ -211,6 +277,7 @@ def main(on_face_known=None):
         print(f"Waiting for Android RFCOMM device {BT_DEVICE}")
         with serial.Serial(BT_DEVICE, BAUD_RATE, timeout=1) as android:
             send_line(android, "STATUS,RPi bridge ready")
+            pose = PoseTracker()
             print("Bridge ready")
 
             while True:
@@ -288,6 +355,9 @@ def main(on_face_known=None):
                         # waiting for this movement's actual result.
                         continue
                     if reply in FINAL_REPLIES:
+                        if reply == "DONE" and command != "STOP":
+                            pose.apply(command)
+                            send_pose(android, pose)
                         break
                 else:
                     send_line(android, "STM,NO_REPLY")
