@@ -291,6 +291,11 @@ class Server:
                 except socket.timeout:
                     continue
                 print(f"[SERVER] Connected from {addr}")
+                # The listening socket uses a short timeout so the outer loop
+                # can remain interruptible.  Do not let that timeout leak onto
+                # the client socket: YOLO inference can take longer than one
+                # second, and the Pi must be allowed to wait for the result.
+                conn.settimeout(None)
 
                 self.handle_client(conn)
 
