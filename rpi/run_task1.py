@@ -54,7 +54,7 @@ def obstacles_payload():
     return payload
 
 
-def wait_for_stm_reply(stm, android):
+def wait_for_stm_reply(stm, android, relay_to_android=True):
     """Same wait-for-DONE/STALL/... loop as a1_bridge.main(), reused instead
     of duplicated, including forwarding a mid-move STOP from Android."""
     deadline = time.monotonic() + a1_bridge.STM_TIMEOUT_SECONDS
@@ -67,16 +67,20 @@ def wait_for_stm_reply(stm, android):
         if not reply:
             continue
         print(f"STM32 -> RPi: {reply}")
-        a1_bridge.send_line(android, f"STM,{reply}")
+        if relay_to_android:
+            a1_bridge.send_line(android, f"STM,{reply}")
         if reply in a1_bridge.FINAL_REPLIES:
             return reply
-    a1_bridge.send_line(android, "STM,NO_REPLY")
+    if relay_to_android:
+        a1_bridge.send_line(android, "STM,NO_REPLY")
     return "NO_REPLY"
 
 
-def run_route(steps, stm, android):
+def run_route(steps, stm, android, run_id=None):
     pose = a1_bridge.PoseTracker()
     a1_bridge.send_pose(android, pose)
+    expected_images = sum(step["type"] == "capture" for step in steps)
+    capture_index = 0
     for step in steps:
         if step["type"] == "move":
             command = step["command"]
@@ -95,9 +99,31 @@ def run_route(steps, stm, android):
                 print(f"[TASK1] Move ended in {reply} -- stopping route early.")
                 return
         elif step["type"] == "capture":
+            capture_index += 1
             obstacle_number = step["obstacle_id"]
             print(f"[TASK1] Reached obstacle {obstacle_number}, capturing...")
-            report_obstacle(obstacle_number, android_serial=android, stm_serial=stm)
+            class_id = report_obstacle(
+                obstacle_number,
+                android_serial=android,
+                stm_serial=stm,
+                run_id=run_id,
+                expected_images=expected_images,
+                capture_index=capture_index,
+            )
+            if class_id is None:
+                continue
+
+            # report_obstacle() sends IMxxx to the STM, which replies DONE.
+            # Consume that reply here before sending the next move. Otherwise
+            # the queued IM reply is mistaken for the next move's completion,
+            # and the following route command reaches the STM mid-move and is
+            # rejected as BUSY.
+            reply = wait_for_stm_reply(stm, android, relay_to_android=False)
+            if reply != "DONE":
+                print(f"[TASK1] STM rejected image result IM{class_id:03d}: {reply}")
+                a1_bridge.send_line(android, f"MSG,STM rejected image result: {reply}")
+                return
+            print(f"[TASK1] STM acknowledged image result IM{class_id:03d}")
     print("[TASK1] Route complete.")
     a1_bridge.send_line(android, "MSG,Task 1 route complete")
 
@@ -121,7 +147,8 @@ def main():
                 a1_bridge.send_line(android, "MSG,Planning failed, check RPi logs")
                 return
 
-            run_route(steps, stm, android)
+            run_id = time.strftime("%Y%m%d-%H%M%S")
+            run_route(steps, stm, android, run_id=run_id)
 
 
 if __name__ == "__main__":

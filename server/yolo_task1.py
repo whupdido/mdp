@@ -11,6 +11,8 @@ import numpy as np
 import json
 
 from server.utils import recv_pickle, send_json, send_pickle
+from server.detection_labels import draw_detection_annotations
+from server.collage import Task1CollageCollector
 
 class Server:
     def __init__(self, config):
@@ -30,6 +32,7 @@ class Server:
         self.unwanted = unwanted
         self.num_images_to_save = num_images
         self.fail_threshold = fail_threshold
+        self.collage_collector = Task1CollageCollector("yolo_logs")
 
         self.main_model_idx = None
 
@@ -42,6 +45,10 @@ class Server:
         # deep from repo root); here it's server/ (one level deep), so project
         # root is only one dirname() up, not two.
         project_root = os.path.dirname(script_dir)
+
+        names_path = os.path.join(script_dir, "image_names.json")
+        with open(names_path, "r") as f:
+            self.image_names = {int(key): value for key, value in json.load(f).items()}
 
         for i, cfg in enumerate(model_configs):
             path = cfg["path"]
@@ -124,10 +131,6 @@ class Server:
                     verbose=False,
                 )[0]
 
-                ts = time.strftime("%Y%m%d-%H%M%S")
-                filename = f"yolo_logs/frame_{ts}_{idx}_{i}.jpg"
-                cv2.imwrite(filename, result.plot())
-
                 # Check if this frame produced a detection
                 if len(result.boxes) > 0:
                     print(f"[SERVER] Model {idx} found detection, stopping early.")
@@ -164,6 +167,7 @@ class Server:
                 obj = recv_pickle(conn)
                 if obj is None:
                     break
+                saved_filename = None
 
                 # ---- Run models in parallel ----
                 results = [None] * len(self.models)
@@ -213,10 +217,11 @@ class Server:
                     for f in frames:
                         annotated = f.copy()
                         ts = time.strftime("%Y%m%d-%H%M%S")
-                        filename = f"yolo_logs/frame_{ts}_{frame_counter}.jpg"
+                        filename = f"yolo_logs/frame_{ts}_{time.time_ns()}_{frame_counter}.jpg"
                         cv2.imwrite(filename, annotated)
                         print(f"[SERVER] No detections. Saved main model frame: {filename}")
                         frame_counter += 1
+                        saved_filename = filename
                     if failed == self.fail_threshold:
                         saved_files.append(filename)
                         failed = 0
@@ -237,18 +242,6 @@ class Server:
                     best_model_idx = class_model_map.get(best_class, 0)
                     best_result = results[best_model_idx]
 
-                    # ---- Save once with chosen model ----
-                    annotated = best_result.plot()
-
-                    ts = time.strftime("%Y%m%d-%H%M%S")
-                    filename = f"yolo_logs/frame_{ts}_{frame_counter}.jpg"
-                    cv2.imwrite(filename, annotated)
-                    frame_counter += 1
-                    saved_files.append(filename)
-
-                    print(f"[SERVER] Saved annotated image (model {best_model_idx}, class {best_class}): {filename}")
-                    print(f"[SERVER] Best class ID: {best_class}")
-
                     boxes = best_result.boxes.xyxy.cpu().numpy()
                     confs = best_result.boxes.conf.cpu().numpy()
                     cids = best_result.boxes.cls.cpu().numpy().astype(int)
@@ -262,6 +255,24 @@ class Server:
                     confs = confs[mask]
                     cids = cids[mask]
 
+                    # Draw the official image ID and a human-readable
+                    # description inside every retained boundary box.  Using
+                    # result.plot() here would label the raw model class
+                    # instead of the post-mapping MDP image ID.
+                    annotated = draw_detection_annotations(
+                        best_result.orig_img.copy(), boxes, cids, self.image_names
+                    )
+
+                    ts = time.strftime("%Y%m%d-%H%M%S")
+                    filename = f"yolo_logs/frame_{ts}_{time.time_ns()}_{frame_counter}.jpg"
+                    cv2.imwrite(filename, annotated)
+                    frame_counter += 1
+                    saved_files.append(filename)
+                    saved_filename = filename
+
+                    print(f"[SERVER] Saved annotated image (model {best_model_idx}, class {best_class}): {filename}")
+                    print(f"[SERVER] Best class ID: {best_class}")
+
                     ok, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
                     annotated_jpeg = buf.tobytes() if ok else None
 
@@ -273,11 +284,22 @@ class Server:
                         "class_id": int(best_class),
                     })
 
-                if len(saved_files) == self.num_images_to_save:
+                run_id = obj.get("run_id")
+                if run_id and saved_filename:
+                    collage_path = self.collage_collector.record(
+                        run_id=str(run_id),
+                        expected_images=int(obj.get("expected_images") or self.num_images_to_save),
+                        frame_path=saved_filename,
+                        obstacle_id=obj.get("obstacle_id"),
+                        capture_index=int(obj.get("capture_index") or 1),
+                    )
+                    if collage_path is not None:
+                        print(f"[SERVER] Task 1 collage ready: {collage_path}")
+                elif len(saved_files) >= self.num_images_to_save:
                     stitched = self._stitch_frames(saved_files, rows=2, cols=4, width=640, height=480)
                     out_path = f"yolo_logs/stitched_{time.strftime('%Y%m%d-%H%M%S')}.jpg"
                     cv2.imwrite(out_path, stitched)
-                    print(f"[SERVER] Stitched 8 frames → {out_path}")
+                    print(f"[SERVER] Stitched {len(saved_files)} frames → {out_path}")
                     saved_files.clear()
 
         except Exception as e:
