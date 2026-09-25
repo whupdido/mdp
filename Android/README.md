@@ -21,6 +21,7 @@ whoever is building it.
 
 - [If you are integrating, read this](#if-you-are-integrating-read-this)
 - [The message protocol](#the-message-protocol)
+- [Starting a run](#starting-a-run)
 - [Quick start](#quick-start)
 - [Using the app](#using-the-app)
 - [Testing without a robot](#testing-without-a-robot)
@@ -83,11 +84,36 @@ in isolation and the error only appears once they are connected.
 | Obstacle dragged off the arena | `SUB,B<n>` | C.6 |
 | Target face annotated | `FACE,B<n>,<D>` | C.7 |
 | Drive controls | `FW<ddd>` `BW<ddd>` `FL<ddd>` `FR<ddd>` `BL<ddd>` `BR<ddd>` `STOP` | C.3 |
+| START pressed, Task 1 | the whole map again, then `START` | rules |
+| START pressed, Task 2 | `START2` | rules |
 
 Two-letter verb, three zero-padded digits: `FW010` is forward 10 cm, `FL090` a
 90° forward-left turn. Everything outbound is newline-terminated, and exactly
 one message goes out per gesture, on finger lift — never a stream while
 dragging.
+
+### Starting a run
+
+The rules are strict about this: the run must be started **from a button on the
+tablet**, and during the attempt the team may not touch anything else — not the
+laptop, not the robot. So the tablet has a START button, and
+`rpi/run_task1.py` waits for the `START` it sends. (Pressing Enter in the Pi's
+SSH session still works, for testing off the clock. Don't use it on the day.)
+
+Pressing START **re-sends the entire map first** — every `ADD` and `FACE`, one
+line every 50 ms — and only then sends `START`. Map edits already go out as
+they are made; this repeat exists because `run_task1.py` only starts collecting
+obstacles once it is running, so anything keyed in before someone launched it
+was being dropped, and the route would plan around a map with obstacles missing.
+Repeating is safe: `ADD` and `FACE` overwrite by obstacle number on the Pi
+rather than accumulate.
+
+**Task 2 sends `START2` and no map**, because its obstacles are placed after
+the preparation time and their distances are deliberately withheld — there is
+nothing to key in. `a1_bridge.py` recognises `START2`, but **nothing runs it
+yet**: `task_2()` on the board is reachable only from the SW1 button, which the
+rules do not allow. See the Task 2 note in
+[`stm32/STM32_motion_spec.md`](../stm32/STM32_motion_spec.md).
 
 Obstacle numbers are **never reused while an obstacle is alive**. Deleting B2
 leaves B3 called B3, because the robot has already been told about B3.
@@ -159,7 +185,7 @@ sdk.dir=C:/path/to/your/Android/Sdk
 ```bash
 ./gradlew installDebug     # build and push to a connected device
 ./gradlew assembleDebug    # just build the APK
-./gradlew test             # 49 unit tests, no device needed
+./gradlew test             # 66 unit tests, no device needed
 ```
 
 **Toolchain:** AGP 9.3.1, Gradle 9.5, JDK 25, `compileSdk` 37, `minSdk` 24.

@@ -207,3 +207,113 @@ data class ReplayState(
     val total: Int get() = frames.size
     val current: RunFrame? get() = frames.getOrNull(index)
 }
+
+// =====================================================================
+// The timed runs
+// =====================================================================
+
+/**
+ * Which assessed run the tablet is driving. They differ in ways the UI has to
+ * know about, so this is not just a label:
+ *
+ *  - Task 1 gets six minutes; Task 2 gets three.
+ *  - Task 1's obstacles are keyed in during the two-minute prep, in front of a
+ *    supervisor. Task 2's are placed by the supervisors *after* prep and their
+ *    distances are deliberately withheld, so there is nothing to key in and no
+ *    map to check before starting.
+ *  - Task 1 is scored on image IDs shown on the map. Task 2 is scored on time,
+ *    and hitting the carpark wall disqualifies the run.
+ */
+enum class Task(val budgetSec: Long, val label: String) {
+    TASK1(360L, "TASK 1"),
+    TASK2(180L, "TASK 2"),
+}
+
+/**
+ * Where a run is. The rules require the robot to stop by itself inside the
+ * budget; a run that has to be stopped by hand is scored as incomplete. So the
+ * phase is not cosmetic -- [OVERRUN] is the moment the attempt stopped
+ * counting.
+ */
+enum class RunPhase { IDLE, RUNNING, FINISHED, OVERRUN }
+
+/**
+ * The state of one timed attempt.
+ *
+ * Deliberately pure so the whole thing is unit-testable without a device.
+ */
+data class RunState(
+    val task: Task = Task.TASK1,
+    val phase: RunPhase = RunPhase.IDLE,
+    val elapsedSec: Long = 0,
+    /** Obstacles carrying an image ID. */
+    val identified: Int = 0,
+    /** Obstacles placed on the map. */
+    val placed: Int = 0,
+) {
+    val running: Boolean get() = phase == RunPhase.RUNNING || phase == RunPhase.OVERRUN
+
+    /** Seconds left of the budget; negative once it is blown. */
+    val remainingSec: Long get() = task.budgetSec - elapsedSec
+
+    /**
+     * The clock, counting down while running so the number on screen is the
+     * one that matters. Negative time reads as `-0:12`, not `59:48`.
+     */
+    val clock: String
+        get() = when (phase) {
+            RunPhase.IDLE -> formatClock(task.budgetSec)
+            else -> formatClock(remainingSec)
+        }
+
+    /** "3 / 5" -- what the supervisor is scoring in Task 1. */
+    val tally: String get() = "$identified / $placed"
+
+    /** Task 2 is scored on time, so a tally would be noise. */
+    val showsTally: Boolean get() = task == Task.TASK1
+
+    companion object {
+        /** Inside this much of the budget, the clock should read as urgent. */
+        const val WARN_SEC = 30L
+
+        internal fun formatClock(seconds: Long): String {
+            val sign = if (seconds < 0) "-" else ""
+            val abs = kotlin.math.abs(seconds)
+            return "%s%d:%02d".format(sign, abs / 60, abs % 60)
+        }
+    }
+}
+
+/**
+ * Why a run of [task] cannot start yet, or null when it can.
+ *
+ * Worth checking before the press rather than after: `rpi/run_task1.py`
+ * silently skips any obstacle missing a position or a face, so a forgotten
+ * face is a lost image the run will never mention. The rules give no second
+ * chance for a mis-keyed layout, and the supervisor is watching.
+ *
+ * Task 2 has no such check on purpose. Its obstacles go down after the prep
+ * time and their distances are withheld, so an empty map is the correct state
+ * to start from -- refusing to start would be wrong.
+ */
+/**
+ * Every obstacle on the map carries an image ID.
+ *
+ * This is the moment a Task 1 attempt stops being timed: the rules end the
+ * run when the IDs are all showing on the tablet, not when the robot happens
+ * to stop moving. An empty map is not "all identified" -- nothing was found,
+ * so there is nothing to finish.
+ */
+fun ArenaState.allIdentified(): Boolean =
+    obstacles.isNotEmpty() && obstacles.all { it.targetId != null }
+
+fun ArenaState.runBlocker(task: Task): String? {
+    if (task == Task.TASK2) return null
+    if (obstacles.isEmpty()) return "No obstacles on the map."
+    val faceless = obstacles.filter { it.targetFace == null }.map { "B${it.id}" }
+    if (faceless.isNotEmpty()) {
+        return "No image face set on ${faceless.joinToString(", ")}. " +
+            "The planner skips obstacles without a face."
+    }
+    return null
+}

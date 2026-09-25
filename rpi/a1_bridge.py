@@ -55,6 +55,14 @@ FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "BLOCKED", "BUSY", "ERR"}
 # 25x longer than the longest line the board sends takes at 115200 baud.
 STM_POLL_SECONDS = 0.1
 
+# Zhenxi: what the tablet's START button sends, and who handles it.
+# Kept here rather than in the handler so there is one place to look when a
+# Task 2 runner finally exists.
+RUN_TRIGGERS = {
+    "START": "Start Task 1 from run_task1.py.",
+    "START2": "No Task 2 runner yet.",
+}
+
 # Zhenxi: commands that arrived from the tablet while a move was running,
 # other than STOP. They are handled after the move, in order, exactly as if
 # they had arrived then -- see the wait loop in main().
@@ -318,6 +326,27 @@ def main(on_face_known=None):
                     if on_face_known is not None and n is not None and not face_was_known:
                         if obstacles.get(n, {}).get("face") is not None:
                             on_face_known(stm, android, n)
+                    continue
+
+                # Zhenxi: the run triggers belong to the task runners, not to
+                # this bridge.
+                #
+                # The tablet's START button is the only way the rules allow a
+                # run to be triggered, so these strings exist whenever the app
+                # is running -- including during checklist demos, when this
+                # plain bridge is what is listening. Answering ERR would put a
+                # red warning on the tablet for a button that did nothing
+                # wrong, so say plainly which program to run instead.
+                #
+                # START  -> run_task1.py (written, tested)
+                # START2 -> nothing yet. task_2() lives on the board and is
+                #           currently reachable only from the SW1 button, which
+                #           the rules do not allow during an attempt. See the
+                #           note in STM32_motion_spec.md.
+                if command in RUN_TRIGGERS:
+                    runner = RUN_TRIGGERS[command]
+                    print(f"[RUN] {command} ignored -- this is a1_bridge; {runner}")
+                    send_line(android, f"MSG,Bridge only. {runner}")
                     continue
 
                 if not MOVE_PATTERN.fullmatch(command):
