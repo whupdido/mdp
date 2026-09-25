@@ -40,6 +40,20 @@ UART inside its move loops) and answered with `ACK` at once; the interrupted
 move then ends without a reply of its own. Any other command sent mid-move
 gets `BUSY` and is dropped.
 
+### Task 2 has no command yet
+
+`task_2()` in `obstacle_nav.c` is reachable only from the SW1 button on the
+board, and that call is currently commented out in `main.c`. **The rules do not
+allow it to be started that way**: during an attempt the team may press the
+start button on the Android tablet and touch nothing else (Task 2, item 4).
+
+The tablet already sends `START2` when Task 2 is selected, and
+`rpi/a1_bridge.py` recognises it. What is missing is the last hop — a command
+on the board that runs `task_2()`, and something on the Pi to forward `START2`
+to it. Whoever owns `task_2()` should decide what that command looks like,
+since the routine blocks for the whole run and will need to answer on the same
+reply contract as the rest of this file.
+
 **The board also emits free-text diagnostics** on the same UART, each on its
 own line and starting with `[WARN]` — for example
 `[WARN] COLLISION AVOIDED! Stopping early.` just before `BLOCKED`. They are

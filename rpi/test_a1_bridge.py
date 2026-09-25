@@ -162,6 +162,21 @@ for cmd in ["ADD,B1,(10)", "ADD,GARBAGE", "SUB,", "FACE,B2,Q", "FACE,B2"]:
     check(f"{cmd} is reported as malformed", to_android[-1:], ["ERR,MALFORMED_MAP_MESSAGE"])
     check(f"{cmd} never reaches the board", to_stm, [])
 
+# --- START belongs to run_task1.py, not to this bridge -------------------
+# The tablet's START button is the only legal way to begin a Task 1 run, so
+# the string exists whenever the app is running -- including in checklist
+# demos, when this plain bridge is what is listening. It must not come back
+# as ERR: the tablet paints every ERR as a red warning.
+to_android, to_stm = run(["START"])
+check("START is not refused", to_android[-1:], ["MSG,Bridge only. Start Task 1 from run_task1.py."])
+check("START never reaches the board", to_stm, [])
+
+# Task 2's trigger has no runner yet, but it must still not come back as an
+# error -- the tablet paints ERR red, and the button is not the thing at fault.
+to_android, to_stm = run(["START2"])
+check("START2 is not refused either", to_android[-1:], ["MSG,Bridge only. No Task 2 runner yet."])
+check("START2 never reaches the board", to_stm, [])
+
 # --- things that should still be refused --------------------------------
 for cmd in ["ROBOT,7,2,W", "NONSENSE", "FW10", "FWABC", "FW0100"]:
     to_android, to_stm = run([cmd])

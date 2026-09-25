@@ -5,6 +5,7 @@
   it. No drawer and no tabs: during a timed run nobody should have to navigate.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -133,6 +134,153 @@
     </FrameLayout>
 
     <!-- =========================== SIDE PANEL ========================= -->
+    <!--
+      ========================= RUN =========================
+      Its own column, in the space the arena cannot use: the arena draws
+      itself square and the screen is wider than it is tall, so this costs
+      the map nothing.
+
+      It earns the column. During an assessed run this is the only control
+      anyone may touch and the only readout that matters, and the tablet is
+      put down on a table afterwards for the supervisor to read from a
+      distance, so the clock is large, the button is large, and nothing else
+      competes with them.
+    -->
+    <LinearLayout
+        android:layout_width="150dp"
+        android:layout_height="match_parent"
+        android:layout_marginStart="10dp"
+        android:background="@drawable/bg_panel_run"
+        android:orientation="vertical"
+        android:padding="10dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/section_run"
+            style="@style/Caption" />
+
+        <!--
+          Which run START drives. Task 1 gets six minutes and a map keyed in
+          beforehand; Task 2 gets three and an empty map, because its
+          obstacles are only placed after the preparation time.
+        -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="vertical">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnTask1"
+                style="@style/PadButton.Accent"
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:letterSpacing="0.08"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                android:text="@string/task_1"
+                android:textSize="11sp" />
+
+            <Space android:layout_width="1dp" android:layout_height="5dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnTask2"
+                style="@style/PadButton"
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:letterSpacing="0.08"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                android:text="@string/task_2"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <!--
+          Counts DOWN. What matters is how much budget is left, and it has to
+          stay legible across a table. Sized so a blown budget (-0:12, five
+          glyphs) still fits the column rather than clipping.
+        -->
+        <TextView
+            android:id="@+id/runCountdown"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:textColor="@color/arena_text_muted"
+            android:textSize="34sp"
+            tools:text="4:12" />
+
+        <TextView
+            android:id="@+id/runBudget"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:letterSpacing="0.12"
+            android:textAllCaps="true"
+            android:textColor="@color/arena_text_faint"
+            android:textSize="10sp"
+            tools:text="of 6:00 left" />
+
+        <!-- Identified / placed: what the supervisor is scoring in Task 1. -->
+        <LinearLayout
+            android:id="@+id/tallyRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:drawableStart="@null"
+                android:text="@string/run_images"
+                style="@style/Caption" />
+
+            <TextView
+                android:id="@+id/runTally"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:fontFamily="monospace"
+                android:textColor="@color/arena_text"
+                android:textSize="20sp"
+                tools:text="3 / 5" />
+        </LinearLayout>
+
+        <!-- Pushes START to the bottom, where a thumb reaches it. -->
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
+
+        <!-- Says why START is refused, so nobody presses a dead button. -->
+        <TextView
+            android:id="@+id/runHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="@string/run_idle_hint"
+            android:textColor="@color/arena_text_faint"
+            android:textSize="10sp"
+            tools:text="No image face set on B3." />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnStart"
+            style="@style/PadButton.Go"
+            android:layout_width="match_parent"
+            android:layout_height="78dp"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
+            android:text="@string/run_start" />
+    </LinearLayout>
+
     <LinearLayout
         android:layout_width="332dp"
         android:layout_height="match_parent"
@@ -273,6 +421,7 @@
                 android:layout_height="0dp"
                 android:layout_marginTop="6dp"
                 android:layout_weight="1"
+                android:minHeight="44dp"
                 android:scrollbars="vertical">
 
                 <TextView
@@ -319,6 +468,7 @@
                 android:layout_height="0dp"
                 android:layout_marginTop="6dp"
                 android:layout_weight="1"
+                android:minHeight="56dp"
                 android:scrollbars="vertical">
 
                 <TextView
@@ -364,8 +514,16 @@
             </LinearLayout>
         </LinearLayout>
 
-        <!-- ====================== Drive pad, C.3 ====================== -->
+        <!--
+          ====================== Drive pad, C.3 ======================
+          Hidden while a run is going. The rules forbid touching anything but
+          the start button during an attempt, so these are not merely useless
+          then - a stray tap on Forward would put a command on the wire in the
+          middle of a planned route. The space goes to the status box, which
+          is what the supervisor is reading.
+        -->
         <LinearLayout
+            android:id="@+id/drivePanel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
@@ -439,7 +597,7 @@
                         android:id="@+id/btnFwdLeft"
                         style="@style/PadButton"
                         android:layout_width="0dp"
-                        android:layout_height="42dp"
+                        android:layout_height="38dp"
                         android:layout_weight="1"
                         android:text="@string/drive_fwd_left" />
     
@@ -449,7 +607,7 @@
                         android:id="@+id/btnForward"
                         style="@style/PadButton.Accent"
                         android:layout_width="0dp"
-                        android:layout_height="42dp"
+                        android:layout_height="38dp"
                         android:layout_weight="1"
                         android:text="@string/drive_forward" />
     
@@ -459,7 +617,7 @@
                         android:id="@+id/btnFwdRight"
                         style="@style/PadButton"
                         android:layout_width="0dp"
-                        android:layout_height="42dp"
+                        android:layout_height="38dp"
                         android:layout_weight="1"
                         android:text="@string/drive_fwd_right" />
                 </LinearLayout>
@@ -474,7 +632,7 @@
                         android:id="@+id/btnBackLeft"
                         style="@style/PadButton"
                         android:layout_width="0dp"
-                        android:layout_height="42dp"
+                        android:layout_height="38dp"
                         android:layout_weight="1"
                         android:text="@string/drive_back_left" />
     
@@ -484,7 +642,7 @@
                         android:id="@+id/btnBackward"
                         style="@style/PadButton"
                         android:layout_width="0dp"
-                        android:layout_height="42dp"
+                        android:layout_height="38dp"
                         android:layout_weight="1"
                         android:text="@string/drive_back" />
     
@@ -494,7 +652,7 @@
                         android:id="@+id/btnBackRight"
                         style="@style/PadButton"
                         android:layout_width="0dp"
-                        android:layout_height="42dp"
+                        android:layout_height="38dp"
                         android:layout_weight="1"
                         android:text="@string/drive_back_right" />
                 </LinearLayout>
@@ -541,7 +699,10 @@
             </LinearLayout>
 
         <!-- ====================== Map actions ====================== -->
+        <!-- Also hidden during a run: clearing the map mid-attempt would
+             throw away the layout the supervisor watched being keyed in. -->
         <LinearLayout
+            android:id="@+id/actionRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"

@@ -56,6 +56,14 @@
     <color name="arena_ripple">#33FFFFFF</color>
     <color name="arena_ripple_dark">#33000000</color>
 
+    <!-- Go green: the Task 1 start key, and the run panel that frames it.
+         Distinct from arena_ok (a status colour) so a green readout and a
+         green button are never mistaken for each other. -->
+    <color name="arena_go">#FF1F8F5F</color>
+    <color name="arena_go_press">#FF125B3C</color>
+    <color name="arena_go_lit">#FF43C88C</color>
+    <color name="arena_go_dim">#FF1C4736</color>
+
     <color name="white">#FFFFFFFF</color>
     <color name="black">#FF000000</color>
 </resources>

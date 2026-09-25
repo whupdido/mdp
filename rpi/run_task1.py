@@ -26,11 +26,28 @@ from capture_and_report import report_obstacle
 
 def wait_for_go(android):
     """Drain Android's ADD/SUB/FACE traffic into a1_bridge.obstacles until
-    the operator presses Enter at this SSH terminal."""
-    print("[TASK1] Place obstacles + faces on Android. Press Enter here when ready to plan+run.")
+    the run is triggered. Returns when it is.
+
+    Zhenxi: the trigger is now START from the tablet.
+
+    This waited on Enter at the SSH terminal, which the competition rules do
+    not allow: during a Task 1 attempt the team may not touch any equipment
+    except the start button on the Android device (rules, Task 1 item 6), and
+    a keypress in a laptop SSH session is touching the laptop. The tablet now
+    has a START button that sends this.
+
+    Enter still works, because it is how you start a run while debugging over
+    SSH with no tablet paired. On the day, use the button.
+    """
+    print("[TASK1] Place obstacles + faces on Android.")
+    print("[TASK1] Press START on the tablet when ready (or Enter here, for testing).")
     while True:
         if android.in_waiting:
             command = a1_bridge.read_command(android)
+            if command == "START":
+                print("[TASK1] START received from the tablet.")
+                a1_bridge.send_line(android, "STATUS,Run starting")
+                return
             if command and a1_bridge.MAP_PATTERN.match(command):
                 handled = a1_bridge.handle_map_message(command)
                 if handled is None:
@@ -39,6 +56,7 @@ def wait_for_go(android):
                     a1_bridge.send_line(android, f"STATUS,MAP,{command}")
         if select.select([sys.stdin], [], [], 0)[0]:
             sys.stdin.readline()
+            print("[TASK1] Started from the terminal.")
             return
         time.sleep(0.05)
 

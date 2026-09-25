@@ -1,6 +1,7 @@
 package com.example.androidapp.protocol
 
 import com.example.androidapp.arena.Facing
+import com.example.androidapp.arena.Task
 
 /**
  * Every string the app sends lives here, so when the team settles the final
@@ -39,6 +40,32 @@ object Outbound {
     fun backRight(deg: Int) = "BR${deg.pad3()}"
 
     const val STOP = "STOP"
+
+    // --- Task 1 ----------------------------------------------------------
+
+    /**
+     * Begin the Task 1 attempt: plan a route from the obstacles already sent,
+     * then drive it.
+     *
+     * The rules require this to come from a button on the tablet -- during the
+     * run the team may not touch anything else, so a keypress on the laptop's
+     * SSH session is not allowed to be what starts the robot.
+     * `rpi/run_task1.py` waits for this string.
+     */
+    const val START = "START"
+
+    /**
+     * Begin the Task 2 attempt: out of the carpark, round both obstacles
+     * according to the arrows, and back into the carpark, inside three
+     * minutes.
+     *
+     * Same rule as [START] -- the run may only be triggered from the tablet.
+     * Task 2 keys in nothing beforehand: the obstacles are placed after the
+     * prep time and their distances are withheld, so this carries no payload.
+     */
+    const val START2 = "START2"
+
+    fun start(task: Task) = if (task == Task.TASK2) START2 else START
 
     private fun Int.pad3(): String = coerceIn(0, 999).toString().padStart(3, '0')
 }
