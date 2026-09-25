@@ -68,6 +68,12 @@ in isolation and the error only appears once they are connected.
 - **Image recognition** — send `TARGET,<obstacle>,<id>[,<face>]`. `<id>` must be
   11–40 and `<obstacle>` must already exist on the map, or the message is
   dropped.
+
+  The rules also require the RAW captures, with their bounding boxes, tiled in
+  one window at the end of a run — on *either* the tablet or the laptop. **This
+  is being done on the laptop** (Denzel, 25 Sep), so the tablet deliberately
+  does not have that page. If that ever changes, it lands here and it is not a
+  small job; do not assume the tablet already covers it.
 - **STM board** — the drive controls emit your format unchanged. Every string
   the app can send lives in one file,
   [`protocol/Outbound.kt`](app/src/main/java/com/example/androidapp/protocol/Outbound.kt).
