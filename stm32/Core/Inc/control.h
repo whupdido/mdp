@@ -31,6 +31,7 @@ void    control_tick(void);        /* called from TIM6 ISR */
 uint8_t motion_busy(void);
 void    motion_stop(void);
 move_result_t motion_result(void); /* valid once motion_busy() is false */
+float   motion_yaw_deg(void);        /* ISR-integrated heading, deg, CCW + */
 
 
 uint8_t move_straight_mm(int32_t mm);

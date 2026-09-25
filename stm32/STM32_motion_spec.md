@@ -95,7 +95,7 @@ straight-line chord `c`, then `R = c / 2·sin(θ/2)` with θ read off the OLED:
 Agreement to 0.3 % on the direction that scrubs the most, which is what
 establishes that scrub does not corrupt the radius (see Open).
 
-### Current, after the turn deceleration ramp
+### Superseded: after the turn deceleration ramp, encoder method
 
 **Re-measured 05-Sep-2026, 5 runs per direction**, same method, after the
 deceleration ramp was added to `MODE_TURN_DEG` (crawl target in the last 20° of
@@ -120,7 +120,7 @@ Deceleration tightened every radius by 9–13 %:
 Tighter turns are the wanted outcome and the clearance figures below have been
 rescaled to them.
 
-**Open issue: left-turn repeatability regressed.** Left spread went from ~1.5 %
+**Left-turn repeatability, as seen on 05-Sep (not reproduced on 25-Sep, see below).** Left spread went from ~1.5 %
 to ~5 %, a run-to-run range of 26–28 mm per turn, while right turns were
 untouched at 0.5 %. A biased radius is harmless once measured; scatter is not,
 because it accumulates along a route and cannot be corrected for. Suspected
@@ -132,8 +132,41 @@ as the saturation limit, so they scrub the most. Untested; the candidate fixes
 are raising the crawl target from 20, or flooring the feedforward above the
 deadband.
 
-Right turns still need about **31 % more space than left**. Prefer left turns
-wherever the path allows, but note they are now the less repeatable ones.
+### Current: tape-measured chords, 25-Sep-2026
+
+**5 runs per direction** (4 recorded for `FL`), each run a single SW1 press with
+`TURN_TEST` enabled in `main.c`. The rear-axle midpoint was marked on the floor
+at start and finish and the straight-line chord `c` measured with a tape. Then
+`R = c / 2·sin(θ/2) = c / √2` for θ = 90°. The gyro read within 0.5° of 90° on
+every run, which changes R by under 0.5 %, so the angle is taken as 90°.
+
+Tape read to 5 mm, so a radius is not resolved better than about ±2 mm.
+
+| Command | Chords (cm) | Radius | Spread | Displacement (90°) | Grid cells |
+|---|---|---|---|---|---|
+| `FL` | 38.5, 38.5, 38.5, 38.5 | **272 mm** | ±2 mm (tape limit) | 272 fwd + 272 left | ~2.7 |
+| `FR` | 52, 52, 51, 52, 52 | **366 mm** | ±4 mm (1.0 %) | 366 fwd + 366 right | ~3.7 |
+| `BL` | 39, 39.5, 39.5, 39.5, 40 | **279 mm** | ±4 mm (1.3 %) | 279 back + 279 left | ~2.8 |
+| `BR` | 52.5, 52, 52.5, 52.5, 52 | **370 mm** | ±2 mm (0.5 %) | 370 back + 370 right | ~3.7 |
+
+Against the 05-Sep encoder values: `FL` −5 mm, `FR` +1 mm, `BL` −2 mm,
+`BR` −13 mm. Only `BR` moved by more than its spread.
+
+**Left-turn repeatability is no longer an issue.** The ±13–14 mm left scatter
+from 05-Sep did not reproduce: `FL` and `BL` now repeat as tightly as the right
+turns. Whether the car changed or the 05-Sep scatter came from the measurement
+is not known. The archived test in `tools/turn_test` read the IMU from the main
+loop while the TIM6 control ISR was reading it over the same I2C bus, which can
+drop gyro samples, so the measurement is a plausible cause. Unconfirmed.
+
+Displacement assumes a constant radius. A chord gives the straight-line
+distance only, so it cannot separate the forward and lateral offsets if the
+radius varies through the turn (it does a little, through the accel and crawl
+phases). Measure the two offsets directly if the planner needs better than a
+few mm.
+
+Right turns still need about **a third more space than left** (33–35 %). Prefer
+left turns wherever the path allows.
 
 Non-90° angles scale linearly from the above.
 
@@ -146,19 +179,20 @@ Body 230 × 188 mm, so ±94 mm either side of the rear-axle centre path.
 
 | Turn | Inner radius | Outer radius (excl. front overhang) |
 |---|---|---|
-| `FL` | ~183 mm | ~371 mm |
-| `FR` | ~271 mm | ~459 mm |
-| `BL` | ~187 mm | ~375 mm |
-| `BR` | ~289 mm | ~477 mm |
+| `FL` | ~178 mm | ~366 mm |
+| `FR` | ~272 mm | ~460 mm |
+| `BL` | ~185 mm | ~373 mm |
+| `BR` | ~276 mm | ~464 mm |
 
-Left and right still cannot share a row — they differ by ~90 mm of outer radius.
+Left and right still cannot share a row: they differ by ~90 mm of outer radius.
 
 Working figures for obstacle inflation, scaled from the measured envelope:
-**480 × 480 mm** clear for a left turn, **570 × 570 mm** for a right turn.
+**475 × 475 mm** clear for a left turn, **570 × 570 mm** for a right turn
+(rescaled 25-Sep to the tape-measured radii).
 Front overhang is still not included in either figure.
 
-For left turns, add the ±13 mm scatter above on top of these before trusting
-them, until the repeatability issue is resolved.
+Run-to-run scatter is now ±4 mm or less in every direction (25-Sep), small
+enough to ignore at this resolution.
 
 ## Timing
 
@@ -193,10 +227,10 @@ SPEED_TURN          14        // STALE, calib.h has 50
 /* Unused by the firmware -- turns terminate on integrated IMU yaw, not on
    counts. Kept only so the Pi can interpret older telemetry. The radii above
    are the numbers a planner should use. */
-TURN_RADIUS_FL_MM   277       // +-13 mm, see the open issue
-TURN_RADIUS_FR_MM   365       // +-2 mm
-TURN_RADIUS_BL_MM   281       // +-14 mm, see the open issue
-TURN_RADIUS_BR_MM   383       // +-2 mm
+TURN_RADIUS_FL_MM   272       // +-2 mm, tape measured 25-Sep-2026
+TURN_RADIUS_FR_MM   366       // +-4 mm
+TURN_RADIUS_BL_MM   279       // +-4 mm
+TURN_RADIUS_BR_MM   370       // +-2 mm
 
 SERVO_CENTRE        1500
 SERVO_LEFT          1000
@@ -235,7 +269,8 @@ Control loop 100 Hz (TIM6). Motor PWM 10 kHz (TIM9/10/11).
 
 ## Settled
 
-- **Repeatability** — 5 runs per direction, spread ≤1.2 % of radius. See Turns.
+- **Repeatability**: 5 runs per direction, tape measured 25-Sep-2026, spread
+  ≤1.3 % of radius in every direction, left turns included. See Turns.
 - **Absolute radius** — chord measurement agrees with the encoder-derived radius
   to 0.3 % on `FR`, the worst-scrubbing direction. The slip is symmetric between
   inner and outer wheels, so it cancels in the mean and the encoder radii are

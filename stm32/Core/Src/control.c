@@ -114,6 +114,14 @@ move_result_t motion_result(void)
     return last_result;
 }
 
+/* Heading the 100 Hz ISR integrates continuously, in degrees, CCW positive.
+   Used by turn_test.c so it does not have to read the IMU itself (which would
+   share the I2C bus with the ISR). A 32-bit float read is atomic on the M4. */
+float motion_yaw_deg(void)
+{
+    return global_yaw_deg;
+}
+
 /* ------------------------------------------------------------------------- */
 /* High-Level Motion Commands (Blocking)                                    */
 /* ------------------------------------------------------------------------- */
