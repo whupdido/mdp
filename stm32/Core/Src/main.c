@@ -206,61 +206,79 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
-  {
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-    command_poll();
-    /* --- User Button (SW1 / PE0) --- *
-     * Debounced, and waits for release before acting. The original read the
-     * pin bare and called straight into the display, so one press redrew the
-     * screen hundreds of times; and with PE0 configured NOPULL the pin floated
-     * when the button was open, so it also fired on noise. The pull-up is now
-     * set in gpio.c and in the .ioc, and the press is confirmed here.       */
-    if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET)
     {
-        HAL_Delay(30);                                   /* debounce         */
-        if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET)
-        {
-            uint32_t high_since = HAL_GetTick();
-            while (HAL_GetTick() - high_since < 60u)     /* confirmed release */
-            {
-                if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET)
-                {
-                    high_since = HAL_GetTick();
-                }
-                HAL_Delay(2);
-            }
-			if (calibrated == 0) {
+      /* USER CODE END WHILE */
 
-				OLED_Clear();
-				OLED_ShowString(0, 0, (const uint8_t *)"STABILIZING...");
-				OLED_Refresh_Gram();
-				HAL_Delay(1500);
+      /* USER CODE BEGIN 3 */
+      command_poll();
+      /* --- User Button (SW1 / PE0) --- *
+       * Debounced, and waits for release before acting. The original read the
+       * pin bare and called straight into the display, so one press redrew the
+       * screen hundreds of times; and with PE0 configured NOPULL the pin floated
+       * when the button was open, so it also fired on noise. The pull-up is now
+       * set in gpio.c and in the .ioc, and the press is confirmed here.       */
+      if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET)
+      {
+          HAL_Delay(30);                                   /* debounce         */
+          if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET)
+          {
+              uint32_t press_start_time = HAL_GetTick();
+              uint8_t long_press_triggered = 0;
 
-				command_send("\r\n[IMU] Calibrating Gyro Zero Bias (stationary)...\r\n");
-				OLED_ShowString(0, 20, (const uint8_t *)"Calibrating Gyro...");
-				OLED_Refresh_Gram();
+              /* Loop actively WHILE the button is held down */
+              while (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET)
+              {
+                  /* Check if button has been held for 2 seconds (2000ms) */
+                  if (!long_press_triggered && (HAL_GetTick() - press_start_time >= 2000u))
+                  {
+                      long_press_triggered = 1; /* Prevent multiple calibrations */
 
-				icm20948_calib_gyro_bias();
-				command_send("[IMU] Gyro bias locked.\r\n");
-				calibrated = 1;
-			}
-            display_both_sensors_oled();
-            HAL_Delay(1000);
-            task_2();
-        }
+                      OLED_Clear();
+                      OLED_ShowString(0, 0, (const uint8_t *)"STABILIZING...");
+                      OLED_Refresh_Gram();
+                      HAL_Delay(1500);
+
+                      command_send("\r\n[IMU] Calibrating Gyro Zero Bias (stationary)...\r\n");
+                      OLED_ShowString(0, 20, (const uint8_t *)"Calibrating Gyro...");
+                      OLED_Refresh_Gram();
+
+                      icm20948_calib_gyro_bias();
+                      command_send("[IMU] Gyro bias locked.\r\n");
+                      calibrated = 1;
+                  }
+                  HAL_Delay(10); /* Small delay to prevent starving the CPU */
+              }
+
+              /* Button has been released. Wait for a clean electrical release. */
+              uint32_t high_since = HAL_GetTick();
+              while (HAL_GetTick() - high_since < 60u)     /* confirmed release */
+              {
+                  if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET)
+                  {
+                      high_since = HAL_GetTick();
+                  }
+                  HAL_Delay(2);
+              }
+
+              /* If it was just a quick press (< 2 seconds), do the normal action */
+              if (!long_press_triggered)
+              {
+                  display_both_sensors_oled();
+                  //HAL_Delay(1000);
+                  //task_2();
+              }
+          }
+      }
+
+      /* Heartbeat. If LED3 stops blinking the firmware has trapped -- most
+         likely in Error_Handler(), which now blinks fast instead of dying
+         silently, so the two are easy to tell apart. */
+      static uint32_t last = 0;
+      if (HAL_GetTick() - last >= 500u) {
+          last = HAL_GetTick();
+          HAL_GPIO_TogglePin(LED3_GPIO_Port, LED3_Pin);
+      }
     }
-
-    /* Heartbeat. If LED3 stops blinking the firmware has trapped -- most
-       likely in Error_Handler(), which now blinks fast instead of dying
-       silently, so the two are easy to tell apart. */
-    static uint32_t last = 0;
-    if (HAL_GetTick() - last >= 500u) {
-        last = HAL_GetTick();
-        HAL_GPIO_TogglePin(LED3_GPIO_Port, LED3_Pin);
-    }
-  }
   /* USER CODE END 3 */
 }
 
