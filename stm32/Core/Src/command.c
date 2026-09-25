@@ -14,6 +14,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "oled.h"
+#include "obstacle_nav.h"
 
 #define LINE_MAX 16
 
@@ -150,6 +151,7 @@ static void dispatch(const char *cmd)
        -- that would echo whatever the *previous* move's verdict was. It
        replied DONE before (by falling through) and still does.          */
     else if (!strncmp(cmd, "IM", 2)) { image_found = (uint8_t)arg; command_send("DONE\r\n"); return; }
+    else if (!strncmp(cmd, "START2", 6)) { task_2(); return; }
     else { command_send("ERR\r\n"); return; }
 
     /* Zhenxi: with blocking moves this is the normal path, not just the
