@@ -40,7 +40,7 @@ CAMERA_INDEX = 0  # matches /dev/video0, same as rpi_camera_server.py
 
 # The bullseye/marker class -- confirms the camera is facing the obstacle,
 # but is NOT a real face image and must never be reported as one.
-BULLSEYE_ID = 41
+BULLSEYE_ID = 0
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import sys
 import time
+import math
 
 import serial
 
@@ -41,7 +42,12 @@ FACE_PATTERN = re.compile(r"^FACE,B(\d+),([NESW])$")
 # move ended rather than just that it ended, that comes back as BLOCKED.
 # Without it here the bridge would relay BLOCKED and then keep waiting for
 # a DONE that never comes, until STM_TIMEOUT_SECONDS -> NO_REPLY.
-FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "BLOCKED", "ACK", "BUSY", "ERR"}
+# ACK is only a terminal reply for a STOP.  A delayed ACK from a previous
+# STOP can arrive before the next movement's result; treating every ACK as
+# terminal lets the bridge send the next command while that movement is still
+# running.  The wait loop handles ACK explicitly and only ends on it when the
+# current command actually included STOP.
+FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "BLOCKED", "BUSY", "ERR"}
 
 # Zhenxi: how long one stm.readline() blocks inside the wait loop below.
 # It was 1 s (the port's open timeout), which is also how long a STOP from
@@ -60,6 +66,71 @@ inbox: list[str] = []
 # arrived at obstacle N, go check it" (the real navigation loop -- not
 # written yet) should read from this dict once the robot is in position.
 obstacles: dict[int, dict] = {}
+
+
+class PoseTracker:
+    """Estimate the Android map pose from commands confirmed by the STM32.
+
+    This is command odometry: it is useful for keeping the app's map in sync,
+    but it is not a substitute for wheel encoders or a physical re-reference.
+    Coordinates are kept continuously in centimetres and reported as the
+    nearest Android cell centre.
+    """
+
+    _HEADINGS = ("E", "N", "W", "S")
+    _RADIUS_CM = {"FL": 27.7, "FR": 36.5, "BL": 28.1, "BR": 38.3}
+
+    def __init__(self):
+        self.x_cm = 15.0
+        self.y_cm = 15.0
+        self.heading_rad = math.pi / 2.0
+
+    def wire_pose(self) -> str:
+        # Android's grid uses cell centres at 5, 15, ... cm.  The robot centre
+        # cell is the nearest centre to the estimated continuous position.
+        x = max(1, min(18, math.floor(self.x_cm / 10.0)))
+        y = max(1, min(18, math.floor(self.y_cm / 10.0)))
+        heading = min(
+            self._HEADINGS,
+            key=lambda token: abs((self.heading_rad - self._heading(token) + math.pi) % (2 * math.pi) - math.pi),
+        )
+        return f"ROBOT,{x},{y},{heading}"
+
+    @classmethod
+    def _heading(cls, token: str) -> float:
+        return {"E": 0.0, "N": math.pi / 2.0, "W": math.pi, "S": -math.pi / 2.0}[token]
+
+    def apply(self, command: str) -> str | None:
+        match = re.fullmatch(r"(FW|BW|FL|FR|BL|BR)(\d{3})", command)
+        if not match:
+            return None
+        verb, raw = match.groups()
+        magnitude = float(raw)
+        if verb in ("FW", "BW"):
+            distance = magnitude if verb == "FW" else -magnitude
+            self.x_cm += distance * math.cos(self.heading_rad)
+            self.y_cm += distance * math.sin(self.heading_rad)
+            return self.wire_pose()
+
+        angle = math.radians(magnitude)
+        if verb in ("FR", "BL"):
+            angle = -angle
+        gear_sign = -1.0 if verb.startswith("B") else 1.0
+        radius = self._RADIUS_CM[verb]
+        # Keep the signed turn angle: FR/BL use a negative mathematical
+        # heading change while FL/BR use a positive one.  Dropping that sign
+        # mirrors right turns and sends the reported map pose to the wrong
+        # side of the arena.
+        signed_radius = gear_sign * abs(angle) * radius / angle
+        start_heading = self.heading_rad
+        self.x_cm += signed_radius * (math.sin(start_heading + angle) - math.sin(start_heading))
+        self.y_cm -= signed_radius * (math.cos(start_heading + angle) - math.cos(start_heading))
+        self.heading_rad = (start_heading + angle + math.pi) % (2 * math.pi) - math.pi
+        return self.wire_pose()
+
+
+def send_pose(android, tracker: PoseTracker) -> None:
+    send_line(android, tracker.wire_pose())
 
 
 def handle_map_message(command: str) -> str:
@@ -115,6 +186,51 @@ def read_command(port):
     return command or None
 
 
+def discard_pending_android(android):
+    """Discard complete commands already buffered by the tablet.
+
+    STOP is a queue reset: commands that arrived before it must not run after
+    the current move ends. The serial driver may already have copied some of
+    those commands into its receive buffer, so clearing ``inbox`` alone is
+    insufficient.
+    """
+    discarded = 0
+    while android.in_waiting:
+        if read_command(android) is not None:
+            discarded += 1
+    return discarded
+
+
+def next_command(android):
+    """Return the next command, giving a buffered STOP priority.
+
+    After a move completes, queued commands may be waiting in ``inbox`` while
+    a STOP is still in Android's receive buffer. Drain available Android data
+    first so STOP can clear the queue instead of waiting behind it.
+    """
+    # With no queued command, read exactly one new command so a STOP that is
+    # already behind the first movement still interrupts that movement. Once
+    # a queue exists, drain the available Android data to give STOP priority
+    # over the queued work.
+    if not inbox:
+        return read_command(android)
+
+    stop_seen = False
+    while android.in_waiting:
+        command = read_command(android)
+        if command is None:
+            continue
+        if command == "STOP":
+            stop_seen = True
+        else:
+            inbox.append(command)
+
+    if stop_seen:
+        inbox.clear()
+        return "STOP"
+    return inbox.pop(0)
+
+
 def forward_stop_if_pending(android, stm):
     """
     Zhenxi: let a STOP through while a move is running.
@@ -130,17 +246,24 @@ def forward_stop_if_pending(android, stm):
     into `inbox` and is handled after the move, in order, as before --
     forwarding it now would just earn a BUSY from the board and lose it.
     """
+    stop_forwarded = False
     while android.in_waiting:
         command = read_command(android)
         if command is None:
             continue
         if command == "STOP":
+            cleared = len(inbox) + discard_pending_android(android)
+            inbox.clear()
             print("Android -> RPi: STOP (mid-move)")
+            if cleared:
+                print(f"[QUEUE] cleared {cleared} pending command(s)")
             send_line(stm, "STOP")
             send_line(android, "STATUS,SENT,STOP")
             print("RPi -> STM32: STOP")
+            stop_forwarded = True
         else:
             inbox.append(command)
+    return stop_forwarded
 
 
 def main(on_face_known=None):
@@ -154,12 +277,13 @@ def main(on_face_known=None):
         print(f"Waiting for Android RFCOMM device {BT_DEVICE}")
         with serial.Serial(BT_DEVICE, BAUD_RATE, timeout=1) as android:
             send_line(android, "STATUS,RPi bridge ready")
+            pose = PoseTracker()
             print("Bridge ready")
 
             while True:
                 # Zhenxi: anything that queued up during the last move comes
                 # first, so ordering from the tablet's point of view is kept.
-                command = inbox.pop(0) if inbox else read_command(android)
+                command = next_command(android)
                 if command is None:
                     continue
 
@@ -209,9 +333,10 @@ def main(on_face_known=None):
                 # watches the tablet -- a STOP is forwarded at once, anything
                 # else is queued in `inbox` for after the move. Map edits made
                 # mid-run therefore still land, in order, once the move ends.
+                stop_requested = command == "STOP"
                 deadline = time.monotonic() + STM_TIMEOUT_SECONDS
                 while time.monotonic() < deadline:
-                    forward_stop_if_pending(android, stm)
+                    stop_requested = forward_stop_if_pending(android, stm) or stop_requested
                     reply_raw = stm.readline()  # blocks STM_POLL_SECONDS at most
                     if not reply_raw:
                         continue
@@ -222,7 +347,17 @@ def main(on_face_known=None):
 
                     print(f"STM32 -> RPi: {reply}")
                     send_line(android, f"STM,{reply}")
+                    if reply == "ACK":
+                        if stop_requested:
+                            break
+                        # ACK belongs to a STOP, not to the movement currently
+                        # being waited on. Relay it for diagnostics but keep
+                        # waiting for this movement's actual result.
+                        continue
                     if reply in FINAL_REPLIES:
+                        if reply == "DONE" and command != "STOP":
+                            pose.apply(command)
+                            send_pose(android, pose)
                         break
                 else:
                     send_line(android, "STM,NO_REPLY")

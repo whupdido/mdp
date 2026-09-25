@@ -98,11 +98,14 @@ FAILURES = []
 
 
 def check(label, actual, expected):
-    ok = actual == expected
+    comparable = actual if any(item.startswith("ROBOT,") for item in expected) else [
+        item for item in actual if not item.startswith("ROBOT,")
+    ]
+    ok = comparable == expected
     print(f"  {'PASS' if ok else 'FAIL'}  {label}")
     if not ok:
         print(f"          expected: {expected}")
-        print(f"          actual:   {actual}")
+        print(f"          actual:   {comparable}")
         FAILURES.append(label)
 
 
@@ -120,6 +123,11 @@ check(
     "receipts and relays the board reply",
     to_android,
     ["STATUS,RPi bridge ready", "STATUS,SENT,FW010", "STM,DONE"],
+)
+check(
+    "reports the updated robot cell after a confirmed move",
+    [item for item in to_android if item.startswith("ROBOT,")],
+    ["ROBOT,1,2,N"],
 )
 
 # --- every motion verb ---------------------------------------------------
@@ -165,9 +173,44 @@ to_android, _ = run(["FW010"], [])  # board never answers at all
 check("no reply from the board is reported", to_android[-1:], ["STM,NO_REPLY"])
 
 # --- board aborts --------------------------------------------------------
-for reply in ["STALL", "TIMEOUT", "BUSY", "ERR", "ACK"]:
+for reply in ["STALL", "TIMEOUT", "BUSY", "ERR"]:
     to_android, _ = run(["FW010"], [reply])
     check(f"board reply {reply} is relayed", to_android[-1:], [f"STM,{reply}"])
+
+# ACK is a STOP acknowledgement, not a movement completion. A delayed ACK
+# from a previous STOP must not make the next movement look complete before
+# its DONE arrives.
+to_android, to_stm = run(
+    ["FW010", "FL090"],
+    ["DONE", "ACK", "DONE"],
+)
+check(
+    "delayed STOP ACK does not finish the next move",
+    to_stm,
+    ["FW010", "FL090"],
+)
+check(
+    "next move waits for DONE after delayed STOP ACK",
+    [item for item in to_android if item.startswith("STM,")],
+    ["STM,DONE", "STM,ACK", "STM,DONE"],
+)
+
+# STOP clears commands already queued in the bridge and commands still
+# buffered on the Android link. Neither command after STOP may reach STM32.
+to_android, to_stm = run(
+    ["FW010", "FL090", "STOP", "BR090"],
+    [None, "ACK"],
+)
+check(
+    "STOP clears queued and buffered commands",
+    to_stm,
+    ["FW010", "STOP"],
+)
+check(
+    "STOP queue clear still returns its acknowledgement",
+    to_android[-2:],
+    ["STATUS,SENT,STOP", "STM,ACK"],
+)
 
 # --- board stops short of an obstacle -----------------------------------
 # Since the IR sensors went in, control.c cuts a move short rather than hit
@@ -177,7 +220,7 @@ for reply in ["STALL", "TIMEOUT", "BUSY", "ERR", "ACK"]:
 to_android, _ = run(["FW010"], ["", "[WARN] COLLISION AVOIDED! Stopping early.", "DONE"])
 check(
     "collision warning and its DONE are both relayed, in order",
-    to_android[-2:],
+    [item for item in to_android if item.startswith("STM,")],
     ["STM,[WARN] COLLISION AVOIDED! Stopping early.", "STM,DONE"],
 )
 
@@ -219,7 +262,7 @@ to_android, to_stm = run(["FW010", "ADD,B1,(10,6)"], [None, "DONE"])
 check("a map edit sent mid-move never reaches the board", to_stm, ["FW010"])
 check(
     "and is acknowledged once the move ends",
-    to_android[-2:],
+    [item for item in to_android if item.startswith("STM,") or item.startswith("STATUS,MAP,")],
     ["STM,DONE", "STATUS,MAP,ADD,B1,(10,6)"],
 )
 

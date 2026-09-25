@@ -144,6 +144,11 @@ class Server:
     # ==========================================================
     def handle_client(self, conn: socket.socket):
         try:
+            # Explicitly keep the accepted connection blocking.  The
+            # listening socket has a one-second accept timeout, but inference
+            # and frame transfer can legitimately take longer than that.
+            conn.setblocking(True)
+            conn.settimeout(None)
             # Send class names metadata immediately upon connection
             metadata = {"names": self.main_model.names}
             send_json(conn, metadata)
@@ -291,6 +296,11 @@ class Server:
                 except socket.timeout:
                     continue
                 print(f"[SERVER] Connected from {addr}")
+                # The listening socket uses a short timeout so the outer loop
+                # can remain interruptible.  Do not let that timeout leak onto
+                # the client socket: YOLO inference can take longer than one
+                # second, and the Pi must be allowed to wait for the result.
+                conn.settimeout(None)
 
                 self.handle_client(conn)
 

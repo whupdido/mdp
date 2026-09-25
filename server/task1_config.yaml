@@ -3,7 +3,7 @@ algo:
 yolo:
   port: 5001
   stream: true
-  unwanted: [36, 37, 38, 39, 40] # 41 (bullseye/marker) stays reportable -- A.5 needs to know when it's seeing the marker, not just a real face
+  unwanted: [36, 37, 38, 39, 40] # 0 (bullseye/marker) stays reportable -- A.5 needs to know when it's seeing the marker, not just a real face
   fail_threshold: 2 # 2 for task 1 if shift left, right during retry
   num_images: 2
   models:
