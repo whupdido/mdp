@@ -40,19 +40,31 @@ UART inside its move loops) and answered with `ACK` at once; the interrupted
 move then ends without a reply of its own. Any other command sent mid-move
 gets `BUSY` and is dropped.
 
-### Task 2 has no command yet
+### `START2` runs the whole of Task 2
 
-`task_2()` in `obstacle_nav.c` is reachable only from the SW1 button on the
-board, and that call is currently commented out in `main.c`. **The rules do not
-allow it to be started that way**: during an attempt the team may press the
-start button on the Android tablet and touch nothing else (Task 2, item 4).
+The chain is complete: the tablet's START button sends `START2` when Task 2 is
+selected, `rpi/a1_bridge.py` forwards it to the board, and `dispatch()` runs
+`task_2()`.
 
-The tablet already sends `START2` when Task 2 is selected, and
-`rpi/a1_bridge.py` recognises it. What is missing is the last hop — a command
-on the board that runs `task_2()`, and something on the Pi to forward `START2`
-to it. Whoever owns `task_2()` should decide what that command looks like,
-since the routine blocks for the whole run and will need to answer on the same
-reply contract as the rest of this file.
+It does not behave like a move, so it does not answer like one:
+
+| | |
+|---|---|
+| `ACK` | accepted, the routine has started |
+| `DONE` | the routine returned |
+| `BUSY` | one is already running |
+
+Both replies matter. The routine blocks for up to three minutes, so without
+the `ACK` the bridge would give up after `STM_TIMEOUT_SECONDS` and report
+`NO_REPLY` while the robot was running Task 2 perfectly well. The bridge waits
+on `TASK2_TIMEOUT_SECONDS` for this command instead of the per-move timeout.
+
+**`task_2()` must not re-enter itself.** It calls the move functions, and those
+poll the UART inside their wait loops so a `STOP` can interrupt a move — which
+makes `command_poll → dispatch → task_2 → move → command_poll → dispatch →
+task_2` reachable. A second `START2` mid-run would start a whole second Task 2
+inside the first. `motion_busy()` does not catch it, because between moves
+there is no move running; the `task2_running` flag in `command.c` does.
 
 **The board also emits free-text diagnostics** on the same UART, each on its
 own line and starting with `[WARN]` — for example
