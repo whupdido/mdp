@@ -13,6 +13,7 @@ import com.example.androidapp.arena.RunState
 import com.example.androidapp.arena.cleared
 import com.example.androidapp.arena.Task
 import com.example.androidapp.arena.allIdentified
+import com.example.androidapp.arena.isRunOverNotice
 import com.example.androidapp.arena.runBlocker
 import com.example.androidapp.arena.withObstacleAdded
 import com.example.androidapp.arena.withObstacleMoved
@@ -229,7 +230,16 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
 
-            is Inbound.Message -> say(msg.text)
+            is Inbound.Message -> {
+                say(msg.text)
+                // The Task 1 route runner says when it has stopped driving.
+                // It stops early on a blocked or stalled move, so this can
+                // arrive with images still missing -- the attempt is over
+                // either way, and the tally already says how it went.
+                if (_run.value.task == Task.TASK1 && isRunOverNotice(msg.text)) {
+                    finishRun("Run ended")
+                }
+            }
 
             is Inbound.Forwarded -> say("Sent ${msg.command} to the robot.")
 
@@ -260,11 +270,20 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun onStmReply(msg: Inbound.StmReply) = when (msg.reply) {
         "READY" -> say("Robot ready.")
-        "DONE" -> if (moveCutShort) {
-            moveCutShort = false
-            say("Move ended early.")
-        } else {
-            say("Move complete.")
+        // In Task 2 the whole routine is one command, so this DONE is the
+        // board saying the run itself is over -- not that a move finished.
+        // Without this a clean 2:30 run would keep counting down, go red at
+        // 3:00 and tell the operator the time was up.
+        "DONE" -> when {
+            _run.value.running && _run.value.task == Task.TASK2 ->
+                finishRun("Task 2 complete")
+
+            moveCutShort -> {
+                moveCutShort = false
+                say("Move ended early.")
+            }
+
+            else -> say("Move complete.")
         }
         "ACK" -> say("Stop acknowledged.")
         "BUSY" -> warn("Robot was still moving — that command was discarded.")
@@ -457,18 +476,37 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         val live = _run.value
         if (!live.running || live.task != Task.TASK1) return
         val obstacles = _arena.value.obstacles
-        val identified = obstacles.count { it.targetId != null }
-        val next = live.copy(identified = identified, placed = obstacles.size)
-        _run.value =
-            if (_arena.value.allIdentified()) {
-                runTicker?.cancel()
-                runTicker = null
-                val took = RunState.formatClock(next.elapsedSec)
-                say("All ${obstacles.size} images identified in $took.")
-                next.copy(phase = RunPhase.FINISHED)
-            } else {
-                next
-            }
+        _run.value = live.copy(
+            identified = obstacles.count { it.targetId != null },
+            placed = obstacles.size,
+        )
+        if (_arena.value.allIdentified()) {
+            finishRun("All ${obstacles.size} images identified")
+        }
+    }
+
+    /**
+     * Stop the clock: the robot is done and the attempt is over.
+     *
+     * Every way a run can legitimately end comes through here, because the
+     * phase decides what the panel says and getting it wrong at the end of an
+     * attempt is worse than getting it wrong at the start. The ways are:
+     *
+     *  - Task 1, every obstacle has an image ID. The rules stop the timing
+     *    when the IDs are showing, not when the wheels stop.
+     *  - Task 1, the route runner says it has finished. It stops early on a
+     *    blocked or stalled move, so this can arrive with images still
+     *    missing -- the attempt is still over, and the tally already says
+     *    how it went.
+     *  - Task 2, the board reports the routine returned.
+     */
+    private fun finishRun(note: String) {
+        val live = _run.value
+        if (!live.running) return
+        runTicker?.cancel()
+        runTicker = null
+        _run.value = live.copy(phase = RunPhase.FINISHED)
+        say("$note in ${RunState.formatClock(live.elapsedSec)}.")
     }
 
     private fun transmit(line: String) {

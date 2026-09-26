@@ -6,6 +6,7 @@ import com.example.androidapp.arena.RunPhase
 import com.example.androidapp.arena.RunState
 import com.example.androidapp.arena.Task
 import com.example.androidapp.arena.allIdentified
+import com.example.androidapp.arena.isRunOverNotice
 import com.example.androidapp.arena.runBlocker
 import com.example.androidapp.arena.withObstacleAdded
 import com.example.androidapp.arena.withTargetFace
@@ -150,6 +151,32 @@ class RunStateTest {
         assertFalse("one of two is not done", one.allIdentified())
         val both = one.withTargetReported(2, 17, Facing.S)!!
         assertTrue("both reported", both.allIdentified())
+    }
+
+    // --- recognising that the route runner has stopped -------------------
+    //
+    // A small contract with rpi/run_task1.py: it reports in plain words, and
+    // the app stops the clock on them. Pinned so changing the wording on one
+    // side without the other shows up here.
+
+    @Test fun `the route runner's own completion lines are recognised`() {
+        // Verbatim from rpi/run_task1.py.
+        assertTrue(isRunOverNotice("Task 1 route complete"))
+        assertTrue(isRunOverNotice("Planning failed, check RPi logs"))
+    }
+
+    @Test fun `recognition is case-insensitive like the rest of the parser`() {
+        assertTrue(isRunOverNotice("TASK 1 ROUTE COMPLETE"))
+    }
+
+    @Test fun `ordinary status chatter does not stop the clock`() {
+        listOf(
+            "RPi bridge ready",
+            "Task1 runner ready",
+            "Run starting",
+            "Reached obstacle 3, capturing",
+            "Robot ready.",
+        ).forEach { assertFalse("should not end the run: $it", isRunOverNotice(it)) }
     }
 
     @Test fun `task 2 starts from an empty map, because that is correct`() {
