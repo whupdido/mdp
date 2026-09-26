@@ -171,11 +171,31 @@ to_android, to_stm = run(["START"])
 check("START is not refused", to_android[-1:], ["MSG,Bridge only. Start Task 1 from run_task1.py."])
 check("START never reaches the board", to_stm, [])
 
-# Task 2's trigger has no runner yet, but it must still not come back as an
-# error -- the tablet paints ERR red, and the button is not the thing at fault.
-to_android, to_stm = run(["START2"])
-check("START2 is not refused either", to_android[-1:], ["MSG,Bridge only. No Task 2 runner yet."])
-check("START2 never reaches the board", to_stm, [])
+# --- START2: Task 2 runs on the board ------------------------------------
+# Wen Rong added START2 to command.c's dispatch, so unlike START this one is
+# ours to forward. The board answers ACK when it accepts and DONE when the
+# routine returns, minutes later.
+to_android, to_stm = run(["START2"], ["ACK", None, "DONE"])
+check("START2 is forwarded to the board", to_stm, ["START2"])
+check(
+    "ACK then DONE are both relayed, and ACK does not end the wait",
+    to_android,
+    ["STATUS,RPi bridge ready", "STATUS,SENT,START2", "STM,ACK", "STM,DONE"],
+)
+
+# The ACK is the whole point of waiting on the Task 2 budget: without it the
+# bridge would give up after STM_TIMEOUT_SECONDS and tell the tablet NO_REPLY
+# while the robot was still running Task 2 perfectly well.
+check(
+    "START2 does not report NO_REPLY once DONE arrives",
+    [line for line in to_android if line == "STM,NO_REPLY"],
+    [],
+)
+
+# A second START2 mid-run is refused by the board's re-entrancy guard, and
+# BUSY is terminal, so the bridge must not sit waiting after it.
+to_android, to_stm = run(["START2"], ["BUSY"])
+check("a refused START2 ends the wait", to_android[-1:], ["STM,BUSY"])
 
 # --- things that should still be refused --------------------------------
 for cmd in ["ROBOT,7,2,W", "NONSENSE", "FW10", "FWABC", "FW0100"]:

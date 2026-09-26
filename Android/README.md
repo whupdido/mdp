@@ -116,9 +116,11 @@ rather than accumulate.
 
 **Task 2 sends `START2` and no map**, because its obstacles are placed after
 the preparation time and their distances are deliberately withheld — there is
-nothing to key in. `a1_bridge.py` recognises `START2`, but **nothing runs it
-yet**: `task_2()` on the board is reachable only from the SW1 button, which the
-rules do not allow. See the Task 2 note in
+nothing to key in. `a1_bridge.py` forwards it to the board, where `dispatch()`
+runs the whole `task_2()` routine: `ACK` when it accepts, `DONE` when it
+returns, `BUSY` if one is already running. Because it blocks for up to three
+minutes the bridge waits on `TASK2_TIMEOUT_SECONDS`, not the per-move timeout.
+See the `START2` section in
 [`stm32/STM32_motion_spec.md`](../stm32/STM32_motion_spec.md).
 
 Obstacle numbers are **never reused while an obstacle is alive**. Deleting B2

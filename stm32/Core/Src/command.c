@@ -95,19 +95,39 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
  *   FLxxx   forward-left  xxx deg   FRxxx   forward-right  xxx deg
  *   BLxxx   reverse-left  xxx deg   BRxxx   reverse-right  xxx deg
  *   STOP    abort the current move
+ *   START2  run the whole Task 2 routine (blocks until it finishes)
  *
  * Turn angle is 1..360 degrees; xxx = 000 means 90 for backwards
  * compatibility, so FL000 still turns 90 degrees.
  *
  * Replies
- *   DONE      move completed normally
+ *   DONE      move completed normally, or Task 2 finished
  *   STALL     aborted: both wheels stopped turning for 1 s
  *   TIMEOUT   aborted: exceeded 20 s
  *   BLOCKED   aborted: IR saw an obstacle, stopped short (Zhenxi)
- *   ACK       STOP acknowledged
+ *   ACK       STOP acknowledged, or START2 accepted
  *   BUSY      a move was already running; this command was DISCARDED
  *   ERR       unrecognised command
  */
+
+/* Zhenxi: guards task_2() against re-entering itself.
+ *
+ * task_2() blocks for the whole run and calls the move functions, and those
+ * now poll the UART inside their wait loops so that a STOP can interrupt a
+ * move. That polling is what makes re-entry reachable:
+ *
+ *   command_poll -> dispatch -> task_2 -> move_straight_mm
+ *                -> command_poll -> dispatch -> task_2   <-- nested
+ *
+ * A second START2 arriving mid-run would start a whole second Task 2 inside
+ * the first, and the outer one would then carry on from a position it no
+ * longer understands. motion_busy() does not catch it, because between moves
+ * there is no move running. This does.
+ *
+ * I widened that window when I added the polling, so the guard belongs with
+ * it rather than with task_2().
+ */
+static volatile uint8_t task2_running = 0u;
 
 /* Zhenxi: the one place a move result becomes a reply.
  *
@@ -151,7 +171,23 @@ static void dispatch(const char *cmd)
        -- that would echo whatever the *previous* move's verdict was. It
        replied DONE before (by falling through) and still does.          */
     else if (!strncmp(cmd, "IM", 2)) { image_found = (uint8_t)arg; command_send("DONE\r\n"); return; }
-    else if (!strncmp(cmd, "START2", 6)) { task_2(); return; }
+    /* Zhenxi: Task 2. Answers on the same contract as everything else, so
+       the Pi and the tablet are not left guessing for three minutes.
+         ACK   accepted, the routine has begun
+         DONE  the routine returned
+         BUSY  one is already running (see task2_running above)
+       Without the ACK the bridge waits STM_TIMEOUT_SECONDS and reports
+       NO_REPLY, which the tablet shows as a warning while the robot is in
+       fact running Task 2 perfectly well. */
+    else if (!strncmp(cmd, "START2", 6)) {
+        if (task2_running) { command_send("BUSY\r\n"); return; }
+        task2_running = 1u;
+        command_send("ACK\r\n");
+        task_2();
+        task2_running = 0u;
+        command_send("DONE\r\n");
+        return;
+    }
     else { command_send("ERR\r\n"); return; }
 
     /* Zhenxi: with blocking moves this is the normal path, not just the
