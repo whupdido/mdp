@@ -297,6 +297,24 @@ data class RunState(
  * to start from -- refusing to start would be wrong.
  */
 /**
+ * Does this status line mean the route runner has stopped driving?
+ *
+ * `rpi/run_task1.py` says so in plain words rather than a code, because the
+ * same line is read by whoever is watching the Pi's terminal. Matching on the
+ * words is therefore a small contract between the two files, kept here where
+ * it can be tested and pointed at: **if you change the wording in
+ * `run_task1.py`, change it here too.**
+ *
+ * Deliberately forgiving in the same way the rest of the parser is, and
+ * deliberately low-stakes: a false positive stops a clock early, a false
+ * negative leaves it running. Neither touches the robot.
+ */
+fun isRunOverNotice(text: String): Boolean {
+    val t = text.lowercase()
+    return "route complete" in t || "run complete" in t || "planning failed" in t
+}
+
+/**
  * Every obstacle on the map carries an image ID.
  *
  * This is the moment a Task 1 attempt stops being timed: the rules end the
