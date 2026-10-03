@@ -21,6 +21,7 @@ jobs:
           GITHUB_ACTOR_ENV: ${{ github.actor }}
           GITHUB_SHA_ENV: ${{ github.sha }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
         run: |
           python <<'PY'
           import json
@@ -271,6 +272,9 @@ jobs:
 
           ai_summary = ""
 
+          requested_model = "openrouter/free"
+          resolved_model = "Unavailable"
+
           api_key = os.environ.get(
               "OPENROUTER_API_KEY",
               ""
@@ -330,7 +334,7 @@ jobs:
           """
 
               request_body = {
-                  "model": "openrouter/free",
+                  "model": requested_model,
                   "messages": [
                       {
                           "role": "system",
@@ -370,9 +374,19 @@ jobs:
                           response.read().decode("utf-8")
                       )
 
+                  resolved_model = (
+                      result.get("model")
+                      or "Unknown"
+                  )
+
                   print(
-                      "OpenRouter response model:",
-                      result.get("model", "unknown")
+                      "OpenRouter requested model:",
+                      requested_model
+                  )
+
+                  print(
+                      "OpenRouter resolved model:",
+                      resolved_model
                   )
 
                   choices = result.get(
@@ -532,6 +546,10 @@ jobs:
           ✨ AI Change Summary
           {ai_summary}
 
+          🧠 Powered By
+          Router: {requested_model}
+          Selected: {resolved_model}
+
           📊 Actual Net Changes
           {len(changed_files)} file(s) changed
           +{additions} text additions
@@ -577,6 +595,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_TOPIC_ID: ${{ secrets.TELEGRAM_TOPIC_ID }}
+
         run: |
           python <<'PY'
           import json
