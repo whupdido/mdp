@@ -28,6 +28,28 @@
     <string name="drive_back_right">Back-right</string>
     <string name="drive_stop">Stop</string>
 
+    <!-- Task 1 run -->
+    <string name="section_run">Run</string>
+    <string name="task_1">TASK 1</string>
+    <string name="task_2">TASK 2</string>
+    <string name="run_budget">of %1$s left</string>
+    <string name="run_budget_idle">%1$s budget</string>
+    <string name="run_start">START</string>
+    <string name="run_stop">STOP RUN</string>
+    <string name="run_again">RUN AGAIN</string>
+    <string name="run_idle_hint">Place obstacles and set every image face, then press START.</string>
+    <string name="run_idle_hint_t2">Obstacles go down after prep. Nothing to key in \u2014 just press START.</string>
+    <string name="run_done_hint_t2">Run complete. Robot should be back in the carpark.</string>
+    <string name="run_images">IMAGES</string>
+    <string name="run_tally_empty">0 / 0</string>
+    <string name="cancel">Cancel</string>
+    <string name="run_check_title">Start anyway?</string>
+    <string name="run_start_anyway">Start anyway</string>
+    <string name="run_stop_title">Stop the run?</string>
+    <string name="run_stop_body">The rules score a run stopped by hand as incomplete. Only do this if the robot is about to hit something.</string>
+    <string name="run_ready_hint">%1$d obstacles ready. Press START when the supervisor says go.</string>
+    <string name="run_done_hint">Done: %1$d of %2$d images identified. Show this screen to the supervisor.</string>
+
     <!-- Map actions -->
     <string name="undo">Undo</string>
     <string name="clear">Clear</string>

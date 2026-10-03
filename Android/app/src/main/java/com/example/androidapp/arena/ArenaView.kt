@@ -708,9 +708,17 @@ class ArenaView @JvmOverloads constructor(
         (color and 0x00FFFFFF) or (alpha.coerceIn(0, 255) shl 24)
 
     private companion object {
-        /** Turn radii measured latest re-measurement, stm32/STM32_motion_spec.md. */
-        const val RADIUS_FL_MM = 277f
-        const val RADIUS_FR_MM = 365f
+        /**
+         * Turn radii from `stm32/Core/Inc/calib.h`, Kush's turn-test rig
+         * (26 Sep): all four now repeatable to +-2..4 mm, where FL and BL
+         * used to be +-13..14 mm and explicitly not repeatable.
+         *
+         * These only shape the animation arc, so being a few mm stale is
+         * cosmetic here -- but they should track calib.h so the picture
+         * matches the car. The planner's copy is in algorithm/config.py.
+         */
+        const val RADIUS_FL_MM = 272f
+        const val RADIUS_FR_MM = 366f
         const val LEAD_LEFT = 0.48f
 
         const val BOARD = 0xFF080D11.toInt()

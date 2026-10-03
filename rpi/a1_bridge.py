@@ -19,6 +19,12 @@ STM_DEVICE = "/dev/ttyACM0"
 BAUD_RATE = 115200
 STM_TIMEOUT_SECONDS = 25
 
+# Zhenxi: START2 runs the entire Task 2 routine on the board and only answers
+# DONE when it returns, so it cannot share the per-move timeout. The rules give
+# Task 2 three minutes; this is that plus enough slack to see the board's own
+# reply rather than give up one second early and report NO_REPLY.
+TASK2_TIMEOUT_SECONDS = 200
+
 # Zhenxi: split the old COMMAND_PATTERN in two.
 #
 # The tablet sends two different kinds of thing down the same link. Motion
@@ -266,6 +272,46 @@ def forward_stop_if_pending(android, stm):
     return stop_forwarded
 
 
+def relay_stm_replies(stm, android, timeout_s, command, pose=None):
+    """
+    Zhenxi: wait for the board to finish `command`, relaying everything it
+    says on the way, and keep watching the tablet for a STOP while we wait.
+
+    Was inline in main(); pulled out so START2 can reuse it with the Task 2
+    budget instead of the per-move one. `pose` is the dead-reckoner, and is
+    left None for anything that is not a single move primitive -- START2 runs
+    a whole routine, so there is nothing sensible to add to the estimate.
+    """
+    stop_requested = command == "STOP"
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        stop_requested = forward_stop_if_pending(android, stm) or stop_requested
+        reply_raw = stm.readline()  # blocks STM_POLL_SECONDS at most
+        if not reply_raw:
+            continue
+
+        reply = reply_raw.decode("ascii", errors="replace").strip()
+        if not reply:
+            continue
+
+        print(f"STM32 -> RPi: {reply}")
+        send_line(android, f"STM,{reply}")
+        if reply == "ACK":
+            if stop_requested:
+                break
+            # ACK belongs to a STOP, or to START2 saying it accepted the
+            # run -- neither is the result we are waiting for. Relay it for
+            # diagnostics and keep waiting for the real one.
+            continue
+        if reply in FINAL_REPLIES:
+            if reply == "DONE" and pose is not None and command != "STOP":
+                pose.apply(command)
+                send_pose(android, pose)
+            break
+    else:
+        send_line(android, "STM,NO_REPLY")
+
+
 def main(on_face_known=None):
     """Run the bridge. `on_face_known(stm, android, obstacle_number)`, if
     given, is called once -- not on every resend -- the moment an obstacle
@@ -320,6 +366,28 @@ def main(on_face_known=None):
                             on_face_known(stm, android, n)
                     continue
 
+                # Zhenxi: Task 1's trigger is not ours -- run_task1.py owns
+                # the plan-and-drive loop, and this plain bridge cannot do it.
+                # Say so rather than answering ERR, which the tablet paints as
+                # a red warning for a button that did nothing wrong.
+                if command == "START":
+                    print("[RUN] START ignored -- this is a1_bridge, run run_task1.py for Task 1")
+                    send_line(android, "MSG,Bridge only. Start Task 1 from run_task1.py.")
+                    continue
+
+                # Zhenxi: Task 2 IS ours, as of Wen Rong's START2 in
+                # command.c -- the whole routine lives on the board, so the
+                # bridge just has to hand the command over and relay what
+                # comes back. The board answers ACK when it accepts, then
+                # DONE when the routine returns, which is why this waits on
+                # the Task 2 budget rather than the per-move one.
+                if command == "START2":
+                    send_line(stm, command)
+                    send_line(android, f"STATUS,SENT,{command}")
+                    print(f"RPi -> STM32: {command} (Task 2, up to {TASK2_TIMEOUT_SECONDS}s)")
+                    relay_stm_replies(stm, android, TASK2_TIMEOUT_SECONDS, command)
+                    continue
+
                 if not MOVE_PATTERN.fullmatch(command):
                     send_line(android, "ERR,INVALID_COMMAND")
                     continue
@@ -329,38 +397,7 @@ def main(on_face_known=None):
                 send_line(android, f"STATUS,SENT,{command}")
                 print(f"RPi -> STM32: {command}")
 
-                # Zhenxi: while this loop waits for the board it now also
-                # watches the tablet -- a STOP is forwarded at once, anything
-                # else is queued in `inbox` for after the move. Map edits made
-                # mid-run therefore still land, in order, once the move ends.
-                stop_requested = command == "STOP"
-                deadline = time.monotonic() + STM_TIMEOUT_SECONDS
-                while time.monotonic() < deadline:
-                    stop_requested = forward_stop_if_pending(android, stm) or stop_requested
-                    reply_raw = stm.readline()  # blocks STM_POLL_SECONDS at most
-                    if not reply_raw:
-                        continue
-
-                    reply = reply_raw.decode("ascii", errors="replace").strip()
-                    if not reply:
-                        continue
-
-                    print(f"STM32 -> RPi: {reply}")
-                    send_line(android, f"STM,{reply}")
-                    if reply == "ACK":
-                        if stop_requested:
-                            break
-                        # ACK belongs to a STOP, not to the movement currently
-                        # being waited on. Relay it for diagnostics but keep
-                        # waiting for this movement's actual result.
-                        continue
-                    if reply in FINAL_REPLIES:
-                        if reply == "DONE" and command != "STOP":
-                            pose.apply(command)
-                            send_pose(android, pose)
-                        break
-                else:
-                    send_line(android, "STM,NO_REPLY")
+                relay_stm_replies(stm, android, STM_TIMEOUT_SECONDS, command, pose)
 
 
 if __name__ == "__main__":

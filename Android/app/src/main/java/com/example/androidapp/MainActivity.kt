@@ -19,6 +19,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.example.androidapp.arena.Arena
+import com.example.androidapp.arena.RunPhase
+import com.example.androidapp.arena.Task
+import com.example.androidapp.arena.RunState
 import com.example.androidapp.databinding.ActivityMainBinding
 import com.example.androidapp.databinding.DialogDevicesBinding
 import com.example.androidapp.databinding.ItemDeviceBinding
@@ -26,6 +29,7 @@ import com.example.androidapp.link.BluetoothLink
 import com.example.androidapp.link.LinkState
 import com.example.androidapp.link.RemoteDevice
 import com.example.androidapp.protocol.Move
+import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.launch
 
 /**
@@ -57,6 +61,7 @@ class MainActivity : AppCompatActivity() {
         wireLinkControls()
         wireDrivePad()
         wireMapActions()
+        wireRunControls()
         wireTrafficDrawer()
         wireReplay()
         observe()
@@ -232,6 +237,145 @@ class MainActivity : AppCompatActivity() {
         ui.btnReplay.setOnClickListener { vm.openReplay() }
     }
 
+    // -----------------------------------------------------------------
+    // Task 1 run
+    // -----------------------------------------------------------------
+
+    /**
+     * One button, three jobs, depending on where the attempt is.
+     *
+     * START goes through on a single press when the map is complete, because
+     * the supervisor has just said go and the clock is running. It only asks
+     * for confirmation when something is actually wrong -- an obstacle with no
+     * image face is one the planner will silently skip.
+     */
+    private fun wireRunControls() {
+        ui.btnTask1.setOnClickListener { vm.selectTask(Task.TASK1) }
+        ui.btnTask2.setOnClickListener { vm.selectTask(Task.TASK2) }
+        ui.btnStart.setOnClickListener {
+            when (vm.run.value.phase) {
+                RunPhase.RUNNING, RunPhase.OVERRUN -> confirmStopRun()
+                RunPhase.FINISHED -> vm.resetRun()
+                RunPhase.IDLE -> {
+                    val blocker = vm.startBlocker()
+                    if (blocker == null) vm.startRun() else confirmStartAnyway(blocker)
+                }
+            }
+        }
+    }
+
+    private fun confirmStartAnyway(blocker: String) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.run_check_title)
+            .setMessage(blocker)
+            .setPositiveButton(R.string.run_start_anyway) { _, _ -> vm.startRun() }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmStopRun() {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.run_stop_title)
+            .setMessage(R.string.run_stop_body)
+            .setPositiveButton(R.string.run_stop) { _, _ -> vm.abortRun() }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    /** Paint the run panel for the task and phase it is in. */
+    private fun renderRun(state: RunState) {
+        renderTaskPicker(state)
+
+        ui.runCountdown.text = state.clock
+        // Idle, the big number IS the budget, so repeating it underneath says
+        // nothing. Once it is counting down, the caption is what tells you
+        // what it is counting down from.
+        ui.runBudget.visibility = if (state.phase == RunPhase.IDLE) View.INVISIBLE else View.VISIBLE
+        ui.runBudget.text =
+            getString(R.string.run_budget, RunState.formatClock(state.task.budgetSec))
+
+        val urgent = state.running && state.remainingSec <= RunState.WARN_SEC
+        ui.runCountdown.setTextColor(
+            color(
+                when {
+                    state.phase == RunPhase.OVERRUN -> R.color.arena_bad
+                    urgent -> R.color.arena_accent
+                    state.running -> R.color.arena_text
+                    state.phase == RunPhase.FINISHED -> R.color.arena_go_lit
+                    else -> R.color.arena_text_muted
+                }
+            )
+        )
+
+        // Task 2 is scored on time alone, so an image tally there is noise.
+        ui.tallyRow.visibility = if (state.showsTally) View.VISIBLE else View.GONE
+        ui.runTally.text = if (state.placed == 0) getString(R.string.run_tally_empty) else state.tally
+
+        ui.btnStart.setText(
+            when (state.phase) {
+                RunPhase.IDLE -> R.string.run_start
+                RunPhase.FINISHED -> R.string.run_again
+                else -> R.string.run_stop
+            }
+        )
+        ui.btnStart.setKey(
+            if (state.running) R.drawable.btn_danger_selector else R.drawable.btn_go_selector
+        )
+        ui.btnStart.isEnabled = state.running || state.phase == RunPhase.FINISHED ||
+            vm.linkState.value is LinkState.Connected
+
+        // During a run the drive pad and the map actions are both forbidden
+        // and dangerous, and the status box wants their space.
+        val setup = if (state.running) View.GONE else View.VISIBLE
+        ui.drivePanel.visibility = setup
+        ui.actionRow.visibility = setup
+
+        // The hint carries the reason START is refused, so the button never
+        // looks broken. While running it gets out of the way.
+        val hint = when {
+            state.running -> null
+            state.phase == RunPhase.FINISHED -> when (state.task) {
+                Task.TASK1 -> getString(R.string.run_done_hint, state.identified, state.placed)
+                Task.TASK2 -> getString(R.string.run_done_hint_t2)
+            }
+            else -> vm.startBlocker() ?: when (state.task) {
+                Task.TASK1 -> getString(R.string.run_ready_hint, vm.arena.value.obstacles.size)
+                Task.TASK2 -> getString(R.string.run_idle_hint_t2)
+            }
+        }
+        ui.runHint.visibility = if (hint == null) View.GONE else View.VISIBLE
+        ui.runHint.text = hint.orEmpty()
+    }
+
+    /**
+     * The selected task reads as a lit key, the other as an unlit one. Both
+     * are dead while a run is going: switching task mid-attempt would silently
+     * change the budget the clock is counting against.
+     */
+    private fun renderTaskPicker(state: RunState) {
+        val pairs = listOf(ui.btnTask1 to Task.TASK1, ui.btnTask2 to Task.TASK2)
+        for ((button, task) in pairs) {
+            val on = state.task == task
+            button.setKey(if (on) R.drawable.btn_accent_selector else R.drawable.btn_pad_selector)
+            button.setTextColor(color(if (on) R.color.arena_on_accent else R.color.arena_text_muted))
+            button.isEnabled = !state.running
+        }
+    }
+
+    private fun color(id: Int) = ContextCompat.getColor(this, id)
+
+    /**
+     * Swap a key's face at runtime.
+     *
+     * MaterialButton keeps its own background tint and will paint it over
+     * anything we set, so the tint has to be cleared as well -- that is the
+     * whole reason this is a helper rather than a plain `background =`.
+     */
+    private fun MaterialButton.setKey(drawable: Int) {
+        backgroundTintList = null
+        background = ContextCompat.getDrawable(this@MainActivity, drawable)
+    }
+
     private fun wireReplay() {
         ui.btnReplayPlay.setOnClickListener { vm.toggleReplayPlayback() }
         ui.btnReplayClose.setOnClickListener { vm.closeReplay() }
@@ -296,6 +440,10 @@ class MainActivity : AppCompatActivity() {
                         ui.arena.state = state
                         val r = state.robot
                         ui.robotChip.text = getString(R.string.robot_format, r.x, r.y, r.facing.letter)
+                        // The run panel reads the map (how many obstacles, which
+                        // are missing a face), so it has to repaint when the map
+                        // changes and not only when the run state does.
+                        renderRun(vm.run.value)
                     }
                 }
 
@@ -311,6 +459,9 @@ class MainActivity : AppCompatActivity() {
                         ui.statusDot.backgroundTintList =
                             ContextCompat.getColorStateList(this@MainActivity, tint)
                         ui.btnDisconnect.isEnabled = s !is LinkState.Disconnected
+                        // Likewise: START is disabled while disconnected, so
+                        // connecting has to re-enable it.
+                        renderRun(vm.run.value)
                     }
                 }
 
@@ -357,6 +508,8 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 launch { vm.runClock.collect { ui.runClock.text = it } }
+
+                launch { vm.run.collect { renderRun(it) } }
 
                 launch { vm.notices.collect { toast(it) } }
             }

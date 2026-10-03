@@ -73,6 +73,17 @@
         <item name="rippleColor">@color/arena_ripple_dark</item>
     </style>
 
+    <!-- The run key. Same construction, in go green, and sized for a press
+         that matters: during a run it is the only control anyone may touch. -->
+    <style name="PadButton.Go">
+        <item name="android:background">@drawable/btn_go_selector</item>
+        <item name="android:textColor">@color/white</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">0.10</item>
+        <item name="android:textSize">17sp</item>
+        <item name="rippleColor">@color/arena_ripple</item>
+    </style>
+
     <style name="PadButton.Danger">
         <item name="android:background">@drawable/btn_danger_selector</item>
         <item name="android:textColor">@color/white</item>

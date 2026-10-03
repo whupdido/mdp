@@ -34,33 +34,32 @@
 #define SERVO_RIGHT         2100
 
 /* --- Turn geometry, MEASURED on hardware, 5 runs per case ---
-   (the test that produced these is archived in tools/turn_test/)
-   Radius = arc / gyro-measured heading change, including the coast after the
-   controller stops steering. The "+-" is half the observed run-to-run range.
+   Tape measured 25-Sep-2026. Each 90 degree turn was run from SW1 with
+   TURN_TEST in main.c; the rear-axle midpoint was marked on the floor at start
+   and finish and the straight-line chord c measured. Then
+       R = c / (2 sin(theta/2)) = c / sqrt(2)   for theta = 90 deg.
+   The gyro read within 0.5 deg of 90 on every run, which moves R by under
+   0.5 %. The "+-" is half the observed run-to-run range; the tape was read to
+   5 mm, so no radius here is resolved better than about +-2 mm.
 
-   The controller does NOT read these. move_turn_deg() closes on the gyro and
-   stops at the commanded angle whatever radius the car traces. They are here
-   because the RADIUS is what displaces the car on the grid: after a 90 degree
-   turn the car has moved one radius forward (or back) and one radius sideways,
-   so the path planner needs them even though the controller does not.
+   The motion controller does NOT read these. move_turn_deg() closes on the
+   gyro and stops at the commanded angle whatever radius the car traces. The
+   PLANNER does: obstacle_nav.c uses them, because after a 90 degree turn the
+   car has moved one radius forward (or back) and one radius sideways.
 
-                    before decel      after decel
-        FL           317 +-5           277 +-13      -12.6 %
-        FR           413 +-3           365 +-2       -11.6 %
-        BL           312 +-4           281 +-14       -9.9 %
-        BR           421 +-3           383 +-2        -9.0 %
+                    chord mean     radius         previous (05-Sep, encoders)
+        FL           385 mm        272 +-2         277 +-13
+        FR           518 mm        366 +-4         365 +-2
+        BL           395 mm        279 +-4         281 +-14
+        BR           523 mm        370 +-2         383 +-2
 
-   Two things to read off that table. Every radius tightened by about 10 %: the
-   speed_ratio scaling on the turn feedforward in control.c is meant to hold the
-   radius constant through the ramp and it does not fully manage it. And the
-   LEFT turns lost their repeatability, going from about 1.5 % run-to-run to
-   about 5 %, while the right turns stayed at 0.5 %. The left spread is the
-   problem worth chasing: 26 mm of scatter per turn accumulates across a route
-   in a way a biased but repeatable radius does not.                        */
-#define TURN_RADIUS_FL_MM   277     /* +-13 mm -- NOT repeatable, see above */
-#define TURN_RADIUS_FR_MM   365     /* +-2 mm                               */
-#define TURN_RADIUS_BL_MM   281     /* +-14 mm -- NOT repeatable, see above */
-#define TURN_RADIUS_BR_MM   383     /* +-2 mm                               */
+   The left-turn scatter seen on 05-Sep (+-13/14 mm) did not show up here: the
+   left turns now repeat as well as the right ones. BR is the only case whose
+   value moved by more than the spread (-13 mm).                           */
+#define TURN_RADIUS_FL_MM   272     /* +-2 mm (4 runs recorded)             */
+#define TURN_RADIUS_FR_MM   366     /* +-4 mm                               */
+#define TURN_RADIUS_BL_MM   279     /* +-4 mm                               */
+#define TURN_RADIUS_BR_MM   370     /* +-2 mm                               */
 
 /* Target speeds in ENCODER COUNTS PER 10 ms CONTROL TICK.
    A physical quantity, independent of PWM_MAX -- do NOT rescale these

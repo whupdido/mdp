@@ -7,8 +7,11 @@ not a claim that the physical robot has been fully calibrated.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Callable
 
+from algorithm.calibration import load_turn_radius_calibration
 from algorithm.constants import ARENA_SIZE_CM, CELL_SIZE_CM
 from algorithm.enums import Gear, Steering
 from algorithm.models.motion import MotionPrimitive
@@ -257,3 +260,95 @@ UNCALIBRATED_SIMULATION_CONFIG = PlanningConfig(
     motion=_simulation_motion_model(),
     observation_standoff_distances_cm=(20.0, 10.0, 30.0),
 )
+
+
+def task1_robot_config(
+    calibration_path: Path | None = None,
+    *,
+    emit: Callable[[str], None] = print,
+) -> PlanningConfig:
+    """Build one production Task 1 config snapshot from local STM32 calibration.
+
+    The bounded values below are the settings currently used by the integrated
+    server's effective profile.  The partial-angle set and 15-degree heading
+    bin are explicit production behavior, while search remains limited to the
+    existing 30-degree editor/runtime branch.
+    """
+
+    base = UNCALIBRATED_SIMULATION_CONFIG
+    production = replace(
+        base,
+        robot=replace(base.robot, safety_margin_cm=3.0),
+        observation_lateral_offsets_cm=(0.0,),
+        guaranteed_max_candidates_per_target=1,
+        max_expanded_nodes=5000,
+        adaptive_initial_expansions=200,
+        adaptive_max_expansions=5000,
+        local_planning_timeout_s=5.0,
+        overall_planning_timeout_s=60.0,
+        turn_angles_deg=(30.0, 45.0, 60.0, 90.0),
+        search_turn_angles_deg=(30.0,),
+        heading_bin_rad=math.radians(15.0),
+    )
+
+    calibration = load_turn_radius_calibration(calibration_path)
+    live_radii_cm = {
+        command: value_mm / 10.0
+        for command, value_mm in calibration.values_mm
+    }
+    fallback_radii_cm = {
+        primitive.command: primitive.radius_cm
+        for primitive in production.motion.primitives
+        if primitive.radius_cm is not None
+    }
+
+    for failure in calibration.failures:
+        fallback = fallback_radii_cm[failure.command]
+        emit(
+            f"[CALIB] WARNING: {failure.macro} {failure.reason}; "
+            f"using Python fallback {fallback:g} cm"
+        )
+
+    calibrated_primitives = tuple(
+        replace(
+            primitive,
+            radius_cm=live_radii_cm.get(primitive.command, primitive.radius_cm),
+        )
+        if primitive.steering is not Steering.STRAIGHT
+        else primitive
+        for primitive in production.motion.primitives
+    )
+    calibrated = replace(
+        production,
+        motion=replace(production.motion, primitives=calibrated_primitives),
+    )
+    final_radii = {
+        primitive.command: primitive.radius_cm
+        for primitive in calibrated.motion.primitives
+        if primitive.radius_cm is not None
+    }
+    fallback_commands = tuple(
+        failure.command for failure in calibration.failures
+    )
+    fallback_suffix = (
+        f" [{', '.join(f'{command} fallback' for command in fallback_commands)}]"
+        if fallback_commands
+        else ""
+    )
+    emit(
+        "[CALIB] STM32 turn radii: "
+        + " ".join(f"{command}={final_radii[command]:.1f}" for command in ("FL", "FR", "BL", "BR"))
+        + " cm"
+        + fallback_suffix
+    )
+    return calibrated
+
+
+__all__ = [
+    "CameraGeometry",
+    "MotionModel",
+    "PlanningConfig",
+    "RobotGeometry",
+    "UNCALIBRATED_SIMULATION_CONFIG",
+    "task1_robot_config",
+]

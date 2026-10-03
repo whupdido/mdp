@@ -8,7 +8,13 @@ import com.example.androidapp.arena.ArenaState
 import com.example.androidapp.arena.Facing
 import com.example.androidapp.arena.ReplayState
 import com.example.androidapp.arena.RunFrame
+import com.example.androidapp.arena.RunPhase
+import com.example.androidapp.arena.RunState
 import com.example.androidapp.arena.cleared
+import com.example.androidapp.arena.Task
+import com.example.androidapp.arena.allIdentified
+import com.example.androidapp.arena.isRunOverNotice
+import com.example.androidapp.arena.runBlocker
 import com.example.androidapp.arena.withObstacleAdded
 import com.example.androidapp.arena.withObstacleMoved
 import com.example.androidapp.arena.withObstacleRemoved
@@ -116,6 +122,17 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
     private val _runClock = MutableStateFlow("--:--")
     val runClock: StateFlow<String> = _runClock.asStateFlow()
 
+    /**
+     * The Task 1 attempt. Separate from [runClock], which times any movement
+     * at all: this one only exists between the START press and the robot
+     * stopping, because that is the interval the rules score.
+     */
+    private val _run = MutableStateFlow(RunState())
+    val run: StateFlow<RunState> = _run.asStateFlow()
+
+    private var runTicker: Job? = null
+    private var runStartMs = 0L
+
     private var ticker: Job? = null
 
     private var collectors: Job? = null
@@ -209,10 +226,20 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
                     val glyph = Arena.glyphFor(msg.targetId)?.let { " ($it)" } ?: ""
                     say("Target ${msg.targetId}$glyph found at obstacle ${msg.obstacleId}$where.")
                     record(next, "Target ${msg.targetId}$glyph at obstacle ${msg.obstacleId}")
+                    refreshRunTally()
                 }
             }
 
-            is Inbound.Message -> say(msg.text)
+            is Inbound.Message -> {
+                say(msg.text)
+                // The Task 1 route runner says when it has stopped driving.
+                // It stops early on a blocked or stalled move, so this can
+                // arrive with images still missing -- the attempt is over
+                // either way, and the tally already says how it went.
+                if (_run.value.task == Task.TASK1 && isRunOverNotice(msg.text)) {
+                    finishRun("Run ended")
+                }
+            }
 
             is Inbound.Forwarded -> say("Sent ${msg.command} to the robot.")
 
@@ -243,11 +270,20 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun onStmReply(msg: Inbound.StmReply) = when (msg.reply) {
         "READY" -> say("Robot ready.")
-        "DONE" -> if (moveCutShort) {
-            moveCutShort = false
-            say("Move ended early.")
-        } else {
-            say("Move complete.")
+        // In Task 2 the whole routine is one command, so this DONE is the
+        // board saying the run itself is over -- not that a move finished.
+        // Without this a clean 2:30 run would keep counting down, go red at
+        // 3:00 and tell the operator the time was up.
+        "DONE" -> when {
+            _run.value.running && _run.value.task == Task.TASK2 ->
+                finishRun("Task 2 complete")
+
+            moveCutShort -> {
+                moveCutShort = false
+                say("Move ended early.")
+            }
+
+            else -> say("Move complete.")
         }
         "ACK" -> say("Stop acknowledged.")
         "BUSY" -> warn("Robot was still moving — that command was discarded.")
@@ -318,6 +354,159 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
     fun move(move: Move, distanceCm: Int, angleDeg: Int) {
         moveCutShort = false // a fresh move gets a fresh verdict
         transmit(move.toCommand(distanceCm, angleDeg))
+    }
+
+    // -----------------------------------------------------------------
+    // Task 1 run
+    // -----------------------------------------------------------------
+
+    /** Choose which assessed run the START button drives. */
+    fun selectTask(task: Task) {
+        if (_run.value.running || _run.value.task == task) return
+        _run.value = RunState(task = task)
+    }
+
+    /** Why START is refused right now, or null if it would go through. */
+    fun startBlocker(): String? = when {
+        linkState.value !is LinkState.Connected -> "Not connected to the robot."
+        else -> _arena.value.runBlocker(_run.value.task)
+    }
+
+    /**
+     * Re-send the whole map, spaced out, and then START.
+     *
+     * Map edits already go out as they are made, which is what C.6 and C.7
+     * were signed off on. That is not enough on its own: `rpi/run_task1.py`
+     * only collects obstacles once it is running, so anything keyed in before
+     * someone launched it on the Pi was simply lost, and the run would plan
+     * around a map missing those obstacles without complaining.
+     *
+     * Re-publishing here closes that hole. It is safe to repeat: `ADD` and
+     * `FACE` on the Pi overwrite by obstacle number rather than accumulate
+     * (`a1_bridge.handle_map_message`), so sending the map twice leaves the
+     * same state as sending it once.
+     *
+     * [MAP_GAP_MS] between lines is deliberate. The whole map arrives as one
+     * burst, and RFCOMM plus the bridge's line-at-a-time reader are happier
+     * with a gap than with eight messages inside one buffer.
+     */
+    private suspend fun publishMapThenStart(task: Task) {
+        if (task == Task.TASK1) {
+            val obstacles = _arena.value.obstacles
+            if (obstacles.isNotEmpty()) {
+                note("-- re-sending ${obstacles.size} obstacle(s) before START --")
+                for (obstacle in obstacles) {
+                    transmit(Outbound.add(obstacle.id, obstacle.x, obstacle.y))
+                    delay(MAP_GAP_MS)
+                    obstacle.targetFace?.let {
+                        transmit(Outbound.face(obstacle.id, it))
+                        delay(MAP_GAP_MS)
+                    }
+                }
+            }
+        }
+        transmit(Outbound.start(task))
+    }
+
+    /**
+     * The one button the team is allowed to touch during an attempt.
+     *
+     * Starts the clock here rather than waiting for the robot to move: the
+     * rules time the attempt from the press, and for Task 1 the planning
+     * happens before the first wheel turns.
+     */
+    fun startRun() {
+        if (_run.value.running) return
+        val task = _run.value.task
+        clearRecording()
+        _run.value = RunState(
+            task = task,
+            phase = RunPhase.RUNNING,
+            placed = _arena.value.obstacles.size,
+            identified = _arena.value.obstacles.count { it.targetId != null },
+        )
+        runStartMs = System.currentTimeMillis()
+        say("${task.label} started. ${task.budgetSec / 60} minutes.")
+        viewModelScope.launch { publishMapThenStart(task) }
+        runTicker?.cancel()
+        runTicker = viewModelScope.launch {
+            while (true) {
+                val elapsed = (System.currentTimeMillis() - runStartMs) / 1000
+                val live = _run.value
+                if (!live.running) return@launch
+                val overrun = elapsed >= live.task.budgetSec
+                if (overrun && live.phase != RunPhase.OVERRUN) {
+                    warn("Time is up. A run stopped by hand is scored incomplete.")
+                }
+                _run.value = live.copy(
+                    elapsedSec = elapsed,
+                    phase = if (overrun) RunPhase.OVERRUN else RunPhase.RUNNING,
+                )
+                delay(250)
+            }
+        }
+    }
+
+    /**
+     * Stop the robot mid-attempt. The rules allow it but score the run as
+     * incomplete, so the wording says so rather than pretending otherwise.
+     */
+    fun abortRun() {
+        transmit(Outbound.STOP)
+        if (!_run.value.running) return
+        runTicker?.cancel()
+        runTicker = null
+        _run.value = _run.value.copy(phase = RunPhase.IDLE)
+        warn("Run stopped by hand. That scores as incomplete.")
+    }
+
+    /** Back to a fresh attempt, without touching the map the supervisor keyed in. */
+    fun resetRun() {
+        runTicker?.cancel()
+        runTicker = null
+        _run.value = RunState(task = _run.value.task)
+    }
+
+    /**
+     * Called whenever an image ID lands. The attempt is over once every
+     * obstacle carries one, because that is the moment the supervisor's
+     * timing stops -- not when the robot happens to stop moving.
+     */
+    private fun refreshRunTally() {
+        val live = _run.value
+        if (!live.running || live.task != Task.TASK1) return
+        val obstacles = _arena.value.obstacles
+        _run.value = live.copy(
+            identified = obstacles.count { it.targetId != null },
+            placed = obstacles.size,
+        )
+        if (_arena.value.allIdentified()) {
+            finishRun("All ${obstacles.size} images identified")
+        }
+    }
+
+    /**
+     * Stop the clock: the robot is done and the attempt is over.
+     *
+     * Every way a run can legitimately end comes through here, because the
+     * phase decides what the panel says and getting it wrong at the end of an
+     * attempt is worse than getting it wrong at the start. The ways are:
+     *
+     *  - Task 1, every obstacle has an image ID. The rules stop the timing
+     *    when the IDs are showing, not when the wheels stop.
+     *  - Task 1, the route runner says it has finished. It stops early on a
+     *    blocked or stalled move, so this can arrive with images still
+     *    missing -- the attempt is still over, and the tally already says
+     *    how it went.
+     *  - Task 2, the board reports the routine returned.
+     */
+    private fun finishRun(note: String) {
+        val live = _run.value
+        if (!live.running) return
+        runTicker?.cancel()
+        runTicker = null
+        _run.value = live.copy(phase = RunPhase.FINISHED)
+        say("$note in ${RunState.formatClock(live.elapsedSec)}.")
     }
 
     private fun transmit(line: String) {
@@ -496,6 +685,9 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         private const val UNDO_DEPTH = 30
         private const val MAX_FRAMES = 600
         private const val FRAME_MS = 320L
+
+        /** Gap between lines when the whole map is republished at START. */
+        private const val MAP_GAP_MS = 50L
         private val CLOCK = SimpleDateFormat("HH:mm:ss", Locale.UK)
         private fun stamp(text: String) = "${CLOCK.format(Date())}  $text"
 

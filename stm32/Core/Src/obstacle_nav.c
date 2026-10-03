@@ -254,7 +254,7 @@ int task_2_image_rec(void){
 		 * This allows dispatch() to run and change image_found to 1! */
 		command_poll();
 
-		if (image_found > 0)
+		if (image_found == 38 || image_found == 39)
 		{
 			snprintf(buf, sizeof(buf), "Found ID: %u   ", image_found);
 			OLED_ShowString(0, 20, (const uint8_t *)buf);
@@ -262,7 +262,7 @@ int task_2_image_rec(void){
 
 			//command_send(">> Target Matched!\r\n");
 
-			HAL_Delay(1000); /* Pause so you can read OLED before driving away */
+			//HAL_Delay(1000); /* Pause so you can read OLED before driving away */
 			return 1;
 		}
 
@@ -355,7 +355,7 @@ void task_2_straighten(int original_dodge_left, int degrees, int32_t* accum_forw
 void task_2(void) {
 	int32_t accum_forward = 0;
 	int32_t accum_left = 0;
-	char buf[64];
+	//char buf[64];
 
 	/* ======================================================================
 	 * OBSTACLE 1 (10x10cm) - The "Reverse Corridor" Dodge
@@ -373,8 +373,13 @@ void task_2(void) {
 
 	int success = task_2_image_rec();
 
-	/* Default to dodging right if image fails */
-	int dodge_left = (image_found == 39) ? 1 : 1; // RMB TO CHANGE!!!!
+	int dodge_left;
+	if (success) {
+		dodge_left = (image_found == 39) ? 1 : 0;
+	}
+	else {
+		dodge_left = 1; // IMPLEMENT
+	}
 
 	OLED_Clear();
 	OLED_ShowString(0, 20, dodge_left ? (const uint8_t *)"Dodging Left" : (const uint8_t *)"Dodging Right");
@@ -384,36 +389,36 @@ void task_2(void) {
 	 * PHASE 1: Outward Dodge & IR Scanning
 	 * --------------------------------------------------------- */
 	int current_angle = 45;
+	uint8_t obs1_seen = 0;
 	task_2_turn(dodge_left, 1, current_angle, 0, &accum_forward, &accum_left);
 	HAL_Delay(100);
-	move_straight_mm(150);
-	float rad_45 = 45.0f * (3.14159f / 180.0f);
-	accum_forward += (int32_t)(150 * cosf(rad_45));
-	accum_left    += (int32_t)(150 * sinf(rad_45)) * (dodge_left ? 1 : -1);
-	uint8_t obs1_seen = 0;
-	float inner_ir = dodge_left ? get_sharp_ir_right_cm() : get_sharp_ir_left_cm();
-	if (inner_ir <= 25.0f){
-		uint8_t creep_times = 0;
-		int32_t diag_driven = 150;
-		/* Fast 60mm checks to accurately catch the 10cm block */
-		while (diag_driven <= 300) {
-
-			if (!obs1_seen && inner_ir < 45.0f) {
-				obs1_seen = 1; /* Found the block! */
-			}
-			else if (obs1_seen && inner_ir >= 45.0f) {
-				/* FALLING EDGE! We just cleared the 10cm block. */
-				break;
-			}
-
-			move_straight_mm(75);
-			diag_driven += 75;
-			creep_times += 1;
-
-			accum_forward += (int32_t)(75 * cosf(rad_45));
-			accum_left    += (int32_t)(75 * sinf(rad_45)) * (dodge_left ? 1 : -1);
-		}
-	}
+//	move_straight_mm(150);
+//	float rad_45 = 45.0f * (3.14159f / 180.0f);
+//	accum_forward += (int32_t)(150 * cosf(rad_45));
+//	accum_left    += (int32_t)(150 * sinf(rad_45)) * (dodge_left ? 1 : -1);
+//	float inner_ir = dodge_left ? get_sharp_ir_right_cm() : get_sharp_ir_left_cm();
+//	if (inner_ir <= 25.0f){
+//		uint8_t creep_times = 0;
+//		int32_t diag_driven = 150;
+//		/* Fast 60mm checks to accurately catch the 10cm block */
+//		while (diag_driven <= 300) {
+//
+//			if (!obs1_seen && inner_ir < 45.0f) {
+//				obs1_seen = 1; /* Found the block! */
+//			}
+//			else if (obs1_seen && inner_ir >= 45.0f) {
+//				/* FALLING EDGE! We just cleared the 10cm block. */
+//				break;
+//			}
+//
+//			move_straight_mm(75);
+//			diag_driven += 75;
+//			creep_times += 1;
+//
+//			accum_forward += (int32_t)(75 * cosf(rad_45));
+//			accum_left    += (int32_t)(75 * sinf(rad_45)) * (dodge_left ? 1 : -1);
+//		}
+//	}
 
 	/* ---------------------------------------------------------
 	 * PHASE 2: Straighten Out in the Side Lane
@@ -422,20 +427,20 @@ void task_2(void) {
 
 
 	/* ---------------------------------------------------------
-	 * PHASE 3: The "Reverse Corridor" Space Saver
+	 * PHASE 3: Forward Clear
 	 * --------------------------------------------------------- */
-	OLED_ShowString(0, 40, (const uint8_t *)"Reversing!   ");
+	OLED_ShowString(0, 40, (const uint8_t *)"Clearing!   ");
 	OLED_Refresh_Gram();
 
-	int32_t reverse_dist = 70;
+	int32_t forward_dist = 100;
 
 	/* MECHANICS FIX 1: Let the servo physically return to center
 	 * before reversing so we don't swing a Ghost Arc! */
 	servo_us(SERVO_CENTRE);
 	HAL_Delay(150);
 
-	move_straight_mm(-reverse_dist);
-	accum_forward -= reverse_dist;
+	move_straight_mm(forward_dist);
+	accum_forward += forward_dist;
 
 
 	/* ---------------------------------------------------------
@@ -483,7 +488,13 @@ void task_2(void) {
 	 * ====================================================================== */
 	success = task_2_image_rec();
 
-	int dodge_left_2 = (image_found == 39) ? 1 : 1; // RMB TO CHANGE!!!!
+	int dodge_left_2;
+	if (success) {
+		dodge_left_2 = (image_found == 39) ? 1 : 0;
+	}
+	else {
+		dodge_left_2 = 0; // IMPLEMENT
+	}
 	int turn_out = dodge_left_2 ? 1 : 0;
 	int turn_in  = !dodge_left_2;
 

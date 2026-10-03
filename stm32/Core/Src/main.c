@@ -37,6 +37,7 @@
 #include "icm20948.h"
 #include "obstacle_nav.h"
 #include "sensors.h"
+#include "turn_test.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -52,6 +53,12 @@
    accepting commands. Do this once, with the wheels OFF THE GROUND, before
    you trust the closed loop. Set back to 0 afterwards. */
 #define SELFTEST 0
+
+/* Set to 1 to turn SW1 into the turning-radius test: each short press runs one
+   90 degree turn (5 x FR, 5 x FL, 5 x BR, 5 x BL, then a summary). Results go
+   to the OLED and to USART3 as "[TT]" lines. Long press still calibrates the
+   gyro. Set back to 0 for normal runs. */
+#define TURN_TEST 0
 
 /* USER CODE END PD */
 
@@ -201,6 +208,9 @@ int main(void)
 #endif
 
   command_send("READY\r\n");
+#if TURN_TEST
+  turn_test_show_idle();
+#endif
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -245,6 +255,9 @@ int main(void)
                       icm20948_calib_gyro_bias();
                       command_send("[IMU] Gyro bias locked.\r\n");
                       calibrated = 1;
+#if TURN_TEST
+                      turn_test_show_idle();
+#endif
                   }
                   HAL_Delay(10); /* Small delay to prevent starving the CPU */
               }
@@ -263,7 +276,11 @@ int main(void)
               /* If it was just a quick press (< 2 seconds), do the normal action */
               if (!long_press_triggered)
               {
+#if TURN_TEST
+                  turn_test_step();
+#else
                   display_both_sensors_oled();
+#endif
                   //HAL_Delay(1000);
                   //task_2();
               }
