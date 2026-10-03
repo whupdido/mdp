@@ -14,13 +14,13 @@ The RPi side is rpi/algo_client.py's plan_route().
 import math
 import socket
 
+from algorithm.config import task1_robot_config
 from algorithm.enums import Direction, PlanningStatus, Steering
 from algorithm.models.arena import ArenaInput
 from algorithm.models.motion import CaptureStep, MoveStep
 from algorithm.models.obstacle import Obstacle
 from algorithm.models.pose import GridCell, Pose
 from algorithm.routing.planner import Task1Planner
-from algorithm.simulator.task1_demo import task1_demo_config
 
 from server.utils import recv_json, send_json
 
@@ -79,7 +79,12 @@ def _serialize_result(result) -> dict:
     return {"status": "success", "steps": steps}
 
 
-def handle_client(conn: socket.socket, planner: Task1Planner) -> None:
+def _plan_payload(payload: dict):
+    arena = _build_arena(payload)
+    return Task1Planner(task1_robot_config()).plan(arena)
+
+
+def handle_client(conn: socket.socket) -> None:
     try:
         payload = recv_json(conn)
         if payload is None:
@@ -87,14 +92,13 @@ def handle_client(conn: socket.socket, planner: Task1Planner) -> None:
         print(f"[ALGO] Received {len(payload.get('obstacles', []))} obstacle(s)")
 
         try:
-            arena = _build_arena(payload)
+            result = _plan_payload(payload)
         except (KeyError, TypeError, ValueError) as exc:
             send_json(conn, {"status": "invalid_input", "issues": [
                 {"code": "malformed_request", "message": str(exc), "obstacle_id": None}
             ]})
             return
 
-        result = planner.plan(arena)
         response = _serialize_result(result)
         print(f"[ALGO] Planning result: {response['status']}"
               f" ({len(response.get('steps', []))} steps)" if response["status"] == "success"
@@ -110,8 +114,6 @@ def serve() -> None:
     # the 23 cm body by 5 cm per side, which puts that documented start pose
     # outside the arena.  The bounded Task 1 profile uses the repository's
     # validated 3 cm integration margin and conservative search settings.
-    planner = Task1Planner(task1_demo_config())
-
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((HOST, PORT))
@@ -123,7 +125,7 @@ def serve() -> None:
             conn, addr = sock.accept()
             print(f"[ALGO] Connected from {addr}")
             try:
-                handle_client(conn, planner)
+                handle_client(conn)
             finally:
                 conn.close()
     except KeyboardInterrupt:

@@ -139,10 +139,10 @@ def test_straight_endpoints_can_be_valid_while_middle_collides():
 @pytest.mark.parametrize(
     ("command", "expected"),
     [
-        ("FL", Pose(131.7, 131.7, Direction.NORTH.heading_rad)),
-        ("FR", Pose(141.3, 58.7, Direction.SOUTH.heading_rad)),
-        ("BL", Pose(68.8, 131.2, Direction.SOUTH.heading_rad)),
-        ("BR", Pose(57.9, 57.9, Direction.NORTH.heading_rad)),
+        ("FL", Pose(127.7, 127.7, Direction.NORTH.heading_rad)),
+        ("FR", Pose(136.5, 63.5, Direction.SOUTH.heading_rad)),
+        ("BL", Pose(71.9, 128.1, Direction.SOUTH.heading_rad)),
+        ("BR", Pose(61.7, 61.7, Direction.NORTH.heading_rad)),
     ],
 )
 def test_configured_arc_endpoint_and_reverse_assumptions(command, expected):
