@@ -144,6 +144,10 @@ uint8_t move_straight_mm(int32_t mm)
     if (motion_abort_requested()) return 0;
     if (mm == 0) { last_result = MOVE_DONE; return 1; } /* Zhenxi: see report_result() in command.c */
 
+    /* Lock wheels to calibrated center at launch */
+	servo_us(SERVO_CENTRE);
+	HAL_Delay(150);
+
     target_counts_total       = (int32_t)(fabsf((float)mm) / MM_PER_COUNT);
     dir_forward               = (mm > 0) ? 1 : -1;
     accum_counts              = 0;
@@ -157,10 +161,6 @@ uint8_t move_straight_mm(int32_t mm)
     stall_ticks_count         = 0;
     locked_heading_deg        = global_yaw_deg;
     last_result               = MOVE_NONE; /* Zhenxi: this move has no verdict yet */
-
-    /* Lock wheels to calibrated center at launch */
-    servo_us(SERVO_CENTRE);
-    HAL_Delay(150);
 
     reset_speed_pid();
     busy_flag    = 1;
