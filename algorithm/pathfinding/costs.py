@@ -33,6 +33,8 @@ def transition_cost(
     if objective is not CostMetric.ESTIMATED_TIME:
         raise ValueError(f"unsupported cost metric: {objective!r}")
     cost = primitive_execution_time_s(primitive, motion)
+    if primitive.steering is not Steering.STRAIGHT:
+        cost += motion.turn_penalty_s
     if previous_gear is not None and previous_gear is not primitive.gear:
         cost += motion.direction_change_penalty_s
     if previous_steering is not None and previous_steering is not primitive.steering:

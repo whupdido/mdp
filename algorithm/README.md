@@ -25,6 +25,7 @@ python -c "import pygame; print(pygame.version.ver)"
 python -m pytest --version
 
 python -m algorithm.simulator --task1-editor
+python -m algorithm.simulator --task1-production
 python -m pytest algorithm/tests
 deactivate
 ```
@@ -45,6 +46,7 @@ python --version
 python -c "import pygame; print(pygame.version.ver)"
 python -m pytest --version
 python -m algorithm.simulator --task1-editor
+python -m algorithm.simulator --task1-production
 python -m pytest algorithm/tests
 deactivate
 ```
@@ -74,6 +76,10 @@ algorithm/
 python -m algorithm.simulator --demo                         # B.1 scripted demo
 python -m algorithm.simulator --task1-demo                   # B.2 calibrated Task 1 demo
 python -m algorithm.simulator --task1-editor                 # edit and plan an arena
+python -m algorithm.simulator --task1-production              # production Task 1 editor/replay
+python -m algorithm.simulator --task1-production --scenario-file algorithm/simulator/scenarios/six_obstacles_complex.json
+python -m algorithm.simulator --task1-production --turn-profile 45/90
+python -m algorithm.simulator --task1-production --candidate-policy 20/30
 python -m algorithm.simulator --task1-random --seed 42       # seeded random arena
 python -m algorithm.simulator --task1-random --seed 42 --solvable
 python -m algorithm.simulator --hybrid-demo                  # Hybrid A* debug demo
@@ -89,6 +95,11 @@ Space plays/pauses. Arrow keys only navigate the simulator timeline: they do
 not replan, send inverse robot commands, or modify the STM protocol. B.3
 shortest-time support remains provisional because STM timing is not physically
 calibrated.
+
+Production mode has additional controls: `Ctrl+S` saves the current arena before
+planning or saves a route/physical-run record after planning. `Ctrl+M` enters an
+optional measured rear-axle capture pose in the terminal. `Enter` is the
+explicit replan action after a historical route is loaded.
 
 This package owns the Task 1 planning pipeline and its independent simulator.
 It does not own Bluetooth, serial communication, the RPi bridge, STM32 motion
@@ -164,9 +175,9 @@ Phase 4.1 adds presentation polish and manual B.1 verification guidance without
 changing simulator state, geometry, collision, target generation, coordinates,
 or motion semantics.
 
-The following phases remain incomplete: final route-command serialization and
-transport/integration adapters. Phase 5 remains the one-query local planner;
-Phase 6 builds the complete Task 1 layer above it without changing Hybrid A\*.
+Task 1 route-command serialization is shared by the production socket server
+and simulator. Physical STM execution and image recognition remain outside
+this package.
 
 ## Architecture
 
@@ -254,7 +265,7 @@ Each obstacle has an annotated image face: North, South, East, or West. The
 candidate generator places a camera point along that face's outward normal,
 then applies a tangent offset relative to the face orientation. `C` is centred,
 `L` and `R` are lateral offsets relative to that face, not global left/right.
-The current ordered candidate set is:
+The generic simulator/editor profile can expose this ordered candidate set:
 
 ```text
 10C 10L 10R    20C 20L 20R    30C 30L 30R
@@ -272,16 +283,20 @@ Multiple candidates exist because a nominal pose may be outside the arena,
 collide, lose visibility, or be disconnected under car-like motion. Geometric
 validity is checked before routing; Hybrid A* reachability is checked later.
 
+The production Task 1 control uses only centered `20C` during this investigation;
+the other candidate policies are available as explicit diagnostics. The
+production behavior and candidate comparisons are documented in
+[Production Task 1 simulator and physical-run replay](#production-task-1-simulator-and-physical-run-replay).
+
 ### Motion constraints and collision checking
 
 The robot is nonholonomic: it cannot move sideways or rotate in place. The
 configured commands are `FW`, `BW`, `FL`, `FR`, `BL`, and `BR`. The initial
-simulation profile uses 10 cm straight primitives and asymmetric measured
-radii: FL 31.7 cm, FR 41.3 cm, BL 31.2 cm, and BR 42.1 cm. The base turn
-definitions are 90-degree command-aligned arcs; Hybrid A* can expand the
-configured 30/45/60/90-degree search angles (the editor currently selects a
-bounded 30-degree runtime profile, while the deterministic Task 1 demo uses
-90-degree arcs). These are configuration choices, not inherent Hybrid A*
+simulation profile uses 10 cm straight primitives and configured asymmetric
+turn radii. The base turn definitions are 90-degree command-aligned arcs;
+Hybrid A* can expand the configured 30/45/60/90-degree search angles. The
+production Task 1 profile uses 60/90 degrees, while the fixed Task 1 demo keeps
+its own deterministic configuration. These are configuration choices, not inherent Hybrid A*
 requirements. BL/BR reverse yaw semantics and physical readiness remain
 hardware-validation items.
 
@@ -396,7 +411,8 @@ no physical-readiness claim. Its current values are:
 - 20 cm camera-to-image gap.
 - Viewing offsets of 0, -10, and +10 cm.
 - Forward/reverse straight primitives of 10 cm.
-- FL/FR/BL/BR radii of 31.7/41.3/31.2/42.1 cm (current STM-measured geometry).
+- fallback FL/FR/BL/BR radii of 27.7/36.5/28.1/38.3 cm. Production mode
+  attempts to load current STM calibration instead.
 - Provisional 90-degree durations of 2.4/2.9/2.3/2.8 seconds; partial-turn
   durations are proportional simulation estimates only.
 
@@ -410,17 +426,16 @@ The reverse convention currently assumes BL turns the nose right and BR turns
 it left. Their semantics and radii must be floor-tested before routes depending
 on them are considered physically ready.
 
-The initial search bookkeeping uses 5 cm position bins and 15 degree heading
-bins,
-a 5 cm goal-position tolerance, exact cardinal goal heading within numerical
-tolerance, and a 50,000-expanded-node safeguard. These are replaceable
+The search bookkeeping uses 5 cm position bins and 15 degree heading bins, a
+5 cm goal-position tolerance, exact cardinal goal heading within numerical
+tolerance, and configured node and time budgets. These are replaceable
 configuration values suitable for the 200 cm development arena; they are not a
 claim of physically optimal resolution.
 
 ## Observation Pose Generation
 
 Each annotated obstacle produces a bounded deterministic product of configured
-camera-to-image standoffs and lateral offsets. The simulation profile orders
+camera-to-image standoffs and lateral offsets. The generic simulation profile orders
 `20C, 20L, 20R, 10C, 10L, 10R, 30C, 30L, 30R`: 20 cm is the preferred
 recognition distance, while 10 cm and 30 cm are simulation fallbacks pending
 physical image-recognition validation. Because the configured body center and
@@ -479,11 +494,16 @@ it is never snapped to a grid. Closed-set bookkeeping uses a separate
 gear/steering state needed by configured transition penalties.
 
 The successor set comes directly from `PlanningConfig.motion.primitives` in its
-configured deterministic order. The initial profile therefore uses:
+configured deterministic order. The fallback motion model therefore uses:
 
 - FW and BW: 10 cm forward and reverse straights.
-- FL and FR: bounded 30/45/60/90-degree forward arcs with 31.7 and 41.3 cm radii.
-- BL and BR: bounded 30/45/60/90-degree reverse arcs with 31.2 and 42.1 cm radii.
+- FL and FR: bounded 30/45/60/90-degree forward arcs with fallback radii 27.7
+  and 36.5 cm.
+- BL and BR: bounded 30/45/60/90-degree reverse arcs with fallback radii 28.1
+  and 38.3 cm.
+
+Production mode replaces available fallback radii with values loaded from the
+current STM calibration header.
 
 These are command-aligned configurable successors, not inherent Hybrid A\*
 restrictions. A calibrated configuration can supply different distances,
@@ -682,9 +702,10 @@ the single local Phase 5 query.
 
 ### Phase 6.5 maneuverability diagnostics
 
-The current editor profile retains the deterministic `10/20/30 C/L/R`
+The general editor profile retains the deterministic `10/20/30 C/L/R`
 observation candidates (20 cm centered is preferred) and adds bounded partial
-Ackermann arcs at 30, 45, 60, and 90 degrees. Each arc uses its existing
+Ackermann arcs at 30, 45, 60, and 90 degrees. Production mode uses 20 cm
+centered only and 60/90-degree search. Each arc uses its existing
 direction-specific radius; only the angle and proportional provisional timing
 vary. Heading bins are 15 degrees for bookkeeping while propagated poses stay
 continuous. `N` toggles candidate markers in the editor; `C` remains the
@@ -936,6 +957,118 @@ pose. Actual image classification belongs to the image-recognition subsystem
 during integrated execution; Phase 6.2 adds no computer vision or networking.
 
 ## Simulator
+
+### Production Task 1 simulator and physical-run replay
+
+The production simulator is an interactive editor and playback tool for
+testing the same `Task1Planner`, collision checker, turn-radius calibration,
+route representation, and STM command serializer used by `server/algo_server.py`.
+It accepts 1–8 obstacle targets. The fixed `--task1-demo` remains a stable
+five-target 90° reference route; `--task1-editor` remains the general five-target
+assessment editor. Production mode is the robot-specific configuration and
+supports saved physical-run replay.
+
+Quick launch from the repository root:
+
+```powershell
+python -m algorithm.simulator --task1-production
+python -m algorithm.simulator --task1-production --scenario-file algorithm/simulator/scenarios/five_obstacles_example.json
+python -m algorithm.simulator --task1-production --scenario-file task1_runs/my_run.json
+```
+
+At startup the console prints the effective angles, objective, candidate
+policy, four turn radii, calibration status, robot and camera geometry,
+clearance margin, arena, timeout and expansion bounds, and a configuration
+fingerprint. The default production control for this investigation is
+60°/90° search, `ESTIMATED_TIME`, and one centered 20 cm image standoff.
+Calibration is loaded from `stm32/Core/Inc/calib.h` using the shared loader;
+missing or invalid radii use the existing Python fallback and are marked.
+The geometry and 3 cm safety margin are unchanged.
+
+Temporary comparisons do not edit or persist `config.py` and do not change the
+server. Turn profiles are `90`, `30`, `45/90`, and `60/90`; candidate policies
+are `20`, `20/30`, `20/10/30`, and `lazy-20-to-30`. For example:
+
+```powershell
+python -m algorithm.simulator --task1-production --turn-profile 30
+python -m algorithm.simulator --task1-production --candidate-policy lazy-20-to-30
+```
+
+The 20 cm policy is the physical-test control. 20/30 and 20/10/30 are explicit
+diagnostic comparisons; 10 cm has not been physically validated. Lazy fallback
+tries 20 cm first and activates 30 cm only when the first tier cannot produce
+a complete feasible route. Multiple candidates remain supported in the
+planner. Final candidate and cost-model selection is deferred until benchmark
+results and physical evidence are reviewed.
+
+Click an empty grid cell to add a target, click a target then another cell to
+move it, right-click or use Delete to remove, and W/A/S/D to set its image face.
+Enter plans or explicitly replans; Space plays/pauses; arrows step; R resets
+playback. `Ctrl+S` saves a successful plan under the ignored `task1_runs/`
+folder. `Ctrl+M` prompts for an actual rear-axle `(x,y,heading)` capture pose
+in the launching terminal and reports its position and heading error. No drift
+is generated. Loading a physical run replays its stored path without planning;
+press Enter to explicitly plan the loaded arena with current settings.
+The console reports whether the recorded/current configuration fingerprints
+match. The checked-in example layouts are `four_obstacles_simple.json`,
+`five_obstacles_example.json`, `six_obstacles_complex.json`, and
+`eight_obstacles_challenging.json` under `algorithm/simulator/scenarios/`.
+
+The map's point is the rear axle. The rectangle is the safety-expanded robot
+footprint. The camera marker is the configured forward/lateral camera point.
+Obstacle face arrows show the image face. Candidate markers show generated
+observation poses; the route record identifies which was selected. The path is
+the sampled rear-axle path; each serialized STM command is a command boundary.
+Console command diagnostics include start/end poses, target/candidate,
+forward/reverse and straight/turn class, clearances, and cumulative motion
+counts. Clearance warnings are diagnostic only: obstacle clearances below 3,
+5, or 8 cm and arena clearance below 5 cm are highlighted, with the command
+type (straight, forward turn, or reverse turn) where the minimum occurred.
+Arena-boundary warnings describe the safety-expanded footprint. A saved
+physical run includes original arena data, time, configuration/calibration,
+route/order/candidates, samples, and exact server-compatible STM commands.
+
+Recorded scenarios are reproducible metadata records, while the files in the
+checked-in `scenarios/` folder are deterministic arena examples. Scenario
+fingerprints include route-affecting settings; a mismatch never replaces the
+historical path. Manual actual capture poses are optional and can be stored in
+the physical-run JSON. Per-capture diagnostics compare planned and measured
+rear-axle pose and show commands, turns, reverse commands, reverse turns, and
+distance already executed.
+
+Known limits: playback follows ideal planned geometry; it does not model
+accumulated real drift, UART/USB failure, or lost STM responses. Partial-angle
+physical movement may differ from ideal constant-radius arcs. The 10 cm image
+standoff is unvalidated. The 60°/90° search is a robot-specific experimental
+baseline, not a universal setting. Senior reference constants belong to
+different hardware. Pi-side STM logs show every received line, response
+latency, terminal response, elapsed time, exception, and unexpected READY as
+`POSSIBLE STM RESET`. Movement is never retried automatically because it may
+have physically completed despite a lost DONE.
+
+Focused simulator and production checks:
+
+```powershell
+python -m pytest algorithm/tests/test_production_simulator.py algorithm/tests/test_task1_editor.py algorithm/tests/test_simulator.py algorithm/tests/test_stm_diagnostics.py
+python -m pytest algorithm/tests/test_geometry.py algorithm/tests/test_hybrid_astar.py algorithm/tests/test_routing.py algorithm/tests/test_calibration.py algorithm/tests/test_targets.py algorithm/tests/test_server_serialization.py algorithm/tests/test_foundation.py algorithm/tests/test_objective_diagnostic.py
+python -m compileall -q algorithm server rpi
+git diff --check
+```
+
+Run the repeated deterministic and seeded profile/scalability benchmark and
+save its report as JSON with:
+
+```powershell
+python -m algorithm.simulator --task1-benchmark --benchmark-output task1_runs/benchmark.json
+```
+
+The suite makes five timing attempts for each checked-in layout, and three
+attempts for each of ten fixed-seed solvable 7- and 8-target arenas. The 8-target
+goals are preferred under 10 seconds, a target under 30 seconds, and a hard
+operational ceiling of 60 seconds. It records success rate, median/worst time,
+route quality, and candidate, pairwise-cache, Hybrid A*, ordering, materialization,
+and serialization counters. It does not relax collision checks to meet the
+timing goals.
 
 `HeadlessSimulator` owns logical playback state and consumes sampled poses,
 configured motion primitives, capture events, or future execution steps. Its

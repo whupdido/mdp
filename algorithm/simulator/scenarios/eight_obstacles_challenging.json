@@ -1,0 +1,193 @@
+{
+  "actual_capture_poses": {},
+  "camera_geometry": {
+    "forward_offset_cm": 11.5,
+    "image_gap_cm": 20.0,
+    "left_offset_cm": 0.0
+  },
+  "candidate_policy": {
+    "activation_tiers": [
+      [
+        0
+      ]
+    ],
+    "candidate_limit": 1,
+    "lateral_offsets_cm": [
+      0.0
+    ],
+    "standoff_distances_cm": [
+      20.0
+    ]
+  },
+  "effective_planner_settings": {
+    "arena_size_cm": 200,
+    "budgets": {
+      "adaptive_initial_expansions": 200,
+      "adaptive_max_expansions": 5000,
+      "local_timeout_s": 5.0,
+      "max_expanded_nodes": 5000,
+      "overall_timeout_s": 60.0
+    },
+    "camera": {
+      "forward_offset_cm": 11.5,
+      "image_gap_cm": 20.0,
+      "left_offset_cm": 0.0
+    },
+    "candidate_policy": {
+      "activation_tiers": [
+        [
+          0
+        ]
+      ],
+      "candidate_limit": 1,
+      "lateral_offsets_cm": [
+        0.0
+      ],
+      "standoff_distances_cm": [
+        20.0
+      ]
+    },
+    "cell_size_cm": 10,
+    "motion": {
+      "penalties_s": {
+        "direction_change": 0.0,
+        "steering_change": 0.0,
+        "turn": 0.0
+      },
+      "straight_speed_cm_s": 27.3,
+      "turn_radii_cm": {
+        "BL": 27.9,
+        "BR": 37.0,
+        "FL": 27.2,
+        "FR": 36.6
+      }
+    },
+    "objective": "estimated_time",
+    "robot": {
+      "length_cm": 23.0,
+      "rear_axle_to_body_center_forward_cm": 0.0,
+      "rear_axle_to_body_center_left_cm": 0.0,
+      "safety_margin_cm": 3.0,
+      "width_cm": 18.8
+    },
+    "routing_mode": "full_optimization",
+    "safety_margin_cm": 3.0,
+    "search_turn_angles_deg": [
+      60.0,
+      90.0
+    ],
+    "turn_angles_deg": [
+      30.0,
+      45.0,
+      60.0,
+      90.0
+    ]
+  },
+  "objective": "ESTIMATED_TIME",
+  "original_arena_payload": {
+    "obstacles": [
+      {
+        "face": "W",
+        "id": 1,
+        "image_id": null,
+        "x": 15,
+        "y": 12
+      },
+      {
+        "face": "N",
+        "id": 2,
+        "image_id": null,
+        "x": 12,
+        "y": 9
+      },
+      {
+        "face": "N",
+        "id": 3,
+        "image_id": null,
+        "x": 2,
+        "y": 7
+      },
+      {
+        "face": "S",
+        "id": 4,
+        "image_id": null,
+        "x": 2,
+        "y": 19
+      },
+      {
+        "face": "W",
+        "id": 5,
+        "image_id": null,
+        "x": 7,
+        "y": 14
+      },
+      {
+        "face": "S",
+        "id": 6,
+        "image_id": null,
+        "x": 16,
+        "y": 5
+      },
+      {
+        "face": "E",
+        "id": 7,
+        "image_id": null,
+        "x": 10,
+        "y": 17
+      },
+      {
+        "face": "W",
+        "id": 8,
+        "image_id": null,
+        "x": 17,
+        "y": 11
+      }
+    ],
+    "start": {
+      "heading_rad": 1.5707963267948966,
+      "x_cm": 15.0,
+      "y_cm": 15.0
+    }
+  },
+  "planned_capture_poses": {},
+  "planned_route": {
+    "captures": [],
+    "movements": [],
+    "sampled_poses": [],
+    "serialized_commands": [],
+    "timeline": []
+  },
+  "planner_config_fingerprint": "12b4dd85258383532beb1e24c7c04e3c712e88eb269e9d9afd7b05e30eeea9e7",
+  "repository": {
+    "commit_sha": null,
+    "working_tree_dirty": null
+  },
+  "robot_geometry": {
+    "length_cm": 23.0,
+    "rear_axle_to_body_center_forward_cm": 0.0,
+    "rear_axle_to_body_center_left_cm": 0.0,
+    "safety_margin_cm": 3.0,
+    "width_cm": 18.8
+  },
+  "safety_margin_cm": 3.0,
+  "scenario_name": "eight_obstacles_challenging",
+  "schema_version": 1,
+  "selected_candidates": {},
+  "stm_calibration": {
+    "failures": [],
+    "live": true,
+    "source": "C:\\Users\\fahee\\Downloads\\mdp\\stm32\\Core\\Inc\\calib.h",
+    "turn_radii_mm": {
+      "BL": 279.0,
+      "BR": 370.0,
+      "FL": 272.0,
+      "FR": 366.0
+    }
+  },
+  "target_order": [],
+  "timestamp": "2026-10-04T00:00:00+08:00",
+  "turn_vocabulary_deg": [
+    60.0,
+    90.0
+  ]
+}

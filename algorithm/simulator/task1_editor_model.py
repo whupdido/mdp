@@ -173,13 +173,16 @@ def scenario_signature(arena: ArenaInput) -> str:
 def validate_editor_arena(
     arena: ArenaInput,
     config: PlanningConfig,
+    *,
+    target_count_range: tuple[int, int] = (REQUIRED_TASK1_TARGETS, REQUIRED_TASK1_TARGETS),
 ) -> tuple[PlanningIssue, ...]:
     issues: list[PlanningIssue] = []
-    if len(arena.obstacles) != REQUIRED_TASK1_TARGETS:
+    minimum, maximum = target_count_range
+    if not (minimum <= len(arena.obstacles) <= maximum):
         issues.append(
             PlanningIssue(
                 "incorrect_target_count",
-                f"Task 1 requires exactly {REQUIRED_TASK1_TARGETS} targets; found {len(arena.obstacles)}",
+                f"Task 1 requires {minimum} to {maximum} targets; found {len(arena.obstacles)}",
             )
         )
     issues.extend(arena.task1_issues())
@@ -685,8 +688,14 @@ class Task1EditorController:
         obstacles: tuple[Obstacle, ...] = (),
         planner: Task1PlanningFacade | None = None,
         random_seed: int | None = None,
+        target_count_range: tuple[int, int] = (REQUIRED_TASK1_TARGETS, REQUIRED_TASK1_TARGETS),
+        routing_mode: RoutingMode = RoutingMode.FEASIBILITY,
     ) -> None:
         self.config = config or task1_editor_config()
+        if len(target_count_range) != 2 or target_count_range[0] <= 0 or target_count_range[0] > target_count_range[1]:
+            raise ValueError("target_count_range must be an inclusive positive range")
+        self.target_count_range = target_count_range
+        self.routing_mode = routing_mode
         self._planner = planner or Task1Planner(self.config)
         # Verified random scenarios use the same real candidate model, but a
         # fixed bounded search tier avoids spending the budget on repeated
@@ -718,7 +727,7 @@ class Task1EditorController:
         self.planning_result: PlanningResult | None = None
         self.simulator: HeadlessSimulator | None = None
         self.state = EditorState.EDITING
-        self.status_message = "Add exactly five targets"
+        self.status_message = f"Add {target_count_range[0]} to {target_count_range[1]} targets"
         self.random_attempts = 0
         self.last_random_diagnostics: tuple[RandomAttemptDiagnostic, ...] = ()
         self._refresh_editing_state()
@@ -737,14 +746,14 @@ class Task1EditorController:
 
     @property
     def validation_issues(self) -> tuple[PlanningIssue, ...]:
-        return validate_editor_arena(self._arena, self.config)
+        return validate_editor_arena(self._arena, self.config, target_count_range=self.target_count_range)
 
     def add_obstacle(self, obstacle_id: int, cell: GridCell, face: Direction) -> None:
         self._require_editable()
         if obstacle_id in self._obstacles:
             raise ValueError(f"target ID {obstacle_id} already exists")
-        if len(self._obstacles) >= REQUIRED_TASK1_TARGETS:
-            raise ValueError("the Task 1 editor accepts exactly five targets")
+        if len(self._obstacles) >= self.target_count_range[1]:
+            raise ValueError(f"the Task 1 editor accepts at most {self.target_count_range[1]} targets")
         updated = dict(self._obstacles)
         updated[obstacle_id] = Obstacle(obstacle_id, cell, face)
         self._replace_obstacles(updated)
@@ -766,6 +775,13 @@ class Task1EditorController:
         del updated[obstacle_id]
         self._replace_obstacles(updated)
 
+    def load_arena(self, arena: ArenaInput) -> None:
+        """Replace the editable arena without planning or changing its start pose."""
+        self._require_editable()
+        self._arena = arena
+        self._obstacles = {item.obstacle_id: item for item in arena.obstacles}
+        self._invalidate_plan()
+
     def plan(self) -> PlanningResult:
         if self.state in {EditorState.PLAYING, EditorState.PAUSED}:
             raise RuntimeError("reset active playback before planning again")
@@ -776,7 +792,7 @@ class Task1EditorController:
             self._set_failed_result(result)
             return result
         self.state = EditorState.PLANNING
-        self.status_message = "Planning all five targets..."
+        self.status_message = f"Planning all {len(self._obstacles)} targets..."
         arena = self._arena
         result = self.plan_snapshot(arena)
         self.apply_planning_result(arena, result)
@@ -817,7 +833,7 @@ class Task1EditorController:
             self.status_message = issues[0].message
             return False
         self.state = EditorState.PLANNING
-        self.status_message = "Planning all five targets..."
+        self.status_message = f"Planning all {len(self._obstacles)} targets..."
         return True
 
     def randomize(
@@ -979,7 +995,7 @@ class Task1EditorController:
             return planner.plan(
                 arena,
                 objective=CostMetric.ESTIMATED_TIME,
-                routing_mode=RoutingMode.FEASIBILITY,
+                routing_mode=self.routing_mode,
             )
         return planner.plan(arena, objective=CostMetric.ESTIMATED_TIME)
 
@@ -1017,6 +1033,11 @@ class Task1EditorController:
     def _invalidate_plan(self) -> None:
         self.planning_result = None
         self.simulator = None
+        # A recorded route and measured captures belong to the exact loaded
+        # arena. Once the operator edits that arena, saving must use the new
+        # layout rather than the stale historical payload.
+        self.loaded_scenario_record = None
+        self.actual_capture_poses = {}
         self._refresh_editing_state()
 
     def _refresh_editing_state(self) -> None:

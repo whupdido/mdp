@@ -14,6 +14,7 @@ both running on the laptop:
 from __future__ import annotations
 
 import select
+import json
 import sys
 import time
 
@@ -72,7 +73,7 @@ def obstacles_payload():
     return payload
 
 
-def wait_for_stm_reply(stm, android):
+def wait_for_stm_reply(stm, android, *, lines=None, on_first_response=None, execution_started=False):
     """Same wait-for-DONE/STALL/... loop as a1_bridge.main(), reused instead
     of duplicated, including forwarding a mid-move STOP from Android."""
     deadline = time.monotonic() + a1_bridge.STM_TIMEOUT_SECONDS
@@ -85,7 +86,15 @@ def wait_for_stm_reply(stm, android):
         if not reply:
             continue
         print(f"STM32 -> RPi: {reply}")
+        if lines is not None:
+            lines.append(reply)
+        if on_first_response is not None:
+            on_first_response()
         a1_bridge.send_line(android, f"STM,{reply}")
+        if reply == "READY" and execution_started:
+            print("[TASK1] POSSIBLE STM RESET: unexpected READY after Task 1 execution began")
+            a1_bridge.send_line(android, "MSG,POSSIBLE STM RESET")
+            return "POSSIBLE_STM_RESET"
         if reply in a1_bridge.FINAL_REPLIES:
             return reply
     a1_bridge.send_line(android, "STM,NO_REPLY")
@@ -94,14 +103,44 @@ def wait_for_stm_reply(stm, android):
 
 def run_route(steps, stm, android):
     pose = a1_bridge.PoseTracker()
+    sequence = 0
     a1_bridge.send_pose(android, pose)
     for step in steps:
         if step["type"] == "move":
             command = step["command"]
-            a1_bridge.send_line(stm, command)
-            a1_bridge.send_line(android, f"STATUS,SENT,{command}")
+            sequence += 1
+            started = time.monotonic()
+            response_lines = []
+            first_response = [None]
+            serial_error = None
+            try:
+                a1_bridge.send_line(stm, command)
+            except serial.SerialException as exc:
+                serial_error = repr(exc)
+                elapsed = time.monotonic() - started
+                _log_movement(sequence, started, command, response_lines, None, "SERIAL_EXCEPTION", elapsed, serial_error)
+                return
+            try:
+                a1_bridge.send_line(android, f"STATUS,SENT,{command}")
+            except serial.SerialException as exc:
+                serial_error = repr(exc)
+                elapsed = time.monotonic() - started
+                _log_movement(sequence, started, command, response_lines, None,
+                              "ANDROID_SERIAL_EXCEPTION", elapsed, serial_error)
+                print("[TASK1] Stopping route after Android serial exception.")
+                return
             print(f"RPi -> STM32: {command}")
-            reply = wait_for_stm_reply(stm, android)
+            def mark_first():
+                if first_response[0] is None:
+                    first_response[0] = time.monotonic() - started
+            try:
+                reply = wait_for_stm_reply(stm, android, lines=response_lines,
+                                           on_first_response=mark_first, execution_started=True)
+            except serial.SerialException as exc:
+                reply = "SERIAL_EXCEPTION"
+                serial_error = repr(exc)
+            elapsed = time.monotonic() - started
+            _log_movement(sequence, started, command, response_lines, first_response[0], reply, elapsed, serial_error)
             if reply == "DONE":
                 pose.apply(command)
                 a1_bridge.send_pose(android, pose)
@@ -109,7 +148,7 @@ def run_route(steps, stm, android):
             # longer trustworthy.  In particular, continuing after BUSY can
             # flood the STM32 with commands that it will reject while the
             # route runner incorrectly proceeds to later captures.
-            if reply in ("BLOCKED", "STALL", "TIMEOUT", "BUSY", "ERR", "NO_REPLY"):
+            if reply in ("BLOCKED", "STALL", "TIMEOUT", "BUSY", "ERR", "NO_REPLY", "POSSIBLE_STM_RESET", "SERIAL_EXCEPTION"):
                 print(f"[TASK1] Move ended in {reply} -- stopping route early.")
                 return
         elif step["type"] == "capture":
@@ -118,6 +157,21 @@ def run_route(steps, stm, android):
             report_obstacle(obstacle_number, android_serial=android, stm_serial=stm)
     print("[TASK1] Route complete.")
     a1_bridge.send_line(android, "MSG,Task 1 route complete")
+
+
+def _log_movement(sequence, sent_at, command, lines, first_response_latency, terminal, elapsed, exception):
+    event = {
+        "sequence": sequence,
+        "monotonic_send_timestamp": sent_at,
+        "raw_command": command,
+        "stm_lines": list(lines),
+        "first_response_latency_s": first_response_latency,
+        "terminal_response": terminal,
+        "total_elapsed_s": elapsed,
+        "serial_exception": exception,
+        "unexpected_ready": "READY" in lines,
+    }
+    print("[TASK1 STM DIAGNOSTIC] " + json.dumps(event, sort_keys=True))
 
 
 def main():

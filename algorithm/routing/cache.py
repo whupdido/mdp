@@ -63,6 +63,7 @@ class DirectedPairwisePathCache:
         objective: CostMetric,
         *,
         minimum_expansion_budget: int | None = None,
+        deadline_monotonic: float | None = None,
     ) -> PairwiseCacheEntry:
         key = PairwiseCacheKey(arena, config, objective, start, goal)
         self._requests += 1
@@ -100,6 +101,8 @@ class DirectedPairwisePathCache:
             )
 
         deadline = time.perf_counter() + config.local_planning_timeout_s
+        if deadline_monotonic is not None:
+            deadline = min(deadline, deadline_monotonic)
         result = None
         final_budget = budget
         recovered = False

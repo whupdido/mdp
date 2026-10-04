@@ -124,6 +124,9 @@ class PlanningMetrics:
     hybrid_astar_retry_recoveries: int = 0
     total_nodes_expanded: int = 0
     planning_budget_exhausted: bool = False
+    candidate_poses_generated: int = 0
+    materialization_time_s: float = 0.0
+    materialization_replans: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "target_reachability", tuple(self.target_reachability))
@@ -142,6 +145,8 @@ class PlanningMetrics:
             self.hybrid_astar_retries,
             self.hybrid_astar_retry_recoveries,
             self.total_nodes_expanded,
+            self.candidate_poses_generated,
+            self.materialization_replans,
         )
         measurements = (
             self.total_planning_time_s,
@@ -150,6 +155,7 @@ class PlanningMetrics:
             self.candidate_generation_time_s,
             self.pairwise_planning_time_s,
             self.global_routing_time_s,
+            self.materialization_time_s,
         )
         optional_costs = (
             self.selected_route_cost,

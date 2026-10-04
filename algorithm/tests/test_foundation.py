@@ -3,7 +3,7 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
-from algorithm.config import MotionModel, RobotGeometry, UNCALIBRATED_SIMULATION_CONFIG
+from algorithm.config import MotionModel, RobotGeometry, UNCALIBRATED_SIMULATION_CONFIG, task1_robot_config
 from algorithm.coordinates import (
     android_cell_to_planner_pose,
     default_start_pose,
@@ -142,6 +142,15 @@ def test_simulation_profile_is_explicit_and_command_aligned():
     assert config.motion.primitives_for("fl")[0].turn_angle_rad == pytest.approx(math.pi / 2.0)
     assert config.motion.primitives_for("BL")[0].turn_angle_rad == pytest.approx(-math.pi / 2.0)
     assert config.motion.primitives_for("BR")[0].turn_angle_rad == pytest.approx(math.pi / 2.0)
+
+
+def test_production_profile_uses_centered_20_cm_control_and_60_90_search():
+    config = task1_robot_config(emit=lambda _message: None)
+    assert config.observation_lateral_offsets_cm == (0.0,)
+    assert config.observation_standoff_distances_cm == (20.0,)
+    assert config.guaranteed_max_candidates_per_target == 1
+    assert config.turn_angles_deg == (30.0, 45.0, 60.0, 90.0)
+    assert config.search_turn_angles_deg == (60.0, 90.0)
 
 
 def test_motion_model_accepts_multiple_configurable_angles_for_one_command():

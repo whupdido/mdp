@@ -258,6 +258,7 @@ class DirectedPairwiseGraph:
                     self.config,
                     self.objective,
                     minimum_expansion_budget=self.minimum_expansion_budget,
+                    deadline_monotonic=self.deadline_monotonic,
                 )
             self.entries[key] = entry  # type: ignore[index]
         return entry
@@ -312,6 +313,7 @@ class PairwisePathProvider(Protocol):
         objective: CostMetric,
         *,
         minimum_expansion_budget: int | None = None,
+        deadline_monotonic: float | None = None,
     ) -> PairwiseCacheEntry:
         """Return an existing directed query or invoke the local planner once."""
 

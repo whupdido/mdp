@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+
+from .production import CandidatePolicy, TurnProfile
+from algorithm.enums import RoutingMode
 
 
 def main() -> None:
@@ -24,6 +28,8 @@ def main() -> None:
         action="store_true",
         help="B.2 Task 1 editor: edit obstacles/faces, plan, and play a five-image route",
     )
+    scenarios.add_argument("--task1-production", action="store_true", help="production Task 1 editor and physical-run replay")
+    scenarios.add_argument("--task1-benchmark", action="store_true", help="run repeated Task 1 profile and scalability benchmarks")
     scenarios.add_argument(
         "--task1-random",
         action="store_true",
@@ -41,6 +47,12 @@ def main() -> None:
         action="store_true",
         help="with --task1-random, retry until Task1Planner verifies a complete route",
     )
+    parser.add_argument("--scenario-file", type=Path, help="load a Task 1 scenario (requires --task1-production)")
+    parser.add_argument("--turn-profile", choices=[item.value for item in TurnProfile],
+                        default=TurnProfile.PRODUCTION_60_90.value)
+    parser.add_argument("--candidate-policy", choices=[item.value for item in CandidatePolicy],
+                        default=CandidatePolicy.CONTROL_20.value)
+    parser.add_argument("--benchmark-output", type=Path, help="write benchmark results to JSON")
     parser.add_argument(
         "--retry-limit",
         type=int,
@@ -50,6 +62,29 @@ def main() -> None:
     args = parser.parse_args()
     if (args.seed is not None or args.solvable or args.retry_limit != 50) and not args.task1_random:
         parser.error("--seed, --solvable, and --retry-limit require --task1-random")
+    if args.scenario_file is not None and not args.task1_production:
+        parser.error("--scenario-file requires --task1-production")
+    if (args.turn_profile != TurnProfile.PRODUCTION_60_90.value or
+            args.candidate_policy != CandidatePolicy.CONTROL_20.value) and not args.task1_production:
+        parser.error("diagnostic profiles require --task1-production")
+    if args.benchmark_output is not None and not args.task1_benchmark:
+        parser.error("--benchmark-output requires --task1-benchmark")
+
+    if args.task1_benchmark:
+        import json
+        from .benchmark import run_full_benchmark_suite
+        from .production import build_production_config
+
+        config, _live, _calibration = build_production_config()
+        print("Benchmarking deterministic fixtures and fixed-seed solvable 7/8-target scenarios.", flush=True)
+        report = run_full_benchmark_suite(config, Path(__file__).parent / "scenarios")
+        rendered = json.dumps(report, indent=2, sort_keys=True)
+        if args.benchmark_output is not None:
+            args.benchmark_output.parent.mkdir(parents=True, exist_ok=True)
+            args.benchmark_output.write_text(rendered + "\n", encoding="utf-8")
+            print(f"Benchmark report saved to {args.benchmark_output}")
+        print(rendered)
+        return
 
     if args.local_plan_demo:
         from .local_plan_demo import run_local_plan_demo
@@ -64,7 +99,40 @@ def main() -> None:
     # executable is requested. Core simulator imports remain dependency-free.
     from .app import run_simulator
 
-    if args.task1_editor or args.task1_random:
+    if args.task1_production:
+        from .task1_editor import run_task1_editor
+        from .task1_editor_model import Task1EditorController
+        from .production import build_production_config, configuration_banner
+        from .scenarios import load_run, arena_from_record, config_fingerprint, historical_simulator
+        from .task1_editor_model import EditorState
+
+        production, production_live, _ = build_production_config()
+        active, live, calibration = build_production_config(
+            turn=TurnProfile(args.turn_profile), candidates=CandidatePolicy(args.candidate_policy))
+        diagnostic = active != production
+        route_mode = (RoutingMode.FEASIBILITY if CandidatePolicy(args.candidate_policy) is CandidatePolicy.LAZY_20_THEN_30
+                      else RoutingMode.FULL_OPTIMIZATION)
+        print(configuration_banner(active, live_calibration=live, diagnostic=diagnostic,
+                                    production_config=production if diagnostic else None,
+                                    routing_mode=route_mode))
+        controller = Task1EditorController(active, target_count_range=(1, 8), routing_mode=route_mode)
+        controller.production_mode = True
+        controller.calibration_metadata = calibration
+        controller.loaded_scenario_record = None
+        if args.scenario_file is not None:
+            record = load_run(args.scenario_file)
+            controller.load_arena(arena_from_record(record["original_arena_payload"]))
+            controller.loaded_scenario_record = record
+            recorded = record.get("planner_config_fingerprint", "not recorded")
+            current = config_fingerprint(active, routing_mode=route_mode)
+            print(f"RECORDED CONFIG: {recorded}\nCURRENT CONFIG:  {current}\nCONFIG MATCH: {'YES' if recorded == current else 'NO'}")
+            route = record.get("planned_route", {})
+            if route.get("sampled_poses"):
+                controller.simulator = historical_simulator(record, active)
+                controller.state = EditorState.PLAN_READY
+                controller.status_message = "Historical route loaded; Enter explicitly replans"
+        run_task1_editor(controller)
+    elif args.task1_editor or args.task1_random:
         from .task1_demo import task1_demo_obstacles
         from .task1_editor import run_task1_editor
         from .task1_editor_model import Task1EditorController

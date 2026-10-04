@@ -83,6 +83,7 @@ class MotionModel:
     capture_delay_s: float = 0.0
     direction_change_penalty_s: float = 0.0
     steering_change_penalty_s: float = 0.0
+    turn_penalty_s: float = 0.0
 
     def __post_init__(self) -> None:
         primitives = tuple(self.primitives)
@@ -98,6 +99,7 @@ class MotionModel:
             self.capture_delay_s,
             self.direction_change_penalty_s,
             self.steering_change_penalty_s,
+            self.turn_penalty_s,
         )
         if not all(math.isfinite(value) for value in timings) or any(value < 0.0 for value in timings):
             raise ValueError("motion timing values must be finite and non-negative")
@@ -269,10 +271,8 @@ def task1_robot_config(
 ) -> PlanningConfig:
     """Build one production Task 1 config snapshot from local STM32 calibration.
 
-    The bounded values below are the settings currently used by the integrated
-    server's effective profile.  The partial-angle set and 15-degree heading
-    bin are explicit production behavior, while search remains limited to the
-    existing 30-degree editor/runtime branch.
+    The bounded production control profile uses centered 20 cm observations,
+    60/90-degree search branching, and the live per-request STM radii.
     """
 
     base = UNCALIBRATED_SIMULATION_CONFIG
@@ -280,6 +280,7 @@ def task1_robot_config(
         base,
         robot=replace(base.robot, safety_margin_cm=3.0),
         observation_lateral_offsets_cm=(0.0,),
+        observation_standoff_distances_cm=(20.0,),
         guaranteed_max_candidates_per_target=1,
         max_expanded_nodes=5000,
         adaptive_initial_expansions=200,
@@ -287,7 +288,7 @@ def task1_robot_config(
         local_planning_timeout_s=5.0,
         overall_planning_timeout_s=60.0,
         turn_angles_deg=(30.0, 45.0, 60.0, 90.0),
-        search_turn_angles_deg=(30.0,),
+        search_turn_angles_deg=(60.0, 90.0),
         heading_bin_rad=math.radians(15.0),
     )
 

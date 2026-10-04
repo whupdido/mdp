@@ -33,6 +33,8 @@ from .models import (
 )
 from .optimizers import ExhaustiveRouteOptimizer, NearestNeighbourRouteOptimizer
 
+_PLANNER_FINALIZATION_RESERVE_S = 0.5
+
 
 class Task1Planner:
     """Plan a complete no-return Task 1 route through every required target."""
@@ -70,6 +72,9 @@ class Task1Planner:
         if not isinstance(mode, RoutingMode):
             raise TypeError("routing_mode must be a RoutingMode")
         started_at = time.perf_counter()
+        pairwise_deadline = started_at + max(
+            0.0, self.config.overall_planning_timeout_s - _PLANNER_FINALIZATION_RESERVE_S
+        )
         targets_requested = len(arena.obstacles)
 
         input_issues = arena.task1_issues()
@@ -151,7 +156,7 @@ class Task1Planner:
                 arena,
                 active_groups,
                 objective,
-                deadline_monotonic=started_at + self.config.overall_planning_timeout_s,
+                deadline_monotonic=pairwise_deadline,
                 minimum_expansion_budget=(
                     self.config.max_expanded_nodes
                     if mode is RoutingMode.FULL_OPTIMIZATION else None
@@ -162,7 +167,7 @@ class Task1Planner:
             total_transitions += optimization.candidate_transitions_evaluated
             if optimization.solution is not None:
                 break
-            if time.perf_counter() - started_at >= self.config.overall_planning_timeout_s:
+            if time.perf_counter() >= pairwise_deadline:
                 planning_budget_exhausted = True
                 break
 
@@ -173,7 +178,7 @@ class Task1Planner:
                 arena,
                 valid_by_target,
                 objective,
-                deadline_monotonic=started_at + self.config.overall_planning_timeout_s,
+                deadline_monotonic=pairwise_deadline,
                 minimum_expansion_budget=(
                     self.config.max_expanded_nodes
                     if mode is RoutingMode.FULL_OPTIMIZATION else None
@@ -239,12 +244,15 @@ class Task1Planner:
             )
 
         materialization_started_at = time.perf_counter()
+        materialization_cache_before = self.pairwise_cache.stats
         continuous_solution, continuity_issue = self._materialize_continuous_solution(
             arena,
             optimization.solution,
             objective,
+            deadline_monotonic=pairwise_deadline,
         )
-        pairwise_planning_time_s += time.perf_counter() - materialization_started_at
+        materialization_time_s = time.perf_counter() - materialization_started_at
+        materialization_cache_delta = self.pairwise_cache.stats.difference(materialization_cache_before)
         cache_delta = self.pairwise_cache.stats.difference(stats_before)
         elapsed = time.perf_counter() - started_at
         if continuous_solution is None:
@@ -260,12 +268,15 @@ class Task1Planner:
                 candidate_generation_time_s=candidate_generation_time_s,
                 pairwise_planning_time_s=pairwise_planning_time_s,
                 global_routing_time_s=global_routing_time_s,
+                materialization_time_s=materialization_time_s,
+                materialization_replans=materialization_cache_delta.requests,
                 candidate_groups=candidate_groups,
                 candidate_tiers_activated=tiers_activated,
             )
             assert continuity_issue is not None
+            timed_out = continuity_issue.code == "task1_planning_budget_reached"
             return PlanningResult(
-                PlanningStatus.NO_FEASIBLE_ROUTE,
+                PlanningStatus.PLANNING_TIMEOUT if timed_out else PlanningStatus.NO_FEASIBLE_ROUTE,
                 issues=(continuity_issue,),
                 metrics=metrics,
             )
@@ -285,6 +296,8 @@ class Task1Planner:
             candidate_generation_time_s=candidate_generation_time_s,
             pairwise_planning_time_s=pairwise_planning_time_s,
             global_routing_time_s=global_routing_time_s,
+            materialization_time_s=materialization_time_s,
+            materialization_replans=materialization_cache_delta.requests,
             candidate_groups=candidate_groups,
             candidate_tiers_activated=tiers_activated,
         )
@@ -295,6 +308,8 @@ class Task1Planner:
         arena: ArenaInput,
         solution: RouteOptimizationSolution,
         objective: CostMetric,
+        *,
+        deadline_monotonic: float,
     ) -> tuple[RouteOptimizationSolution | None, PlanningIssue | None]:
         """Replan selected legs from actual reached poses, never nominal resets.
 
@@ -307,6 +322,11 @@ class Task1Planner:
         entries: list[PairwiseCacheEntry] = []
         total_cost = 0.0
         for endpoint, canonical_entry in zip(solution.endpoints, solution.entries):
+            if time.perf_counter() >= deadline_monotonic:
+                return None, PlanningIssue(
+                    "task1_planning_budget_reached",
+                    "overall Task 1 planning time bound reached during continuous route materialization",
+                )
             entry = canonical_entry
             if canonical_entry.key.start.pose != current.pose:
                 entry = self.pairwise_cache.get_or_plan(
@@ -315,7 +335,13 @@ class Task1Planner:
                     arena,
                     self.config,
                     objective,
+                    deadline_monotonic=deadline_monotonic,
                 )
+                if time.perf_counter() >= deadline_monotonic:
+                    return None, PlanningIssue(
+                        "task1_planning_budget_reached",
+                        "overall Task 1 planning time bound reached during continuous route materialization",
+                    )
             if not entry.succeeded or entry.result.path is None:
                 assert endpoint.obstacle_id is not None
                 return None, PlanningIssue(
@@ -556,6 +582,8 @@ class Task1Planner:
         candidate_generation_time_s: float = 0.0,
         pairwise_planning_time_s: float = 0.0,
         global_routing_time_s: float = 0.0,
+        materialization_time_s: float = 0.0,
+        materialization_replans: int = 0,
         target_reachability: tuple[TargetReachability, ...] = (),
         candidate_groups: tuple[ObservationCandidateGroup, ...] = (),
         candidate_tiers_activated: int = 0,
@@ -598,6 +626,9 @@ class Task1Planner:
             hybrid_astar_retry_recoveries=cache_stats.retry_recoveries,
             total_nodes_expanded=cache_stats.nodes_expanded,
             planning_budget_exhausted=planning_budget_exhausted,
+            candidate_poses_generated=sum(len(group.candidates) for group in candidate_groups),
+            materialization_time_s=materialization_time_s,
+            materialization_replans=materialization_replans,
         )
 
     @staticmethod

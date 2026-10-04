@@ -566,7 +566,7 @@ def test_five_target_demo_uses_real_cached_paths_and_complete_capture_sequence(t
     assert result.status is PlanningStatus.SUCCESS
     assert route is not None
     assert len(route.target_order) == 5
-    assert route.target_order == (1, 4, 3, 2, 5)
+    assert route.target_order == (1, 3, 5, 4, 2)
     assert route.selected_candidate_kinds == ("20C",) * 5
     assert result.metrics.local_paths_requested >= result.metrics.local_paths_succeeded > 0
     assert all(path.segments for path in route.local_paths)

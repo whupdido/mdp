@@ -11,16 +11,15 @@ Run on the PC (same machine as server/yolo_task1.py):
 The RPi side is rpi/algo_client.py's plan_route().
 """
 
-import math
 import socket
 
 from algorithm.config import task1_robot_config
-from algorithm.enums import Direction, PlanningStatus, Steering
+from algorithm.enums import Direction
 from algorithm.models.arena import ArenaInput
-from algorithm.models.motion import CaptureStep, MoveStep
 from algorithm.models.obstacle import Obstacle
 from algorithm.models.pose import GridCell, Pose
 from algorithm.routing.planner import Task1Planner
+from algorithm.serialization import serialize_planning_result, serialize_stm_command
 
 from server.utils import recv_json, send_json
 
@@ -49,34 +48,8 @@ def _build_arena(payload: dict) -> ArenaInput:
     return ArenaInput(start_pose=start_pose, obstacles=obstacles)
 
 
-def _stm_command(move: MoveStep) -> str:
-    """Turn one MoveStep into the exact 5-char string a1_bridge.py/STM expect
-    (Android/PROTOCOL.md "Motion commands": two-letter verb + 3 digits)."""
-    primitive = move.segment.primitive
-    if primitive.steering is Steering.STRAIGHT:
-        magnitude = round(primitive.travel_cm)
-    else:
-        magnitude = round(abs(math.degrees(primitive.turn_angle_rad)))
-    return f"{primitive.command}{magnitude:03d}"
-
-
-def _serialize_result(result) -> dict:
-    if result.status is not PlanningStatus.SUCCESS:
-        return {
-            "status": result.status.value,
-            "issues": [
-                {"code": issue.code, "message": issue.message, "obstacle_id": issue.obstacle_id}
-                for issue in result.issues
-            ],
-        }
-
-    steps = []
-    for step in result.route.execution_steps:
-        if isinstance(step, MoveStep):
-            steps.append({"type": "move", "command": _stm_command(step)})
-        elif isinstance(step, CaptureStep):
-            steps.append({"type": "capture", "obstacle_id": step.obstacle_id})
-    return {"status": "success", "steps": steps}
+_stm_command = serialize_stm_command
+_serialize_result = serialize_planning_result
 
 
 def _plan_payload(payload: dict):

@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from algorithm.config import CameraGeometry, UNCALIBRATED_SIMULATION_CONFIG
+from algorithm.config import CameraGeometry, UNCALIBRATED_SIMULATION_CONFIG, task1_robot_config
 from algorithm.enums import Direction
 from algorithm.models import ArenaInput, GridCell, Obstacle, Pose
 from algorithm.targets import (
@@ -67,6 +67,16 @@ def test_nominal_camera_and_rear_axle_positions_use_camera_transform():
     assert candidate.observation_pose.pose.x_cm == pytest.approx(105.0)
     assert candidate.observation_pose.pose.y_cm == pytest.approx(141.5)
     assert camera_world_position(candidate.observation_pose.pose, CONFIG.camera) == candidate.camera_position
+
+
+def test_production_generates_one_centered_20_cm_control_candidate():
+    production = task1_robot_config(emit=lambda _message: None)
+    group = group_for(target(), config=production)
+    assert len(group.candidates) == 1
+    assert tuple(candidate.standoff_cm for candidate in group.candidates) == (20.0,)
+    assert tuple(candidate.lateral_offset_cm for candidate in group.candidates) == (0.0,)
+    assert tuple(candidate.display_label for candidate in group.candidates) == ("20C",)
+    assert tuple(candidate.observation_pose.candidate_index for candidate in group.candidates) == (0,)
 
 
 def test_camera_offset_changes_rear_axle_without_changing_desired_camera_position():

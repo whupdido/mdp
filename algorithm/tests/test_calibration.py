@@ -122,18 +122,20 @@ def test_production_profile_preserves_integrated_bounds_and_runtime_search():
     assert config.robot.safety_margin_cm == 3.0
     assert config.observation_lateral_offsets_cm == (0.0,)
     assert config.guaranteed_max_candidates_per_target == 1
+    assert config.observation_standoff_distances_cm == (20.0,)
+    assert config.search_turn_angles_deg == (60.0, 90.0)
     assert config.max_expanded_nodes == 5000
     assert config.adaptive_initial_expansions == 200
     assert config.adaptive_max_expansions == 5000
     assert config.local_planning_timeout_s == 5.0
     assert config.overall_planning_timeout_s == 60.0
     assert config.turn_angles_deg == (30.0, 45.0, 60.0, 90.0)
-    assert config.search_turn_angles_deg == (30.0,)
+    assert config.search_turn_angles_deg == (60.0, 90.0)
     assert config.heading_bin_rad == pytest.approx(math.radians(15.0))
     assert config.arena_size_cm == UNCALIBRATED_SIMULATION_CONFIG.arena_size_cm
     assert config.cell_size_cm == UNCALIBRATED_SIMULATION_CONFIG.cell_size_cm
     assert config.camera == UNCALIBRATED_SIMULATION_CONFIG.camera
-    assert config.observation_standoff_distances_cm == (20.0, 10.0, 30.0)
+    assert config.observation_standoff_distances_cm == (20.0,)
     assert config.collision_translation_step_cm == UNCALIBRATED_SIMULATION_CONFIG.collision_translation_step_cm
     assert config.collision_arc_step_rad == UNCALIBRATED_SIMULATION_CONFIG.collision_arc_step_rad
     assert config.motion.straight_speed_cm_s == UNCALIBRATED_SIMULATION_CONFIG.motion.straight_speed_cm_s
@@ -152,14 +154,14 @@ def test_demo_profile_remains_ninety_degree_only():
     assert demo.heading_bin_rad == pytest.approx(math.pi / 2.0)
 
 
-def test_partial_angle_successors_use_only_the_30_degree_runtime_branch():
+def test_production_successors_use_60_and_90_degree_turns():
     config = task1_robot_config(CALIBRATION_HEADER, emit=lambda _message: None)
     successors = HybridAStarPlanner(config)._successor_primitives()
     turns = tuple(primitive for primitive in successors if primitive.steering is not Steering.STRAIGHT)
 
-    assert tuple(primitive.command for primitive in turns) == ("FL", "FR", "BL", "BR")
-    assert tuple(abs(math.degrees(primitive.turn_angle_rad)) for primitive in turns) == pytest.approx((30.0,) * 4)
-    assert tuple(primitive.radius_cm for primitive in turns) == (27.2, 36.6, 27.9, 37.0)
+    assert tuple(primitive.command for primitive in turns) == ("FL", "FL", "FR", "FR", "BL", "BL", "BR", "BR")
+    assert tuple(abs(math.degrees(primitive.turn_angle_rad)) for primitive in turns) == pytest.approx((60.0, 90.0) * 4)
+    assert tuple(primitive.radius_cm for primitive in turns) == (27.2, 27.2, 36.6, 36.6, 27.9, 27.9, 37.0, 37.0)
 
 
 def test_calibrated_radius_changes_partial_arc_geometry(tmp_path):
