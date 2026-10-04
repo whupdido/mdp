@@ -25,6 +25,7 @@ typedef enum {
 static volatile control_mode_t current_mode = MODE_IDLE;
 static volatile move_result_t  last_result  = MOVE_NONE;
 static volatile uint8_t        busy_flag    = 0;
+static volatile uint8_t        abort_latched = 0;
 static float current_speed_ramp = 0.0f;
 static float pivot_speed_ramp = 0.0f;
 /* Track cumulative signed ticks during in-place pivots */
@@ -91,6 +92,7 @@ void control_init(void)
     current_mode = MODE_IDLE;
     last_result  = MOVE_NONE;
     busy_flag    = 0;
+    abort_latched = 0u;
     global_yaw_deg = 0.0f;
     /* Ensure steering is centered while idle at startup */
 	servo_us(SERVO_CENTRE);
@@ -106,7 +108,18 @@ uint8_t motion_busy(void)
 
 void motion_stop(void)
 {
+    abort_latched = 1u;
     stop_hardware(MOVE_ABORT);
+}
+
+uint8_t motion_abort_requested(void)
+{
+    return abort_latched;
+}
+
+void motion_abort_clear(void)
+{
+    abort_latched = 0u;
 }
 
 move_result_t motion_result(void)
@@ -128,6 +141,7 @@ float motion_yaw_deg(void)
 
 uint8_t move_straight_mm(int32_t mm)
 {
+    if (motion_abort_requested()) return 0;
     if (mm == 0) { last_result = MOVE_DONE; return 1; } /* Zhenxi: see report_result() in command.c */
 
     target_counts_total       = (int32_t)(fabsf((float)mm) / MM_PER_COUNT);
@@ -201,6 +215,7 @@ uint8_t move_straight_mm(int32_t mm)
 
 uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 {
+    if (motion_abort_requested()) return 0;
     if (degrees <= 0) { last_result = MOVE_DONE; return 1; } /* Zhenxi: see report_result() in command.c */
 
     turn_left           = left;
@@ -285,6 +300,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 
 void move_pivot_deg(int8_t left, int32_t degrees)
 {
+    if (motion_abort_requested()) return;
     if (degrees <= 0) return;
 
     turn_left           = left;
@@ -311,6 +327,7 @@ void move_pivot_deg(int8_t left, int32_t degrees)
     current_mode = MODE_PIVOT_DEG;
 
     while (busy_flag) {
+        command_poll();
         HAL_Delay(5);
     }
 }
@@ -321,6 +338,7 @@ void move_pivot_deg(int8_t left, int32_t degrees)
  */
 uint8_t move_kturn_90(int8_t left)
 {
+    if (motion_abort_requested()) return 0;
     uint8_t safe = 1;
 
     if (left)
@@ -357,6 +375,7 @@ uint8_t move_kturn_90(int8_t left)
 
 void move_turn(int8_t left, int8_t forward, int32_t counts)
 {
+    if (motion_abort_requested()) return;
     if (counts <= 0) return;
 
     turn_left           = left;
@@ -378,6 +397,7 @@ void move_turn(int8_t left, int8_t forward, int32_t counts)
     current_mode = MODE_TURN_RAW;
 
     while (busy_flag) {
+        command_poll();
         HAL_Delay(5);
     }
 }

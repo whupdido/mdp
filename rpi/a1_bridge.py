@@ -57,9 +57,9 @@ FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "BLOCKED", "BUSY", "ERR"}
 
 # Zhenxi: how long one stm.readline() blocks inside the wait loop below.
 # It was 1 s (the port's open timeout), which is also how long a STOP from
-# the tablet could sit unread. 0.1 s keeps a STOP under 100 ms and is still
-# 25x longer than the longest line the board sends takes at 115200 baud.
-STM_POLL_SECONDS = 0.1
+# the tablet could sit unread. 0.02 s keeps a STOP under 20 ms and is still
+# several times longer than the longest line the board sends at 115200 baud.
+STM_POLL_SECONDS = 0.02
 
 # Zhenxi: commands that arrived from the tablet while a move was running,
 # other than STOP. They are handled after the move, in order, exactly as if
@@ -207,6 +207,13 @@ def discard_pending_android(android):
     return discarded
 
 
+def clear_command_queues(android):
+    """Clear commands held by both Python and the RFCOMM serial driver."""
+    discarded = len(inbox)
+    inbox.clear()
+    return discarded + discard_pending_android(android)
+
+
 def next_command(android):
     """Return the next command, giving a buffered STOP priority.
 
@@ -232,7 +239,6 @@ def next_command(android):
             inbox.append(command)
 
     if stop_seen:
-        inbox.clear()
         return "STOP"
     return inbox.pop(0)
 
@@ -258,8 +264,7 @@ def forward_stop_if_pending(android, stm):
         if command is None:
             continue
         if command == "STOP":
-            cleared = len(inbox) + discard_pending_android(android)
-            inbox.clear()
+            cleared = clear_command_queues(android)
             print("Android -> RPi: STOP (mid-move)")
             if cleared:
                 print(f"[QUEUE] cleared {cleared} pending command(s)")
@@ -334,6 +339,14 @@ def main(on_face_known=None):
                     continue
 
                 print(f"Android -> RPi: {command}")
+
+                # STOP is a queue barrier.  Even when it is the first command
+                # read by the main loop (rather than arriving mid-move), drop
+                # every older buffered command before it reaches the STM.
+                if command == "STOP":
+                    cleared = clear_command_queues(android)
+                    if cleared:
+                        print(f"[QUEUE] cleared {cleared} pending command(s)")
 
                 # Map edits are acknowledged (never rejected -- the tablet
                 # shows the user a warning for every ERR it receives) AND

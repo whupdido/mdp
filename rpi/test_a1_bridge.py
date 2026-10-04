@@ -247,6 +247,19 @@ check(
     ["STATUS,SENT,STOP", "STM,ACK"],
 )
 
+# The same reset guarantee applies when STOP is the first command handled by
+# the main loop. Commands already buffered behind it must never run later.
+to_android, to_stm = run(
+    ["STOP", "FW010", "BR090"],
+    ["ACK"],
+)
+check("standalone STOP clears commands buffered behind it", to_stm, ["STOP"])
+check(
+    "standalone STOP still returns its acknowledgement",
+    to_android[-2:],
+    ["STATUS,SENT,STOP", "STM,ACK"],
+)
+
 # --- board stops short of an obstacle -----------------------------------
 # Since the IR sensors went in, control.c cuts a move short rather than hit
 # something -- and reports it as a [WARN] line *then* DONE. Both must reach

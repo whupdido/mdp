@@ -131,6 +131,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
     val run: StateFlow<RunState> = _run.asStateFlow()
 
     private var runTicker: Job? = null
+    private var startPublisher: Job? = null
     private var runStartMs = 0L
 
     private var ticker: Job? = null
@@ -352,6 +353,10 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
     /** C.3 */
     fun move(move: Move, distanceCm: Int, angleDeg: Int) {
+        if (move == Move.STOP) {
+            emergencyStop()
+            return
+        }
         moveCutShort = false // a fresh move gets a fresh verdict
         transmit(move.toCommand(distanceCm, angleDeg))
     }
@@ -427,7 +432,8 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         )
         runStartMs = System.currentTimeMillis()
         say("${task.label} started. ${task.budgetSec / 60} minutes.")
-        viewModelScope.launch { publishMapThenStart(task) }
+        startPublisher?.cancel()
+        startPublisher = viewModelScope.launch { publishMapThenStart(task) }
         runTicker?.cancel()
         runTicker = viewModelScope.launch {
             while (true) {
@@ -452,8 +458,22 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
      * incomplete, so the wording says so rather than pretending otherwise.
      */
     fun abortRun() {
+        emergencyStop()
+    }
+
+    /**
+     * STOP is a transport barrier, not an ordinary movement command.
+     * Cancelling the map/START publisher first guarantees that nothing the
+     * app had scheduled can be transmitted behind STOP and restart the run.
+     */
+    private fun emergencyStop() {
+        startPublisher?.cancel()
+        startPublisher = null
         transmit(Outbound.STOP)
-        if (!_run.value.running) return
+        if (!_run.value.running) {
+            say("Emergency stop sent. Pending commands cleared.")
+            return
+        }
         runTicker?.cancel()
         runTicker = null
         _run.value = _run.value.copy(phase = RunPhase.IDLE)
@@ -462,6 +482,8 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Back to a fresh attempt, without touching the map the supervisor keyed in. */
     fun resetRun() {
+        startPublisher?.cancel()
+        startPublisher = null
         runTicker?.cancel()
         runTicker = null
         _run.value = RunState(task = _run.value.task)
