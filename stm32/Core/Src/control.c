@@ -181,22 +181,22 @@ uint8_t move_straight_mm(int32_t mm)
 		command_poll();
 
 		/* Only check for front collisions if we are driving forward */
-		if (dir_forward == 1 && check_front_collision()) {
+		//if (dir_forward == 1 && check_front_collision()) {
 			/* Zhenxi: was MOVE_DONE, which made a 15 cm move that stopped at
 			 * 3 cm indistinguishable from one that completed. The [WARN]
 			 * line below still goes out; BLOCKED is what the Pi and tablet
 			 * key off.                                                    */
 			//stop_hardware(MOVE_BLOCKED);
-			stop_hardware(MOVE_DONE);
-			busy_flag = 0;
+			//stop_hardware(MOVE_DONE);
+			//busy_flag = 0;
 
 			/* GYRO FIX: Wait for chassis mechanical vibrations to stop
 			 * before returning control, preventing phantom IMU spikes! */
-			HAL_Delay(300);
+			//HAL_Delay(300);
 
-			command_send("\r\n[WARN] COLLISION AVOIDED! Stopping early.\r\n");
-			return 0; /* Return 0 = Aborted */
-		}
+			//command_send("\r\n[WARN] COLLISION AVOIDED! Stopping early.\r\n");
+			//return 0; /* Return 0 = Aborted */
+		//}
 		HAL_Delay(5);
 	}
 
@@ -245,50 +245,50 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 		command_poll();
 
 		/* Only check for front collisions if driving FORWARD in the turn */
-		if (dir_forward == 1 && check_front_collision()) {
-			stop_hardware(MOVE_DONE);
-
-			/* GYRO FIX: Let the physical crash shockwave dissipate so
-			 * the gyro returns to absolute 0 before calculating remaining angle! */
-			HAL_Delay(400);
-
-			float remaining_deg = target_deg_total - accum_deg;
-
-			if (remaining_deg > 3.0f && target_deg_total > 45) {
-				command_send("\r\n[WARN] COLLISION! Completing turn in REVERSE.\r\n");
-
-				/* To continue the same yaw rotation while driving backward,
-				 * we MUST invert the steering direction! */
-				turn_left = !turn_left;
-				dir_forward = -1;
-
-				/* Reset accumulators for the reverse phase */
-				target_deg_total = remaining_deg;
-				accum_deg = 0.0f;
-				left_pid_integral = 0.0f;
-				right_pid_integral = 0.0f;
-
-				/* Physically swing the wheels to the opposite lock */
-				if (turn_left) servo_us(SERVO_LEFT);
-				else           servo_us(SERVO_RIGHT);
-				HAL_Delay(250);
-
-				reset_speed_pid();
-
-				/* THE CRITICAL FIX: Wake the motor ISR back up!
-				 * stop_hardware() turned it off, so we must re-arm it. */
-				current_mode = MODE_TURN_DEG;
-
-				busy_flag = 1; /* Continue the while loop, now in reverse! */
-			} else {
-				//stop_hardware(MOVE_BLOCKED);
-				stop_hardware(MOVE_DONE);
-				busy_flag = 0; /* Turn is basically complete, safe to abort */
-				HAL_Delay(250);
-				command_send("\r\n[WARN] Turn almost complete. Aborting.\r\n");
-				return 0;
-			}
-		}
+//		if (dir_forward == 1 && check_front_collision()) {
+//			stop_hardware(MOVE_DONE);
+//
+//			/* GYRO FIX: Let the physical crash shockwave dissipate so
+//			 * the gyro returns to absolute 0 before calculating remaining angle! */
+//			HAL_Delay(400);
+//
+//			float remaining_deg = target_deg_total - accum_deg;
+//
+//			if (remaining_deg > 3.0f && target_deg_total > 45) {
+//				command_send("\r\n[WARN] COLLISION! Completing turn in REVERSE.\r\n");
+//
+//				/* To continue the same yaw rotation while driving backward,
+//				 * we MUST invert the steering direction! */
+//				turn_left = !turn_left;
+//				dir_forward = -1;
+//
+//				/* Reset accumulators for the reverse phase */
+//				target_deg_total = remaining_deg;
+//				accum_deg = 0.0f;
+//				left_pid_integral = 0.0f;
+//				right_pid_integral = 0.0f;
+//
+//				/* Physically swing the wheels to the opposite lock */
+//				if (turn_left) servo_us(SERVO_LEFT);
+//				else           servo_us(SERVO_RIGHT);
+//				HAL_Delay(250);
+//
+//				reset_speed_pid();
+//
+//				/* THE CRITICAL FIX: Wake the motor ISR back up!
+//				 * stop_hardware() turned it off, so we must re-arm it. */
+//				current_mode = MODE_TURN_DEG;
+//
+//				busy_flag = 1; /* Continue the while loop, now in reverse! */
+//			} else {
+//				//stop_hardware(MOVE_BLOCKED);
+//				stop_hardware(MOVE_DONE);
+//				busy_flag = 0; /* Turn is basically complete, safe to abort */
+//				HAL_Delay(250);
+//				command_send("\r\n[WARN] Turn almost complete. Aborting.\r\n");
+//				return 0;
+//			}
+//		}
 		HAL_Delay(5);
 	}
 
