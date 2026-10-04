@@ -83,6 +83,7 @@ class MotionModel:
     capture_delay_s: float = 0.0
     direction_change_penalty_s: float = 0.0
     steering_change_penalty_s: float = 0.0
+    consecutive_reverse_penalty_s: float = 0.5
 
     def __post_init__(self) -> None:
         primitives = tuple(self.primitives)
@@ -279,7 +280,7 @@ def task1_robot_config(
     production = replace(
         base,
         robot=replace(base.robot, safety_margin_cm=3.0),
-        observation_lateral_offsets_cm=(0.0,),
+        observation_lateral_offsets_cm=(0.0, 10.0, -10.0),
         guaranteed_max_candidates_per_target=1,
         max_expanded_nodes=5000,
         adaptive_initial_expansions=200,
