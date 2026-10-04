@@ -25,6 +25,7 @@ from capture_and_report import report_obstacle
 
 
 STATUS_PROBE_INTERVAL_SECONDS = 1.5
+PROBE_SETTLE_SECONDS = 0.5
 
 
 def wait_for_go(android):
@@ -84,9 +85,15 @@ def wait_for_stm_reply(
     while it is still executing or STATUS,IDLE,<result> after it has stopped.
     A probe response from older firmware is ignored, so deploying the RPi
     side before reflashing the STM does not turn a running move into BUSY.
+
+    If the movement's original terminal line races ahead of an outstanding
+    probe response, keep reading briefly.  This prevents the next movement
+    command from overtaking the queued probe on the STM UART.
     """
     stop_requested = False
     probe_outstanding = False
+    deferred_terminal = None
+    probe_settle_deadline = None
     deadline = time.monotonic() + a1_bridge.STM_TIMEOUT_SECONDS
     last_probe = time.monotonic()
     while time.monotonic() < deadline:
@@ -118,6 +125,8 @@ def wait_for_stm_reply(
                         # A different command is executing, so ours was not
                         # accepted and it is unsafe to continue the route.
                         return "BUSY"
+                    deferred_terminal = None
+                    probe_settle_deadline = None
                     continue
                 if reply.startswith("STATUS,IDLE,"):
                     probe_outstanding = False
@@ -130,6 +139,8 @@ def wait_for_stm_reply(
                     ):
                         # This retained result belongs to an older command,
                         # not the outstanding movement.
+                        deferred_terminal = None
+                        probe_settle_deadline = None
                         continue
                     if result == "STOPPED":
                         return "STOPPED"
@@ -142,16 +153,31 @@ def wait_for_stm_reply(
                     # ordinary command.  Do not confuse that response with
                     # rejection of the movement that preceded the probe.
                     probe_outstanding = False
+                    if deferred_terminal is not None:
+                        return deferred_terminal
                     continue
                 if reply in a1_bridge.FINAL_REPLIES:
+                    if probe_outstanding:
+                        deferred_terminal = reply
+                        probe_settle_deadline = min(
+                            deadline,
+                            time.monotonic() + PROBE_SETTLE_SECONDS,
+                        )
+                        continue
                     return reply
 
         now = time.monotonic()
+        if deferred_terminal is not None:
+            if now >= probe_settle_deadline:
+                return deferred_terminal
+            continue
         if now - last_probe >= STATUS_PROBE_INTERVAL_SECONDS:
             last_probe = now
             a1_bridge.send_line(stm, "?")
             probe_outstanding = True
             print("RPi -> STM32: ? (status probe)")
+    if deferred_terminal is not None:
+        return deferred_terminal
     if relay_to_android:
         a1_bridge.send_line(android, "STM,NO_REPLY")
     return "NO_REPLY"

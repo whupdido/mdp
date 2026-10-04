@@ -198,6 +198,28 @@ run_task1.time.monotonic = real_monotonic
 check("silence triggers a non-moving status probe", stm.written, ["?"])
 check("a retained DONE recovers the lost terminal line", reply, "DONE")
 
+# The original DONE can arrive after '?' was transmitted but before the STM
+# consumes that probe.  Do not let the caller send its next movement until
+# the probe's STATUS response has also been drained from the UART.
+clock["now"] = 0.0
+run_task1.time.monotonic = advancing_monotonic
+android = FakeAndroid([])
+stm = FakeStm([None, "DONE", "STATUS,IDLE,DONE,FW030"])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android, expected_command="FW030")
+run_task1.time.monotonic = real_monotonic
+check("DONE after a probe still completes the move", reply, "DONE")
+check("the outstanding probe response is drained before returning", stm.replies, [])
+
+# Legacy firmware may never provide a STATUS line.  The short settling window
+# must fall back to the valid terminal reply rather than becoming NO_REPLY.
+clock["now"] = 0.0
+run_task1.time.monotonic = advancing_monotonic
+android = FakeAndroid([])
+stm = FakeStm([None, "DONE", None])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android, expected_command="FW030")
+run_task1.time.monotonic = real_monotonic
+check("a legacy terminal reply survives the probe settling window", reply, "DONE")
+
 # A retained result from an older movement cannot complete the current one.
 clock["now"] = 0.0
 android = FakeAndroid([])

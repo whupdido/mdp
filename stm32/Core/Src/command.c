@@ -18,12 +18,15 @@
 #include "obstacle_nav.h"
 
 #define LINE_MAX 16
+#define COMMAND_QUEUE_SIZE 8u
 
 static uint8_t rx_byte;
 static char    line[LINE_MAX];
 static uint8_t idx = 0;
-static volatile uint8_t line_ready = 0;
-static char    pending[LINE_MAX];
+static char    command_queue[COMMAND_QUEUE_SIZE][LINE_MAX];
+static volatile uint8_t queue_head = 0u;
+static volatile uint8_t queue_tail = 0u;
+static volatile uint8_t queue_overflow = 0u;
 static uint8_t awaiting_ack = 0;
 static char    last_motion_cmd[LINE_MAX] = "";
 
@@ -61,13 +64,19 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART3) {
         if (rx_byte == '\n' || rx_byte == '\r') {
-            /* Only latch if the previous line has actually been consumed,
-               otherwise a fast second command overwrites pending[] while
-               command_poll() is still reading it. */
-            if (idx > 0u && line_ready == 0u) {
+            if (idx > 0u) {
+                uint8_t next_head = (uint8_t)((queue_head + 1u) % COMMAND_QUEUE_SIZE);
                 line[idx] = '\0';
-                memcpy(pending, line, (size_t)idx + 1u);
-                line_ready = 1u;
+                if (next_head != queue_tail) {
+                    /* Publish queue_head only after the complete line has
+                       been copied.  The main loop owns queue_tail, making
+                       this a lock-free single-producer/single-consumer
+                       queue between the UART ISR and command_poll(). */
+                    memcpy(command_queue[queue_head], line, (size_t)idx + 1u);
+                    queue_head = next_head;
+                } else {
+                    queue_overflow = 1u;
+                }
             }
             idx = 0u;
         } else if (idx < (LINE_MAX - 1u)) {
@@ -244,11 +253,20 @@ static void dispatch(const char *cmd)
 
 void command_poll(void)
 {
-    if (line_ready) {
+    if (queue_tail != queue_head) {
         char local[LINE_MAX];
-        memcpy(local, pending, LINE_MAX);
-        line_ready = 0u;              /* release the buffer before dispatch */
+        uint8_t tail = queue_tail;
+        memcpy(local, command_queue[tail], LINE_MAX);
+        /* Release the queue slot before dispatch.  dispatch() may block in a
+           move and recursively call command_poll(), so advancing first lets
+           a queued probe, STOP, and following movement drain in order. */
+        queue_tail = (uint8_t)((tail + 1u) % COMMAND_QUEUE_SIZE);
         dispatch(local);
+    }
+
+    if (queue_overflow) {
+        queue_overflow = 0u;
+        command_send("ERR\r\n");
     }
 
     /* Report only once the movement has genuinely finished, and say HOW it
