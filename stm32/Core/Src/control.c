@@ -600,7 +600,7 @@ void control_tick(void)
 
     	case MODE_TURN_DEG:
 		{
-			/* 1. True Ackermann Yaw Integration (handles forward AND reverse correctly) */
+			/* 1. True Ackermann Yaw Integration */
 			float step_yaw = delta_yaw * (float)dir_forward;
 			if (turn_left) {
 				accum_deg += step_yaw;
@@ -608,29 +608,39 @@ void control_tick(void)
 				accum_deg -= step_yaw;
 			}
 
-			/* 2. Angle Completion Check */
-			const float BRAKING_LEAD_DEG = 2.5f; /* Compensates for chassis inertia */
+			/* 2. Direction-Aware Inertia Lead:
+			 * Forward coasts ~2.5 deg on momentum.
+			 * Reverse has heavy tire scrub and zero coast, so lead must be much smaller. */
+			float braking_lead = 2.5f;
+			if (target_deg_total <= 45){
+				if (turn_left)
+					braking_lead = (dir_forward == 1) ? 4.5f : 4.3f;
+				else
+					braking_lead = (dir_forward == 1) ? 4.5f : 3.7f;
+			}
 			float remaining_deg = target_deg_total - accum_deg;
 
-			if (remaining_deg <= BRAKING_LEAD_DEG) {
+			if (remaining_deg <= braking_lead) {
 				stop_hardware(MOVE_DONE);
 				return;
 			}
 
-			/* If within 1.0 degree of braking lead and no longer rotating */
-			if (remaining_deg <= (BRAKING_LEAD_DEG + 1.0f) && fabsf(gz) < 0.25f) {
-			    static uint8_t turn_settle_ticks = 0;
-			    if (++turn_settle_ticks > 20) { /* 200 ms stopped */
-			        turn_settle_ticks = 0;
-			        stop_hardware(MOVE_DONE);
-			        return;
-			    }
+			/* Settle timeout: only trigger if within 0.5 deg of lead and genuinely stopped */
+			if (remaining_deg <= (braking_lead + 0.5f) && fabsf(gz) < 0.25f) {
+				static uint8_t turn_settle_ticks = 0;
+				if (++turn_settle_ticks > 20) { /* 200 ms stopped */
+					turn_settle_ticks = 0;
+					stop_hardware(MOVE_DONE);
+					return;
+				}
 			}
+
 			/* --- Slew-Rate Acceleration & Deceleration Ramp --- */
 			float target_base_speed = (float)(dir_forward * SPEED_TURN);
 
-			/* ONLY decelerate if this is a large turn (e.g., a 90-degree grid turn) */
-			if (target_deg_total >= 45.0f) {
+			/* FIX: Change '>=' to '>' so 45-deg turns carry clean, constant speed
+			 * without losing momentum over a 20-deg crawl window. */
+			if (target_deg_total > 45.0f) {
 				const float DECEL_DEG = 20.0f;
 				if (remaining_deg < DECEL_DEG) {
 					target_base_speed = (float)(dir_forward * 30.0f); /* Crawl speed */

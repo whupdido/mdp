@@ -283,6 +283,10 @@ int main(void)
 #endif
                   //HAL_Delay(1000);
                   //task_2();
+//                  for (int i = 0; i < 6; i++){
+//                	  move_turn_deg(0 ,0,30);
+//                	  HAL_Delay(250);
+//                  }
               }
           }
       }
