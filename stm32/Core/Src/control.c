@@ -466,6 +466,19 @@ void control_tick(void)
 			int32_t remaining_counts = target_counts_total - accum_counts;
 			const int32_t DECEL_TICKS = 250; /* Tune this! Distance to start braking */
 
+			/* In control_tick() under MODE_STRAIGHT */
+			int32_t remaining = abs(target_counts_total - accum_counts);
+
+			/* If within 2 mm (~15 counts) and wheels have stopped spinning */
+			if (remaining <= 15 && abs(left_delta) <= 1 && abs(right_delta) <= 1) {
+			    static uint8_t in_pos_ticks = 0;
+			    if (++in_pos_ticks > 20) { /* 200 ms motionless in tolerance */
+			        in_pos_ticks = 0;
+			        stop_hardware(MOVE_DONE);
+			        return;
+			    }
+			}
+
 			/* If we are getting close, change the target speed to a slow crawl */
 			if (remaining_counts < DECEL_TICKS) {
 				target_speed = (float)(dir_forward * 15.0f); /* Crawl speed */
@@ -565,9 +578,13 @@ void control_tick(void)
 				if (right_pid_integral > 250.0f)  right_pid_integral = 250.0f;
 				if (right_pid_integral < -250.0f) right_pid_integral = -250.0f;
 			} else {
-				/* Freeze integrals for tiny distances so the car doesn't jerk/lurch */
-				left_pid_integral = 0.0f;
-				right_pid_integral = 0.0f;
+				/* Allow gentle integral accumulation to overcome stiction */
+				left_pid_integral  += err_l * dt * 0.5f;
+				right_pid_integral += err_r * dt * 0.5f;
+				if (left_pid_integral > 120.0f)  left_pid_integral = 120.0f;
+				if (left_pid_integral < -120.0f) left_pid_integral = -120.0f;
+				if (right_pid_integral > 120.0f)  right_pid_integral = 120.0f;
+				if (right_pid_integral < -120.0f) right_pid_integral = -120.0f;
 			}
 
 			/* Pushes baseline power so the weaker left motor doesn't stall when braking */
@@ -598,6 +615,16 @@ void control_tick(void)
 			if (remaining_deg <= BRAKING_LEAD_DEG) {
 				stop_hardware(MOVE_DONE);
 				return;
+			}
+
+			/* If within 1.0 degree of braking lead and no longer rotating */
+			if (remaining_deg <= (BRAKING_LEAD_DEG + 1.0f) && fabsf(gz) < 0.25f) {
+			    static uint8_t turn_settle_ticks = 0;
+			    if (++turn_settle_ticks > 20) { /* 200 ms stopped */
+			        turn_settle_ticks = 0;
+			        stop_hardware(MOVE_DONE);
+			        return;
+			    }
 			}
 			/* --- Slew-Rate Acceleration & Deceleration Ramp --- */
 			float target_base_speed = (float)(dir_forward * SPEED_TURN);

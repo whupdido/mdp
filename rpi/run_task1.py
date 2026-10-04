@@ -135,7 +135,9 @@ def wait_for_stm_reply(
                         return "BUSY"
                     if reported_command == expected_command:
                         command_accepted = True
-                    deferred_terminal = None
+                    # FIX: Only clear deferred_terminal if we didn't already capture a DONE/BLOCKED!
+                    if deferred_terminal is None:
+                        probe_settle_deadline = None
                     probe_settle_deadline = None
                     continue
                 if reply.startswith("STATUS,IDLE,"):
