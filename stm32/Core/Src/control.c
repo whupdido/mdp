@@ -186,7 +186,8 @@ uint8_t move_straight_mm(int32_t mm)
 			 * 3 cm indistinguishable from one that completed. The [WARN]
 			 * line below still goes out; BLOCKED is what the Pi and tablet
 			 * key off.                                                    */
-			stop_hardware(MOVE_BLOCKED);
+			//stop_hardware(MOVE_BLOCKED);
+			stop_hardware(MOVE_DONE);
 			busy_flag = 0;
 
 			/* GYRO FIX: Wait for chassis mechanical vibrations to stop
@@ -253,7 +254,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 
 			float remaining_deg = target_deg_total - accum_deg;
 
-			if (remaining_deg > 3.0f) {
+			if (remaining_deg > 3.0f && target_deg_total > 45) {
 				command_send("\r\n[WARN] COLLISION! Completing turn in REVERSE.\r\n");
 
 				/* To continue the same yaw rotation while driving backward,
@@ -280,8 +281,12 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 
 				busy_flag = 1; /* Continue the while loop, now in reverse! */
 			} else {
+				//stop_hardware(MOVE_BLOCKED);
+				stop_hardware(MOVE_DONE);
 				busy_flag = 0; /* Turn is basically complete, safe to abort */
+				HAL_Delay(250);
 				command_send("\r\n[WARN] Turn almost complete. Aborting.\r\n");
+				return 0;
 			}
 		}
 		HAL_Delay(5);
