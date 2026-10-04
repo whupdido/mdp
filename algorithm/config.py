@@ -288,7 +288,7 @@ def task1_robot_config(
         local_planning_timeout_s=5.0,
         overall_planning_timeout_s=60.0,
         turn_angles_deg=(30.0, 45.0, 60.0, 90.0),
-        search_turn_angles_deg=(45.0, 90.0),
+        search_turn_angles_deg=(60.0, 90.0,),
         heading_bin_rad=math.radians(15.0),
     )
 
