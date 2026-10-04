@@ -123,6 +123,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
  *   STALL     aborted: both wheels stopped turning for 1 s
  *   TIMEOUT   aborted: exceeded 20 s
  *   BLOCKED   aborted: IR saw an obstacle, stopped short (Zhenxi)
+ *   ACK,<cmd> movement accepted and starting
  *   ACK       STOP acknowledged, or START2 accepted
  *   BUSY      a move was already running; this command was DISCARDED
  *   ERR       unrecognised command
@@ -208,6 +209,16 @@ static void remember_motion_command(const char *cmd)
     last_motion_cmd[LINE_MAX - 1u] = '\0';
 }
 
+static void begin_motion(const char *cmd)
+{
+    char response[LINE_MAX + 8u];
+
+    motion_abort_clear();
+    remember_motion_command(cmd);
+    snprintf(response, sizeof(response), "ACK,%s\r\n", cmd);
+    command_send(response);
+}
+
 static void handle_stop(void)
 {
     /* STOP invalidates every command accepted before its acknowledgement.
@@ -233,12 +244,12 @@ static void dispatch(const char *cmd)
 
     int32_t arg = (strlen(cmd) >= 5u) ? atoi(cmd + 2) : 0;
 
-    if      (!strncmp(cmd, "FW", 2)) { motion_abort_clear(); remember_motion_command(cmd); move_straight_mm( arg * 10); }
-    else if (!strncmp(cmd, "BW", 2)) { motion_abort_clear(); remember_motion_command(cmd); move_straight_mm(-arg * 10); }
-    else if (!strncmp(cmd, "FL", 2)) { motion_abort_clear(); remember_motion_command(cmd); move_turn_deg(1, 1, arg); }
-    else if (!strncmp(cmd, "FR", 2)) { motion_abort_clear(); remember_motion_command(cmd); move_turn_deg(0, 1, arg); }
-    else if (!strncmp(cmd, "BL", 2)) { motion_abort_clear(); remember_motion_command(cmd); move_turn_deg(1, 0, arg); }
-    else if (!strncmp(cmd, "BR", 2)) { motion_abort_clear(); remember_motion_command(cmd); move_turn_deg(0, 0, arg); }
+    if      (!strncmp(cmd, "FW", 2)) { begin_motion(cmd); move_straight_mm( arg * 10); }
+    else if (!strncmp(cmd, "BW", 2)) { begin_motion(cmd); move_straight_mm(-arg * 10); }
+    else if (!strncmp(cmd, "FL", 2)) { begin_motion(cmd); move_turn_deg(1, 1, arg); }
+    else if (!strncmp(cmd, "FR", 2)) { begin_motion(cmd); move_turn_deg(0, 1, arg); }
+    else if (!strncmp(cmd, "BL", 2)) { begin_motion(cmd); move_turn_deg(1, 0, arg); }
+    else if (!strncmp(cmd, "BR", 2)) { begin_motion(cmd); move_turn_deg(0, 0, arg); }
     /* Zhenxi: IM is not a move, so it must not go through report_result()
        -- that would echo whatever the *previous* move's verdict was. It
        replied DONE before (by falling through) and still does.          */

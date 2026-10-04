@@ -26,6 +26,7 @@ from capture_and_report import report_obstacle
 
 STATUS_PROBE_INTERVAL_SECONDS = 1.5
 PROBE_SETTLE_SECONDS = 0.5
+MAX_MOVEMENT_SEND_ATTEMPTS = 3
 
 
 def wait_for_go(android):
@@ -94,6 +95,8 @@ def wait_for_stm_reply(
     probe_outstanding = False
     deferred_terminal = None
     probe_settle_deadline = None
+    command_accepted = False
+    send_attempts = 1
     deadline = time.monotonic() + a1_bridge.STM_TIMEOUT_SECONDS
     last_probe = time.monotonic()
     while time.monotonic() < deadline:
@@ -107,6 +110,11 @@ def wait_for_stm_reply(
                 print(f"STM32 -> RPi: {reply}")
                 if relay_to_android:
                     a1_bridge.send_line(android, f"STM,{reply}")
+                if reply.startswith("ACK,"):
+                    acknowledged_command = reply.split(",", 1)[1]
+                    if expected_command == acknowledged_command:
+                        command_accepted = True
+                    continue
                 if reply == "ACK":
                     if stop_requested:
                         return "STOPPED"
@@ -125,10 +133,13 @@ def wait_for_stm_reply(
                         # A different command is executing, so ours was not
                         # accepted and it is unsafe to continue the route.
                         return "BUSY"
+                    if reported_command == expected_command:
+                        command_accepted = True
                     deferred_terminal = None
                     probe_settle_deadline = None
                     continue
                 if reply.startswith("STATUS,IDLE,"):
+                    response_to_probe = probe_outstanding
                     probe_outstanding = False
                     parts = reply.split(",", 3)
                     result = parts[2]
@@ -137,11 +148,31 @@ def wait_for_stm_reply(
                         expected_command is not None
                         and reported_command != expected_command
                     ):
-                        # This retained result belongs to an older command,
-                        # not the outstanding movement.
+                        # A STATUS response to a probe sent after our command
+                        # still names an older move: the STM never accepted
+                        # our command. Retry only in that provable case, and
+                        # cap attempts so a broken link cannot move forever.
                         deferred_terminal = None
                         probe_settle_deadline = None
+                        if (
+                            response_to_probe
+                            and not command_accepted
+                            and send_attempts < MAX_MOVEMENT_SEND_ATTEMPTS
+                        ):
+                            send_attempts += 1
+                            a1_bridge.send_line(stm, expected_command)
+                            if relay_to_android:
+                                a1_bridge.send_line(
+                                    android,
+                                    f"STATUS,RETRY,{expected_command},{send_attempts}",
+                                )
+                            print(
+                                f"[TASK1] STM did not accept {expected_command}; "
+                                f"retrying ({send_attempts}/{MAX_MOVEMENT_SEND_ATTEMPTS})"
+                            )
+                            last_probe = time.monotonic()
                         continue
+                    command_accepted = True
                     if result == "STOPPED":
                         return "STOPPED"
                     if result in a1_bridge.FINAL_REPLIES:

@@ -230,6 +230,28 @@ stm = FakeStm([
 reply = REAL_WAIT_FOR_STM_REPLY(stm, android, expected_command="BW010")
 check("a stale result for another command is ignored", reply, "DONE")
 
+# If a probe sent after our movement still reports an older command, the
+# movement line was lost before the STM dispatcher. Retrying is safe because
+# last_motion_cmd changes before any accepted movement starts.
+clock["now"] = 0.0
+run_task1.time.monotonic = advancing_monotonic
+android = FakeAndroid([])
+stm = FakeStm([
+    None,
+    "STATUS,IDLE,DONE,FL045",
+    "ACK,BW010",
+    "DONE",
+])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android, expected_command="BW010")
+run_task1.time.monotonic = real_monotonic
+check("a provably dropped movement is retried", stm.written, ["?", "BW010"])
+check("the retried movement waits for completion", reply, "DONE")
+check(
+    "the tablet is told about the retry",
+    "STATUS,RETRY,BW010,2" in android.written,
+    True,
+)
+
 # Staggered deployment is safe: old firmware answers '?' with bare BUSY
 # during a move.  That is the probe's response, not rejection of the move.
 clock["now"] = 0.0
