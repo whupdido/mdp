@@ -59,7 +59,7 @@ FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "BLOCKED", "BUSY", "ERR"}
 # It was 1 s (the port's open timeout), which is also how long a STOP from
 # the tablet could sit unread. 0.1 s keeps a STOP under 100 ms and is still
 # 25x longer than the longest line the board sends takes at 115200 baud.
-STM_POLL_SECONDS = 0.1
+STM_POLL_SECONDS = 0.02
 
 # Zhenxi: commands that arrived from the tablet while a move was running,
 # other than STOP. They are handled after the move, in order, exactly as if
@@ -207,6 +207,13 @@ def discard_pending_android(android):
     return discarded
 
 
+def clear_command_queues(android):
+    """Drop both Python-buffered and serial-buffered commands at STOP."""
+    discarded = len(inbox)
+    inbox.clear()
+    return discarded + discard_pending_android(android)
+
+
 def next_command(android):
     """Return the next command, giving a buffered STOP priority.
 
@@ -258,8 +265,7 @@ def forward_stop_if_pending(android, stm):
         if command is None:
             continue
         if command == "STOP":
-            cleared = len(inbox) + discard_pending_android(android)
-            inbox.clear()
+            cleared = clear_command_queues(android)
             print("Android -> RPi: STOP (mid-move)")
             if cleared:
                 print(f"[QUEUE] cleared {cleared} pending command(s)")
@@ -334,6 +340,9 @@ def main(on_face_known=None):
                     continue
 
                 print(f"Android -> RPi: {command}")
+
+                if command == "STOP":
+                    clear_command_queues(android)
 
                 # Map edits are acknowledged (never rejected -- the tablet
                 # shows the user a warning for every ERR it receives) AND

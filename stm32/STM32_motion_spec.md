@@ -19,12 +19,14 @@ Not the USB-C port — that's USART1, reserved for FlyMCU. Pi GPIO14→PD9, GPIO
 | `BLxxx` | Reverse-left | `xxx` = degrees |
 | `BRxxx` | Reverse-right | `xxx` = degrees |
 | `STOP` | Abort current move | — |
+| `?` | Query current/last movement status; never starts movement | — |
 
 ## Replies
 
 | Reply | Meaning |
 |---|---|
 | `READY` | Sent once at boot. Don't send commands before it. |
+| `ACK,<command>` | Movement accepted; exact command frame is echoed for matching. |
 | `DONE` | Completed. Sent after motion finishes, not on receipt. |
 | `STALL` | Aborted — wheels stopped for 1 s. **Position unknown.** |
 | `TIMEOUT` | Aborted — exceeded 20 s. **Position unknown.** |
@@ -32,11 +34,24 @@ Not the USB-C port — that's USART1, reserved for FlyMCU. Pi GPIO14→PD9, GPIO
 | `ACK` | `STOP` acknowledged. |
 | `BUSY` | Move already running; command **discarded**. |
 | `ERR` | Unrecognised command. |
+| `STATUS,BUSY,<command>` | Identified movement is still executing. |
+| `STATUS,IDLE,<result>,<command>` | Retained result and its command identity; `NONE` if none ran. |
 
-One command at a time. Send, wait for reply, send next. No queue.
+The RPi may query `?` after silence. It retries a movement only when a
+response to that outstanding probe reports a different retained command,
+which proves the STM did not accept the movement. A missing or ambiguous
+response is never grounds for retransmitting movement. STOP clears queued
+commands and takes priority over pending movement. Task 1 appends a unique
+`#request-id` to each movement frame; the STM echoes that complete frame so
+repeated identical movements cannot be confused with an older retained result.
 
-**`STOP` is the exception.** It is read *during* a move (`control.c` polls the
-UART inside its move loops) and answered with `ACK` at once; the interrupted
+The UART receive side has a bounded queue. Movement commands still execute
+one at a time; a queued movement received while another is active is rejected
+with `BUSY`. Status probes are safe to process during a move.
+
+**`STOP` is the exception.** It is prioritized over queued movement and
+processed during a move (`control.c` polls the UART inside its move loops).
+It is answered with `ACK` promptly; the interrupted
 move then ends without a reply of its own. Any other command sent mid-move
 gets `BUSY` and is dropped.
 

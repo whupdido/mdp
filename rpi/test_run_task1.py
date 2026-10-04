@@ -56,13 +56,18 @@ class FakeAndroid:
     def readline(self):
         if not self.script:
             return b""
-        return (self.script.pop(0) + "\n").encode("ascii")
+        item = self.script.pop(0)
+        return b"" if item is None else (item + "\n").encode("ascii")
 
     def write(self, data):
         self.written.append(data.decode("ascii").rstrip("\n"))
 
     def flush(self):
         pass
+
+
+class FakeSTM(FakeAndroid):
+    pass
 
 
 def go(script):
@@ -117,6 +122,75 @@ check(
         "STATUS,Run starting",
     ],
 )
+
+# --- command ACK/status correlation and conservative recovery --------------
+def wait_script(script, expected="FW010"):
+    stm = FakeSTM(script)
+    android = FakeAndroid([])
+    original_forward = a1_bridge.forward_stop_if_pending
+    original_monotonic = run_task1.time.monotonic
+    original_interval = run_task1.STATUS_PROBE_INTERVAL_SECONDS
+    original_timeout = a1_bridge.STM_TIMEOUT_SECONDS
+    ticks = {"n": 0}
+
+    def clock():
+        ticks["n"] += 1
+        return float(ticks["n"])
+
+    a1_bridge.forward_stop_if_pending = lambda *_: False
+    run_task1.time.monotonic = clock
+    run_task1.STATUS_PROBE_INTERVAL_SECONDS = 0
+    a1_bridge.STM_TIMEOUT_SECONDS = 20
+    try:
+        result = run_task1.wait_for_stm_reply(
+            stm, android, expected_command=expected, execution_started=True
+        )
+    finally:
+        a1_bridge.forward_stop_if_pending = original_forward
+        run_task1.time.monotonic = original_monotonic
+        run_task1.STATUS_PROBE_INTERVAL_SECONDS = original_interval
+        a1_bridge.STM_TIMEOUT_SECONDS = original_timeout
+    return result, stm.written
+
+
+result, _ = wait_script(["ACK,FL090", "ACK,FW010", "DONE"])
+check("only a matching ACK accepts the movement", result, "DONE")
+result, _ = wait_script(["ACK,FL090", "DONE", None, "STATUS,IDLE,DONE,FW010"])
+check("wrong-command ACK cannot validate an untagged completion", result, "DONE")
+result, sent = wait_script(
+    [None, "STATUS,IDLE,DONE,FW010#old123", "ACK,FW010#new456", "DONE"],
+    expected="FW010#new456",
+)
+check("request IDs distinguish repeated command text", result, "DONE")
+check("repeated command is retried only after old ID is reported", sent.count("FW010#new456"), 1)
+result, sent = wait_script([None, "STATUS,IDLE,DONE,FL090", "ACK,FW010", "DONE"])
+check("stale status is not treated as current completion", result, "DONE")
+check("provably unaccepted command is retried once", sent.count("FW010"), 1)
+result, sent = wait_script([None, "STATUS,BUSY,FL090", None,
+                            "STATUS,IDLE,DONE,FL090", "ACK,FW010", "DONE"])
+check("busy stale movement finishes before retry", result, "DONE")
+stale_replies = [None]
+for _ in range(5):
+    stale_replies.extend(["STATUS,IDLE,DONE,FL090", None])
+result, sent = wait_script(stale_replies)
+check("stale-result retries stay bounded", sent.count("FW010") <= 2, True)
+result, sent = wait_script([None, "ACK,FW010", "DONE"])
+check("matching ACK and terminal response complete command", result, "DONE")
+result, sent = wait_script([None])
+check("ambiguous silence does not resend movement", sent.count("FW010"), 0)
+
+# Preserve the existing explicit reset diagnosis.
+result, _ = wait_script(["READY"])
+check("unexpected READY remains a reset diagnosis", result, "POSSIBLE_STM_RESET")
+original_forward = a1_bridge.forward_stop_if_pending
+a1_bridge.forward_stop_if_pending = lambda *_: True
+try:
+    result = run_task1.wait_for_stm_reply(
+        FakeSTM(["ACK"]), FakeAndroid([]), expected_command="FW010#stopcheck"
+    )
+finally:
+    a1_bridge.forward_stop_if_pending = original_forward
+check("STOP acknowledgement ends the active route wait", result, "STOPPED")
 
 # --- a malformed edit is still reported, and does not start anything -----
 android, _ = go(["FACE,B9,Q", "START"])

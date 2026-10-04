@@ -11,19 +11,25 @@
 #include "calib.h"
 #include "usart.h"
 #include "sensors.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include "oled.h"
 #include "obstacle_nav.h"
 
-#define LINE_MAX 16
+#define LINE_MAX 24
+#define COMMAND_QUEUE_SIZE 8u
 
 static uint8_t rx_byte;
 static char    line[LINE_MAX];
 static uint8_t idx = 0;
-static volatile uint8_t line_ready = 0;
-static char    pending[LINE_MAX];
+static char command_queue[COMMAND_QUEUE_SIZE][LINE_MAX];
+static volatile uint8_t queue_head = 0u;
+static volatile uint8_t queue_tail = 0u;
+static volatile uint8_t queue_overflow = 0u;
+static volatile uint8_t stop_pending = 0u;
 static uint8_t awaiting_ack = 0;
+static char last_motion_cmd[LINE_MAX] = "";
 
 void oled_countdown(){
 	OLED_ShowString(10,0,(const uint8_t* )"Get Ready...");
@@ -59,13 +65,17 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART3) {
         if (rx_byte == '\n' || rx_byte == '\r') {
-            /* Only latch if the previous line has actually been consumed,
-               otherwise a fast second command overwrites pending[] while
-               command_poll() is still reading it. */
-            if (idx > 0u && line_ready == 0u) {
+            if (idx > 0u) {
+                uint8_t next_head = (uint8_t)((queue_head + 1u) % COMMAND_QUEUE_SIZE);
                 line[idx] = '\0';
-                memcpy(pending, line, (size_t)idx + 1u);
-                line_ready = 1u;
+                if (strcmp(line, "STOP") == 0) {
+                    stop_pending = 1u;
+                } else if (!stop_pending && next_head != queue_tail) {
+                    memcpy(command_queue[queue_head], line, (size_t)idx + 1u);
+                    queue_head = next_head;
+                } else {
+                    queue_overflow = 1u;
+                }
             }
             idx = 0u;
         } else if (idx < (LINE_MAX - 1u)) {
@@ -153,20 +163,63 @@ static void report_result(void)
     }
 }
 
+static void report_status(void)
+{
+    char response[48];
+    const char *result;
+    if (motion_busy()) {
+        snprintf(response, sizeof(response), "STATUS,BUSY,%s\r\n",
+                 last_motion_cmd[0] ? last_motion_cmd : "NONE");
+    } else {
+        switch (motion_result()) {
+            case MOVE_DONE: result = "DONE"; break;
+            case MOVE_STALL: result = "STALL"; break;
+            case MOVE_TIMEOUT: result = "TIMEOUT"; break;
+            case MOVE_BLOCKED: result = "BLOCKED"; break;
+            case MOVE_ABORT: result = "STOPPED"; break;
+            default: result = "NONE"; break;
+        }
+        snprintf(response, sizeof(response), "STATUS,IDLE,%s,%s\r\n",
+                 result, last_motion_cmd[0] ? last_motion_cmd : "NONE");
+    }
+    command_send(response);
+}
+
+static void begin_motion(const char *cmd)
+{
+    char response[LINE_MAX + 8u];
+    strncpy(last_motion_cmd, cmd, LINE_MAX - 1u);
+    last_motion_cmd[LINE_MAX - 1u] = '\0';
+    snprintf(response, sizeof(response), "ACK,%s\r\n", cmd);
+    command_send(response);
+}
+
+static void handle_stop(void)
+{
+    queue_tail = queue_head;
+    queue_overflow = 0u;
+    motion_stop();
+    command_send("ACK\r\n");
+    /* Keep the ISR from publishing another command until the STOP barrier
+       has been acknowledged. */
+    stop_pending = 0u;
+}
+
 static void dispatch(const char *cmd)
 {
-    if (strncmp(cmd, "STOP", 4) == 0) { motion_stop(); command_send("ACK\r\n"); return; }
+    if (strcmp(cmd, "?") == 0) { report_status(); return; }
+    if (strcmp(cmd, "STOP") == 0) { handle_stop(); return; }
     if (motion_busy()) { command_send("BUSY\r\n"); return; }
     if (strlen(cmd) < 2u) { command_send("ERR\r\n"); return; }
 
     int32_t arg = (strlen(cmd) >= 5u) ? atoi(cmd + 2) : 0;
 
-    if      (!strncmp(cmd, "FW", 2)) move_straight_mm( arg * 10);
-    else if (!strncmp(cmd, "BW", 2)) move_straight_mm(-arg * 10);
-    else if (!strncmp(cmd, "FL", 2)) move_turn_deg(1, 1, arg);
-    else if (!strncmp(cmd, "FR", 2)) move_turn_deg(0, 1, arg);
-    else if (!strncmp(cmd, "BL", 2)) move_turn_deg(1, 0, arg);
-    else if (!strncmp(cmd, "BR", 2)) move_turn_deg(0, 0, arg);
+    if      (!strncmp(cmd, "FW", 2)) { begin_motion(cmd); move_straight_mm( arg * 10); }
+    else if (!strncmp(cmd, "BW", 2)) { begin_motion(cmd); move_straight_mm(-arg * 10); }
+    else if (!strncmp(cmd, "FL", 2)) { begin_motion(cmd); move_turn_deg(1, 1, arg); }
+    else if (!strncmp(cmd, "FR", 2)) { begin_motion(cmd); move_turn_deg(0, 1, arg); }
+    else if (!strncmp(cmd, "BL", 2)) { begin_motion(cmd); move_turn_deg(1, 0, arg); }
+    else if (!strncmp(cmd, "BR", 2)) { begin_motion(cmd); move_turn_deg(0, 0, arg); }
     /* Zhenxi: IM is not a move, so it must not go through report_result()
        -- that would echo whatever the *previous* move's verdict was. It
        replied DONE before (by falling through) and still does.          */
@@ -201,11 +254,20 @@ static void dispatch(const char *cmd)
 
 void command_poll(void)
 {
-    if (line_ready) {
+    if (stop_pending) {
+        handle_stop();
+        return;
+    }
+    if (queue_tail != queue_head) {
         char local[LINE_MAX];
-        memcpy(local, pending, LINE_MAX);
-        line_ready = 0u;              /* release the buffer before dispatch */
+        uint8_t tail = queue_tail;
+        memcpy(local, command_queue[tail], LINE_MAX);
+        queue_tail = (uint8_t)((tail + 1u) % COMMAND_QUEUE_SIZE);
         dispatch(local);
+    }
+    if (queue_overflow) {
+        queue_overflow = 0u;
+        command_send("ERR\r\n");
     }
 
     /* Report only once the movement has genuinely finished, and say HOW it
