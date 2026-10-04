@@ -24,6 +24,9 @@ import algo_client
 from capture_and_report import report_obstacle
 
 
+STATUS_PROBE_INTERVAL_SECONDS = 1.5
+
+
 def wait_for_go(android):
     """Drain Android's ADD/SUB/FACE traffic into a1_bridge.obstacles until
     the run is triggered. Returns when it is.
@@ -72,23 +75,83 @@ def obstacles_payload():
     return payload
 
 
-def wait_for_stm_reply(stm, android, relay_to_android=True):
-    """Same wait-for-DONE/STALL/... loop as a1_bridge.main(), reused instead
-    of duplicated, including forwarding a mid-move STOP from Android."""
+def wait_for_stm_reply(
+    stm, android, relay_to_android=True, expected_command=None
+):
+    """Wait for a terminal move result and recover a lost result by probing.
+
+    ``?`` never repeats the movement.  New STM firmware answers STATUS,BUSY
+    while it is still executing or STATUS,IDLE,<result> after it has stopped.
+    A probe response from older firmware is ignored, so deploying the RPi
+    side before reflashing the STM does not turn a running move into BUSY.
+    """
+    stop_requested = False
+    probe_outstanding = False
     deadline = time.monotonic() + a1_bridge.STM_TIMEOUT_SECONDS
+    last_probe = time.monotonic()
     while time.monotonic() < deadline:
-        a1_bridge.forward_stop_if_pending(android, stm)
+        stop_requested = (
+            a1_bridge.forward_stop_if_pending(android, stm) or stop_requested
+        )
         reply_raw = stm.readline()
-        if not reply_raw:
-            continue
-        reply = reply_raw.decode("ascii", errors="replace").strip()
-        if not reply:
-            continue
-        print(f"STM32 -> RPi: {reply}")
-        if relay_to_android:
-            a1_bridge.send_line(android, f"STM,{reply}")
-        if reply in a1_bridge.FINAL_REPLIES:
-            return reply
+        if reply_raw:
+            reply = reply_raw.decode("ascii", errors="replace").strip()
+            if reply:
+                print(f"STM32 -> RPi: {reply}")
+                if relay_to_android:
+                    a1_bridge.send_line(android, f"STM,{reply}")
+                if reply == "ACK":
+                    if stop_requested:
+                        return "STOPPED"
+                    # A delayed ACK from an earlier STOP is not completion of
+                    # the movement currently being awaited.
+                    continue
+                if reply.startswith("STATUS,BUSY"):
+                    probe_outstanding = False
+                    parts = reply.split(",", 2)
+                    reported_command = parts[2] if len(parts) > 2 else None
+                    if (
+                        expected_command is not None
+                        and reported_command is not None
+                        and reported_command != expected_command
+                    ):
+                        # A different command is executing, so ours was not
+                        # accepted and it is unsafe to continue the route.
+                        return "BUSY"
+                    continue
+                if reply.startswith("STATUS,IDLE,"):
+                    probe_outstanding = False
+                    parts = reply.split(",", 3)
+                    result = parts[2]
+                    reported_command = parts[3] if len(parts) > 3 else None
+                    if (
+                        expected_command is not None
+                        and reported_command != expected_command
+                    ):
+                        # This retained result belongs to an older command,
+                        # not the outstanding movement.
+                        continue
+                    if result == "STOPPED":
+                        return "STOPPED"
+                    if result in a1_bridge.FINAL_REPLIES:
+                        return result
+                    # NONE means no completed movement is available yet.
+                    continue
+                if probe_outstanding and reply in ("BUSY", "ERR"):
+                    # Pre-status-protocol firmware interprets '?' as an
+                    # ordinary command.  Do not confuse that response with
+                    # rejection of the movement that preceded the probe.
+                    probe_outstanding = False
+                    continue
+                if reply in a1_bridge.FINAL_REPLIES:
+                    return reply
+
+        now = time.monotonic()
+        if now - last_probe >= STATUS_PROBE_INTERVAL_SECONDS:
+            last_probe = now
+            a1_bridge.send_line(stm, "?")
+            probe_outstanding = True
+            print("RPi -> STM32: ? (status probe)")
     if relay_to_android:
         a1_bridge.send_line(android, "STM,NO_REPLY")
     return "NO_REPLY"
@@ -105,43 +168,46 @@ def run_route(steps, stm, android, run_id=None):
             a1_bridge.send_line(stm, command)
             a1_bridge.send_line(android, f"STATUS,SENT,{command}")
             print(f"RPi -> STM32: {command}")
-            reply = wait_for_stm_reply(stm, android)
+            reply = wait_for_stm_reply(
+                stm, android, expected_command=command
+            )
             if reply == "DONE":
                 pose.apply(command)
                 a1_bridge.send_pose(android, pose)
+            elif reply == "STOPPED":
+                print(f"[TASK1] {command} was stopped from Android -- ending route.")
+                a1_bridge.send_line(android, "MSG,Task 1 stopped")
+                return
+            elif reply == "NO_REPLY":
+                # Keep Task 1 moving when the STM's terminal reply is lost.
+                # The physical pose may be uncertain, so do not advance the
+                # Android dead-reckoner as though the command were confirmed.
+                print(f"[TASK1] No STM reply for {command} -- continuing route.")
+                a1_bridge.send_line(android, f"MSG,No STM reply for {command}; continuing route")
+                continue
             # Any non-success terminal reply means the planner's pose is no
             # longer trustworthy.  In particular, continuing after BUSY can
             # flood the STM32 with commands that it will reject while the
             # route runner incorrectly proceeds to later captures.
-            if reply in ("BLOCKED", "STALL", "TIMEOUT", "BUSY", "ERR", "NO_REPLY"):
+            if reply in ("BLOCKED", "STALL", "TIMEOUT", "BUSY", "ERR"):
                 print(f"[TASK1] Move ended in {reply} -- stopping route early.")
                 return
         elif step["type"] == "capture":
             capture_index += 1
             obstacle_number = step["obstacle_id"]
             print(f"[TASK1] Reached obstacle {obstacle_number}, capturing...")
-            class_id = report_obstacle(
+            # Task 1 only needs the classification on Android and in the
+            # laptop collage.  The STM does not use it to execute the planned
+            # route, so do not send IMxxx or make route progress depend on an
+            # unrelated image-result acknowledgement.  Task 2/A.5 keep their
+            # separate IMxxx path in capture_and_report.py.
+            report_obstacle(
                 obstacle_number,
                 android_serial=android,
-                stm_serial=stm,
                 run_id=run_id,
                 expected_images=expected_images,
                 capture_index=capture_index,
             )
-            if class_id is None:
-                continue
-
-            # report_obstacle() sends IMxxx to the STM, which replies DONE.
-            # Consume that reply here before sending the next move. Otherwise
-            # the queued IM reply is mistaken for the next move's completion,
-            # and the following route command reaches the STM mid-move and is
-            # rejected as BUSY.
-            reply = wait_for_stm_reply(stm, android, relay_to_android=False)
-            if reply != "DONE":
-                print(f"[TASK1] STM rejected image result IM{class_id:03d}: {reply}")
-                a1_bridge.send_line(android, f"MSG,STM rejected image result: {reply}")
-                return
-            print(f"[TASK1] STM acknowledged image result IM{class_id:03d}")
     print("[TASK1] Route complete.")
     a1_bridge.send_line(android, "MSG,Task 1 route complete")
 

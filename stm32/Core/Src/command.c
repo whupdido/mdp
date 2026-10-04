@@ -11,6 +11,7 @@
 #include "calib.h"
 #include "usart.h"
 #include "sensors.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include "oled.h"
@@ -24,6 +25,7 @@ static uint8_t idx = 0;
 static volatile uint8_t line_ready = 0;
 static char    pending[LINE_MAX];
 static uint8_t awaiting_ack = 0;
+static char    last_motion_cmd[LINE_MAX] = "";
 
 void oled_countdown(){
 	OLED_ShowString(10,0,(const uint8_t* )"Get Ready...");
@@ -153,20 +155,61 @@ static void report_result(void)
     }
 }
 
+/* A status probe is deliberately separate from the normal BUSY reply.
+ * BUSY means a newly submitted movement command was rejected; STATUS,BUSY
+ * means the already accepted movement is still running.  When idle, retain
+ * and report the last movement verdict so the Pi can recover if the original
+ * terminal line was lost on the UART. */
+static void report_status(void)
+{
+    char response[48];
+
+    if (motion_busy()) {
+        snprintf(response, sizeof(response), "STATUS,BUSY,%s\r\n",
+                 last_motion_cmd[0] ? last_motion_cmd : "NONE");
+        command_send(response);
+        return;
+    }
+
+    const char *result;
+    switch (motion_result()) {
+        case MOVE_DONE:    result = "DONE";    break;
+        case MOVE_STALL:   result = "STALL";   break;
+        case MOVE_TIMEOUT: result = "TIMEOUT"; break;
+        case MOVE_BLOCKED: result = "BLOCKED"; break;
+        case MOVE_ABORT:   result = "STOPPED"; break;
+        default:           result = "NONE";    break;
+    }
+
+    snprintf(response, sizeof(response), "STATUS,IDLE,%s,%s\r\n",
+             result, last_motion_cmd[0] ? last_motion_cmd : "NONE");
+    command_send(response);
+}
+
+static void remember_motion_command(const char *cmd)
+{
+    strncpy(last_motion_cmd, cmd, LINE_MAX - 1u);
+    last_motion_cmd[LINE_MAX - 1u] = '\0';
+}
+
 static void dispatch(const char *cmd)
 {
+    /* Handle probes before the busy guard.  A probe observes the outstanding
+       move; it is not a second movement command and must never be rejected as
+       BUSY. */
+    if (strcmp(cmd, "?") == 0) { report_status(); return; }
     if (strncmp(cmd, "STOP", 4) == 0) { motion_stop(); command_send("ACK\r\n"); return; }
     if (motion_busy()) { command_send("BUSY\r\n"); return; }
     if (strlen(cmd) < 2u) { command_send("ERR\r\n"); return; }
 
     int32_t arg = (strlen(cmd) >= 5u) ? atoi(cmd + 2) : 0;
 
-    if      (!strncmp(cmd, "FW", 2)) move_straight_mm( arg * 10);
-    else if (!strncmp(cmd, "BW", 2)) move_straight_mm(-arg * 10);
-    else if (!strncmp(cmd, "FL", 2)) move_turn_deg(1, 1, arg);
-    else if (!strncmp(cmd, "FR", 2)) move_turn_deg(0, 1, arg);
-    else if (!strncmp(cmd, "BL", 2)) move_turn_deg(1, 0, arg);
-    else if (!strncmp(cmd, "BR", 2)) move_turn_deg(0, 0, arg);
+    if      (!strncmp(cmd, "FW", 2)) { remember_motion_command(cmd); move_straight_mm( arg * 10); }
+    else if (!strncmp(cmd, "BW", 2)) { remember_motion_command(cmd); move_straight_mm(-arg * 10); }
+    else if (!strncmp(cmd, "FL", 2)) { remember_motion_command(cmd); move_turn_deg(1, 1, arg); }
+    else if (!strncmp(cmd, "FR", 2)) { remember_motion_command(cmd); move_turn_deg(0, 1, arg); }
+    else if (!strncmp(cmd, "BL", 2)) { remember_motion_command(cmd); move_turn_deg(1, 0, arg); }
+    else if (!strncmp(cmd, "BR", 2)) { remember_motion_command(cmd); move_turn_deg(0, 0, arg); }
     /* Zhenxi: IM is not a move, so it must not go through report_result()
        -- that would echo whatever the *previous* move's verdict was. It
        replied DONE before (by falling through) and still does.          */

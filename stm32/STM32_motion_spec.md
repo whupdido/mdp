@@ -19,6 +19,7 @@ Not the USB-C port — that's USART1, reserved for FlyMCU. Pi GPIO14→PD9, GPIO
 | `BLxxx` | Reverse-left | `xxx` = degrees |
 | `BRxxx` | Reverse-right | `xxx` = degrees |
 | `STOP` | Abort current move | — |
+| `?` | Query the current movement state without starting a command | — |
 
 ## Replies
 
@@ -32,6 +33,8 @@ Not the USB-C port — that's USART1, reserved for FlyMCU. Pi GPIO14→PD9, GPIO
 | `ACK` | `STOP` acknowledged. |
 | `BUSY` | Move already running; command **discarded**. |
 | `ERR` | Unrecognised command. |
+| `STATUS,BUSY,<command>` | The identified, previously accepted movement is still executing. |
+| `STATUS,IDLE,<result>,<command>` | Movement is idle; `<result>` is the retained `DONE`, `STALL`, `TIMEOUT`, `BLOCKED`, `STOPPED`, or `NONE` verdict for the identified command. |
 
 One command at a time. Send, wait for reply, send next. No queue.
 
@@ -39,6 +42,14 @@ One command at a time. Send, wait for reply, send next. No queue.
 UART inside its move loops) and answered with `ACK` at once; the interrupted
 move then ends without a reply of its own. Any other command sent mid-move
 gets `BUSY` and is dropped.
+
+The RPi may send `?` after a period of UART silence. Unlike submitting a new
+movement while one is active, this is an observation only: it returns
+`STATUS,BUSY,<command>` while the move runs and
+`STATUS,IDLE,<result>,<command>` afterwards. The command is echoed so a stale
+result cannot be mistaken for completion of a newer command that never reached
+the STM. The last matching result is retained so a lost terminal UART line can
+be recovered without repeating the physical movement.
 
 ### `START2` runs the whole of Task 2
 
