@@ -84,6 +84,28 @@ def pump_map(android, command):
     return False
 
 
+def handle_other(android, command):
+    """Deal with anything that arrived but is not the trigger we want.
+
+    Zhenxi: one function because there are two ways in.
+
+    Commands reach wait_for() either straight off the port or out of
+    a1_bridge.inbox, where waiting on the board parks them. Both paths have
+    to treat a non-trigger the same way, and when they were written out
+    separately they drifted immediately: the port path learned about START2
+    and the queue path silently dropped it, so whether you got a diagnostic
+    or a dead-looking button depended on how close together you pressed.
+    """
+    if command == "START2":
+        # Task 2 runs on the board via a1_bridge.py, not here. Arriving
+        # means the wrong program is running on the Pi, and saying nothing
+        # looks exactly like a broken button.
+        print("[TASK1] START2 is Task 2 -- stop this and run a1_bridge.py instead.")
+        a1_bridge.send_line(android, "MSG,This is the Task 1 runner. Run a1_bridge.py for Task 2.")
+        return
+    pump_map(android, command)
+
+
 def wait_for(android, trigger, prompt):
     """Collect map traffic until `trigger` arrives from the tablet.
 
@@ -110,22 +132,14 @@ def wait_for(android, trigger, prompt):
             if command == trigger:
                 print(f"[TASK1] {trigger} received from the tablet (queued).")
                 return True
-            pump_map(android, command)
+            handle_other(android, command)
 
         if android.in_waiting:
             command = a1_bridge.read_command(android)
             if command == trigger:
                 print(f"[TASK1] {trigger} received from the tablet.")
                 return True
-            # Zhenxi: say so rather than ignoring it. Task 2 runs on the
-            # board via a1_bridge.py, not here, so START2 arriving means the
-            # wrong program is running on the Pi -- and silence would look
-            # exactly like a dead button.
-            if command == "START2":
-                print("[TASK1] START2 is Task 2 -- stop this and run a1_bridge.py instead.")
-                a1_bridge.send_line(android, "MSG,This is the Task 1 runner. Run a1_bridge.py for Task 2.")
-                continue
-            pump_map(android, command)
+            handle_other(android, command)
         if select.select([sys.stdin], [], [], 0)[0]:
             sys.stdin.readline()
             print(f"[TASK1] {trigger} given from the terminal.")
