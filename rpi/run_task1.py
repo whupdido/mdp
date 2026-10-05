@@ -117,6 +117,14 @@ def wait_for(android, trigger, prompt):
             if command == trigger:
                 print(f"[TASK1] {trigger} received from the tablet.")
                 return True
+            # Zhenxi: say so rather than ignoring it. Task 2 runs on the
+            # board via a1_bridge.py, not here, so START2 arriving means the
+            # wrong program is running on the Pi -- and silence would look
+            # exactly like a dead button.
+            if command == "START2":
+                print("[TASK1] START2 is Task 2 -- stop this and run a1_bridge.py instead.")
+                a1_bridge.send_line(android, "MSG,This is the Task 1 runner. Run a1_bridge.py for Task 2.")
+                continue
             pump_map(android, command)
         if select.select([sys.stdin], [], [], 0)[0]:
             sys.stdin.readline()
