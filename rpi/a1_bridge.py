@@ -382,7 +382,7 @@ def main(on_face_known=None):
                 # the tablet paints as a red warning for a button that did
                 # nothing wrong. The tablet sends these whenever it is running,
                 # including during checklist demos when this is what listens.
-                if command in ("START", "COMPUTE") or TASK1_START_POSE.match(command):
+                if command in ("START", "COMPUTE", "ARM") or TASK1_START_POSE.match(command):
                     print(f"[RUN] {command} ignored -- this is a1_bridge, run run_task1.py for Task 1")
                     send_line(android, "MSG,Bridge only. Start Task 1 from run_task1.py.")
                     continue
