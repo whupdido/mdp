@@ -12,6 +12,27 @@ import com.example.androidapp.arena.Facing
  * by hand will produce whichever they remember, possibly with stray spaces.
  * Accepting only one of those loses a demo we had already earned.
  */
+/** The states `STATUS,PLAN,<state>` can report. */
+enum class PlanState {
+    /** Planning has started. Nothing to do but wait. */
+    WORKING,
+    /** Pre-flight running: is the board awake, is the laptop reachable. */
+    CHECKING,
+    /** A route exists; START is live. */
+    READY,
+    /** No route. START stays dead and the reason is shown. */
+    FAILED,
+    /** Pre-flight passed; the Pi is holding for this many seconds. */
+    ARMED,
+    /** Hold over, robot ready. START is now live. */
+    SET;
+
+    companion object {
+        fun from(token: String): PlanState? =
+            entries.firstOrNull { it.name.equals(token.trim(), ignoreCase = true) }
+    }
+}
+
 sealed class Inbound {
 
     /** ROBOT,<x>,<y>,<dir> — C.10 */
@@ -51,6 +72,16 @@ sealed class Inbound {
 
     /** STATUS,SENT,<command> — the bridge confirming it forwarded a command. */
     data class Forwarded(val command: String) : Inbound()
+
+    /**
+     * STATUS,PLAN,<state>[,<n>] — where the Pi's route planning has got to.
+     *
+     * The gate on the START button. READY carries the number of moves in the
+     * route; FAILED carries why; ARMED carries the seconds the Pi will wait
+     * after START before it drives, so the tablet can count that down without
+     * hard-coding a number that could drift from the Pi's.
+     */
+    data class Plan(val state: PlanState, val detail: String, val value: Int?) : Inbound()
 
     /**
      * STATUS,MAP,<message> — the bridge acknowledging one of our own obstacle
@@ -110,8 +141,22 @@ private fun parseStatus(tail: String): Inbound {
         f.size >= 2 && kind.equals("MAP", ignoreCase = true) ->
             Inbound.MapAck(tail.trim().substringAfter(',').trim())
 
+        f.size >= 2 && kind.equals("PLAN", ignoreCase = true) ->
+            parsePlan(f) ?: Inbound.Message(unwrapBrackets(tail))
+
         else -> Inbound.Message(unwrapBrackets(tail))
     }
+}
+
+/** STATUS,PLAN,READY,42 / STATUS,PLAN,FAILED,no route / STATUS,PLAN,ARMED,30 */
+private fun parsePlan(f: List<String>): Inbound.Plan? {
+    val state = PlanState.from(f[1]) ?: return null
+    val rest = f.drop(2)
+    return Inbound.Plan(
+        state = state,
+        detail = rest.joinToString(", "),
+        value = rest.firstOrNull()?.toIntOrNull(),
+    )
 }
 
 private fun parseRobot(tail: String): Inbound.Robot? {

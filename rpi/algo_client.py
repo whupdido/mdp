@@ -43,6 +43,29 @@ def _recv_json(sock: socket.socket) -> dict:
     return json.loads(_recv_exact(sock, length).decode("utf-8"))
 
 
+def server_reachable(timeout: float = 2.0) -> bool:
+    """Can we open a socket to the laptop's algo server right now?
+
+    Zhenxi: added for run_task1.py's pre-flight, on the PLAN press.
+
+    The point is to find out during the preparation window -- where time is
+    free -- that nobody started `python -m server.algo_server` on the laptop,
+    rather than discovering it when the clock is already running and the run
+    is already lost. Opens and closes a connection and sends nothing, so it
+    cannot disturb a server that is up.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect((ALGO_SERVER_IP, ALGO_SERVER_PORT))
+        return True
+    except OSError as exc:
+        print(f"[ALGO] {ALGO_SERVER_IP}:{ALGO_SERVER_PORT} unreachable: {exc}")
+        return False
+    finally:
+        sock.close()
+
+
 def plan_route(obstacles: list[dict], start: dict | None = None) -> list[dict] | None:
     """obstacles: [{"id": int, "x": int, "y": int, "face": "N"/"E"/"S"/"W"}, ...]
     start: optional {"x": int, "y": int, "face": "N"/"E"/"S"/"W"}, defaults to
