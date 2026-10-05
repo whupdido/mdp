@@ -149,31 +149,125 @@ def wait_for_stm_reply(stm, android):
     return "NO_REPLY"
 
 
+# Zhenxi: a blocked move is recoverable; a jammed or confused one is not.
+#
+# BLOCKED means the IR saw something and the board stopped short on purpose:
+# the robot is stationary, upright and safe, it is just not where the route
+# expected. That is worth re-planning around. STALL and TIMEOUT mean the
+# wheels stopped or the move never ended -- the robot may be wedged, and
+# driving more at that point is how a run stops being able to stop itself.
+# BUSY and ERR are protocol faults; continuing would only flood the board.
+RECOVERABLE_REPLIES = ("BLOCKED",)
+FATAL_REPLIES = ("STALL", "TIMEOUT", "BUSY", "ERR", "NO_REPLY")
+
+# How many times a route may be re-planned mid-run before giving up. Each
+# attempt costs a planning round trip out of the six minutes, and a robot
+# that is blocked twice in quick succession is usually wedged rather than
+# unlucky.
+MAX_REPLANS = 2
+
+# Backing off before re-planning restores the clearance the IR objected to,
+# and gives the new route somewhere to turn.
+BACKOFF_CM = 10
+
+
+def remaining_targets(steps, done):
+    """Obstacle numbers the route still has to photograph."""
+    return [
+        step["obstacle_id"]
+        for step in steps
+        if step["type"] == "capture" and step["obstacle_id"] not in done
+    ]
+
+
+def replan_from_here(remaining, android):
+    """Ask for a fresh route over the obstacles we have not reached yet.
+
+    Zhenxi: the pose is the honest problem here. After a BLOCKED we know the
+    move was cut short but not by how much, so the planner is given the last
+    pose we actually confirmed. That is wrong by at most one move length, and
+    being approximately right beats abandoning the remaining targets -- each
+    one is ten points, and the run is scored on images found, not on how
+    tidily we got there.
+    """
+    payload = [
+        {"id": n, "x": a1_bridge.obstacles[n]["pos"][0],
+         "y": a1_bridge.obstacles[n]["pos"][1], "face": a1_bridge.obstacles[n]["face"]}
+        for n in remaining
+        if a1_bridge.obstacles.get(n, {}).get("pos") and a1_bridge.obstacles[n].get("face")
+    ]
+    if not payload:
+        return None
+    a1_bridge.send_line(android, f"MSG,Re-planning for {len(payload)} obstacle(s)")
+    print(f"[TASK1] Re-planning for {[p['id'] for p in payload]} from {start_pose}")
+    return algo_client.plan_route(payload, start=dict(start_pose))
+
+
 def run_route(steps, stm, android):
     pose = a1_bridge.PoseTracker()
     a1_bridge.send_pose(android, pose)
-    for step in steps:
-        if step["type"] == "move":
-            command = step["command"]
-            a1_bridge.send_line(stm, command)
-            a1_bridge.send_line(android, f"STATUS,SENT,{command}")
-            print(f"RPi -> STM32: {command}")
-            reply = wait_for_stm_reply(stm, android)
-            if reply == "DONE":
-                pose.apply(command)
-                a1_bridge.send_pose(android, pose)
-            # Any non-success terminal reply means the planner's pose is no
-            # longer trustworthy.  In particular, continuing after BUSY can
-            # flood the STM32 with commands that it will reject while the
-            # route runner incorrectly proceeds to later captures.
-            if reply in ("BLOCKED", "STALL", "TIMEOUT", "BUSY", "ERR", "NO_REPLY"):
-                print(f"[TASK1] Move ended in {reply} -- stopping route early.")
-                return
-        elif step["type"] == "capture":
-            obstacle_number = step["obstacle_id"]
-            print(f"[TASK1] Reached obstacle {obstacle_number}, capturing...")
-            report_obstacle(obstacle_number, android_serial=android, stm_serial=stm)
-    print("[TASK1] Route complete.")
+    done = set()
+    replans = 0
+
+    while steps is not None:
+        restart = False
+        for index, step in enumerate(steps):
+            if step["type"] == "move":
+                command = step["command"]
+                a1_bridge.send_line(stm, command)
+                a1_bridge.send_line(android, f"STATUS,SENT,{command}")
+                print(f"RPi -> STM32: {command}")
+                reply = wait_for_stm_reply(stm, android)
+
+                if reply == "DONE":
+                    pose.apply(command)
+                    a1_bridge.send_pose(android, pose)
+                    continue
+
+                if reply in FATAL_REPLIES:
+                    print(f"[TASK1] Move ended in {reply} -- stopping route.")
+                    a1_bridge.send_line(android, f"MSG,Run ended early: {reply}")
+                    return
+
+                if reply in RECOVERABLE_REPLIES:
+                    left = remaining_targets(steps[index:], done)
+                    if replans >= MAX_REPLANS or not left:
+                        print(f"[TASK1] {reply} and no re-plan left -- stopping route.")
+                        a1_bridge.send_line(android, f"MSG,Run ended early: {reply}")
+                        return
+                    replans += 1
+                    print(f"[TASK1] {reply} -- backing off and re-planning "
+                          f"({replans}/{MAX_REPLANS}).")
+                    a1_bridge.send_line(stm, f"BW{BACKOFF_CM:03d}")
+                    wait_for_stm_reply(stm, android)
+                    fresh = replan_from_here(left, android)
+                    if fresh is None:
+                        a1_bridge.send_line(android, "MSG,Re-plan failed, stopping")
+                        return
+                    steps = fresh
+                    restart = True
+                    break
+
+            elif step["type"] == "capture":
+                obstacle_number = step["obstacle_id"]
+                # Zhenxi: never photograph the same obstacle twice.
+                #
+                # A re-planned route can legitimately pass an obstacle we
+                # already have, and a second look may detect something
+                # different -- which is not a wasted second but a changed
+                # answer, and a wrong image ID is minus ten points (FAQ 4).
+                # The first reading stands.
+                if obstacle_number in done:
+                    print(f"[TASK1] Obstacle {obstacle_number} already done, not re-reading.")
+                    continue
+                print(f"[TASK1] Reached obstacle {obstacle_number}, capturing...")
+                report_obstacle(obstacle_number, android_serial=android, stm_serial=stm)
+                done.add(obstacle_number)
+
+        if not restart:
+            break
+
+    print(f"[TASK1] Route complete. {len(done)} obstacle(s) photographed.")
     a1_bridge.send_line(android, "MSG,Task 1 route complete")
 
 
