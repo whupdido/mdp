@@ -13,6 +13,7 @@ both running on the laptop:
 
 from __future__ import annotations
 
+import re
 import select
 import sys
 import time
@@ -24,41 +25,97 @@ import algo_client
 from capture_and_report import report_obstacle
 
 
-def wait_for_go(android):
-    """Drain Android's ADD/SUB/FACE traffic into a1_bridge.obstacles until
-    the run is triggered. Returns when it is.
+# Zhenxi: how long the Pi waits after START before it drives.
+#
+# Asked for so the team can step back and put the tablet on the table, as the
+# rules require, without the robot already moving. Be aware it is spent out of
+# the six minutes -- the supervisor times from the button press, not from the
+# first wheel turn -- so 30 s is 8% of the budget. Lower it if that starts to
+# matter. The tablet counts it down from the number announced below, so the
+# two cannot disagree.
+ARMING_DELAY_SECONDS = 30
 
-    Zhenxi: the trigger is now START from the tablet.
+# Where the robot is parked. Android sends this before COMPUTE; the default is
+# only a fallback for driving the runner by hand over SSH.
+start_pose = {"x": 1, "y": 1, "face": "N"}
 
-    This waited on Enter at the SSH terminal, which the competition rules do
-    not allow: during a Task 1 attempt the team may not touch any equipment
-    except the start button on the Android device (rules, Task 1 item 6), and
-    a keypress in a laptop SSH session is touching the laptop. The tablet now
-    has a START button that sends this.
+START_PATTERN = re.compile(r"^ROBOT,(\d+),(\d+),([NESW])$")
 
-    Enter still works, because it is how you start a run while debugging over
-    SSH with no tablet paired. On the day, use the button.
+
+def handle_start_pose(command):
+    """Record ROBOT,<x>,<y>,<D> as the pose the planner routes from.
+
+    Zhenxi: the planner used to assume (1,1,N). The robot starts in the
+    carpark, but which cell of it and facing which way is the supervisor's
+    call on the day, so the tablet now says.
     """
-    print("[TASK1] Place obstacles + faces on Android.")
-    print("[TASK1] Press START on the tablet when ready (or Enter here, for testing).")
+    match = START_PATTERN.match(command)
+    if not match:
+        return False
+    start_pose["x"] = int(match.group(1))
+    start_pose["y"] = int(match.group(2))
+    start_pose["face"] = match.group(3)
+    print(f"[TASK1] Start pose set to {start_pose}")
+    return True
+
+
+def pump_map(android, command):
+    """Fold one tablet message into the stored map. True if it was one."""
+    if command is None:
+        return False
+    if handle_start_pose(command):
+        a1_bridge.send_line(android, f"STATUS,MAP,{command}")
+        return True
+    if a1_bridge.MAP_PATTERN.match(command):
+        handled = a1_bridge.handle_map_message(command)
+        if handled is None:
+            a1_bridge.send_line(android, "ERR,MALFORMED_MAP_MESSAGE")
+        else:
+            a1_bridge.send_line(android, f"STATUS,MAP,{command}")
+        return True
+    return False
+
+
+def wait_for(android, trigger, prompt):
+    """Collect map traffic until `trigger` arrives from the tablet.
+
+    Zhenxi: the triggers come from the tablet, not from this terminal. The
+    rules do not allow touching the laptop during an attempt (Task 1 item 6),
+    and a keypress in an SSH session is touching the laptop.
+
+    Enter still works, because it is how you drive the runner while debugging
+    with no tablet paired. On the day, use the buttons.
+    """
+    print(f"[TASK1] {prompt}")
     while True:
         if android.in_waiting:
             command = a1_bridge.read_command(android)
-            if command == "START":
-                print("[TASK1] START received from the tablet.")
-                a1_bridge.send_line(android, "STATUS,Run starting")
-                return
-            if command and a1_bridge.MAP_PATTERN.match(command):
-                handled = a1_bridge.handle_map_message(command)
-                if handled is None:
-                    a1_bridge.send_line(android, "ERR,MALFORMED_MAP_MESSAGE")
-                else:
-                    a1_bridge.send_line(android, f"STATUS,MAP,{command}")
+            if command == trigger:
+                print(f"[TASK1] {trigger} received from the tablet.")
+                return True
+            pump_map(android, command)
         if select.select([sys.stdin], [], [], 0)[0]:
             sys.stdin.readline()
-            print("[TASK1] Started from the terminal.")
-            return
+            print(f"[TASK1] {trigger} given from the terminal.")
+            return True
         time.sleep(0.05)
+
+
+def arm_and_wait(android):
+    """Count down before driving, telling the tablet how long it has."""
+    a1_bridge.send_line(android, f"STATUS,PLAN,ARMED,{ARMING_DELAY_SECONDS}")
+    print(f"[TASK1] Starting in {ARMING_DELAY_SECONDS}s -- step back.")
+    deadline = time.monotonic() + ARMING_DELAY_SECONDS
+    while time.monotonic() < deadline:
+        # A STOP during the countdown has to be honoured: the robot has not
+        # moved yet, and this is exactly when someone notices it is pointing
+        # the wrong way.
+        if android.in_waiting and a1_bridge.read_command(android) == "STOP":
+            print("[TASK1] STOP during countdown -- not starting.")
+            a1_bridge.send_line(android, "MSG,Run cancelled before moving")
+            return False
+        time.sleep(0.1)
+    return True
 
 
 def obstacles_payload():
@@ -126,17 +183,36 @@ def main():
         print(f"Waiting for Android RFCOMM device {a1_bridge.BT_DEVICE}")
         with serial.Serial(a1_bridge.BT_DEVICE, a1_bridge.BAUD_RATE, timeout=1) as android:
             a1_bridge.send_line(android, "STATUS,Task1 runner ready")
-            wait_for_go(android)
 
-            obstacles = obstacles_payload()
-            if not obstacles:
-                print("[TASK1] No obstacles with both position and face -- nothing to plan.")
-                return
+            # Zhenxi: two presses, not one.
+            #
+            # Planning is slow enough that doing it inside the six minutes
+            # would be giving budget away, and the rules give two minutes of
+            # preparation for exactly this. So COMPUTE plans, off the clock,
+            # and START only drives a route that already exists.
+            while True:
+                wait_for(android, "COMPUTE", "Place obstacles, then press PLAN ROUTE on the tablet.")
 
-            print(f"[TASK1] Planning route for {len(obstacles)} obstacle(s)...")
-            steps = algo_client.plan_route(obstacles)
-            if steps is None:
-                a1_bridge.send_line(android, "MSG,Planning failed, check RPi logs")
+                obstacles = obstacles_payload()
+                if not obstacles:
+                    print("[TASK1] No obstacles with both position and face -- nothing to plan.")
+                    a1_bridge.send_line(android, "STATUS,PLAN,FAILED,no obstacles with a face")
+                    continue
+
+                a1_bridge.send_line(android, "STATUS,PLAN,WORKING")
+                print(f"[TASK1] Planning for {len(obstacles)} obstacle(s) from {start_pose}...")
+                steps = algo_client.plan_route(obstacles, start=dict(start_pose))
+                if steps is None:
+                    a1_bridge.send_line(android, "STATUS,PLAN,FAILED,planner returned no route")
+                    continue
+
+                moves = sum(1 for step in steps if step["type"] == "move")
+                a1_bridge.send_line(android, f"STATUS,PLAN,READY,{moves}")
+                print(f"[TASK1] Route ready: {moves} moves. Waiting for START.")
+                break
+
+            wait_for(android, "START", "Press START on the tablet when the supervisor says go.")
+            if not arm_and_wait(android):
                 return
 
             run_route(steps, stm, android)

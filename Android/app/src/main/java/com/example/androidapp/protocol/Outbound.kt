@@ -65,6 +65,28 @@ object Outbound {
      */
     const val START2 = "START2"
 
+    /**
+     * Where the robot is starting from, sent before [COMPUTE] so the planner
+     * routes from the real pose instead of assuming `(1,1,N)`.
+     *
+     * The robot starts in the carpark, but which cell of it and facing which
+     * way is the supervisor's call on the day. Same shape as the inbound
+     * `ROBOT` line on purpose: it means the same thing in both directions,
+     * "the robot is here".
+     */
+    fun robotAt(x: Int, y: Int, facing: Facing) = "ROBOT,$x,$y,${facing.letter}"
+
+    /**
+     * Plan a route over the obstacles already sent, and report back when
+     * there is one.
+     *
+     * Separate from [START] because planning is slow and the six minutes are
+     * precious: this happens during the two-minute preparation, and START
+     * only becomes pressable once the Pi answers. `rpi/run_task1.py` waits
+     * for this string.
+     */
+    const val COMPUTE = "COMPUTE"
+
     fun start(task: Task) = if (task == Task.TASK2) START2 else START
 
     private fun Int.pad3(): String = coerceIn(0, 999).toString().padStart(3, '0')

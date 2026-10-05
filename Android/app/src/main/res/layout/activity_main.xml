@@ -260,7 +260,8 @@
             android:layout_height="0dp"
             android:layout_weight="1" />
 
-        <!-- Says why START is refused, so nobody presses a dead button. -->
+        <!-- Says why the next press is refused, so nobody presses a dead
+             button, and what the Pi is doing while it is dead. -->
         <TextView
             android:id="@+id/runHint"
             android:layout_width="match_parent"
@@ -270,6 +271,24 @@
             android:textColor="@color/arena_text_faint"
             android:textSize="10sp"
             tools:text="No image face set on B3." />
+
+        <!--
+          Task 1 is two presses. Planning happens here, during the two
+          minutes of preparation, so the six-minute budget is not spent
+          waiting for the Pi to think. START stays dead until it answers.
+          Hidden for Task 2, which has nothing to plan.
+        -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnCompute"
+            style="@style/PadButton.Accent"
+            android:layout_width="match_parent"
+            android:layout_height="46dp"
+            android:layout_marginBottom="8dp"
+            android:letterSpacing="0.06"
+            android:paddingStart="0dp"
+            android:paddingEnd="0dp"
+            android:text="@string/run_compute"
+            android:textSize="13sp" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnStart"

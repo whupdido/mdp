@@ -43,6 +43,12 @@ ADD_PATTERN = re.compile(r"^ADD,B(\d+),\((\d+),(\d+)\)$")
 SUB_PATTERN = re.compile(r"^SUB,B(\d+)$")
 FACE_PATTERN = re.compile(r"^FACE,B(\d+),([NESW])$")
 
+# Zhenxi: the tablet's start pose, ROBOT,<x>,<y>,<D>. Same shape as the line
+# we send the other way, because it means the same thing in both directions.
+# run_task1.py consumes it; here it only needs recognising so it is not
+# rejected as an invalid command.
+TASK1_START_POSE = re.compile(r"^ROBOT,\d+,\d+,[NESW]$")
+
 # Zhenxi: BLOCKED added. The board now stops short when its IR sees an
 # obstacle (stm32/Core/Src/control.c) and, since command.c reports how a
 # move ended rather than just that it ended, that comes back as BLOCKED.
@@ -370,8 +376,14 @@ def main(on_face_known=None):
                 # the plan-and-drive loop, and this plain bridge cannot do it.
                 # Say so rather than answering ERR, which the tablet paints as
                 # a red warning for a button that did nothing wrong.
-                if command == "START":
-                    print("[RUN] START ignored -- this is a1_bridge, run run_task1.py for Task 1")
+                # Zhenxi: Task 1's triggers and its start pose are not ours --
+                # run_task1.py owns the plan-and-drive loop, and this plain
+                # bridge cannot do it. Say so rather than answering ERR, which
+                # the tablet paints as a red warning for a button that did
+                # nothing wrong. The tablet sends these whenever it is running,
+                # including during checklist demos when this is what listens.
+                if command in ("START", "COMPUTE") or TASK1_START_POSE.match(command):
+                    print(f"[RUN] {command} ignored -- this is a1_bridge, run run_task1.py for Task 1")
                     send_line(android, "MSG,Bridge only. Start Task 1 from run_task1.py.")
                     continue
 

@@ -191,6 +191,43 @@ fun ArenaState.withRobotAt(x: Int, y: Int, facing: Facing): ArenaState? {
     )
 }
 
+/**
+ * Place the robot where the run will start from, leaving no breadcrumb.
+ *
+ * Distinct from [withRobotAt], which is how the robot *moves* during a run and
+ * therefore drops a trail point. Setting the start pose is an edit to the plan,
+ * not motion, so a trail would be a lie.
+ *
+ * The planner is told this pose rather than assuming (1,1,N): the robot starts
+ * in the carpark, and which cell of it, facing which way, is the supervisor's
+ * choice on the day.
+ */
+fun ArenaState.withStartPose(x: Int, y: Int, facing: Facing): ArenaState? {
+    if (!Arena.isLegalRobotCentre(x, y)) return null
+    if (obstacles.any { robotCovers(x, y, it.x, it.y) }) return null
+    return copy(robot = RobotPose(x, y, facing), trail = emptyList())
+}
+
+/** Does a robot centred on (cx,cy) cover cell (x,y)? Its body is 3 x 3. */
+fun robotCovers(cx: Int, cy: Int, x: Int, y: Int): Boolean {
+    val reach = Arena.ROBOT_SPAN / 2
+    return x in (cx - reach)..(cx + reach) && y in (cy - reach)..(cy + reach)
+}
+
+/**
+ * Is the whole robot body inside the carpark?
+ *
+ * The rules disqualify a run if the robot leaves the carpark during the
+ * preparation time (FAQ 9), and Task 1 says it must start from there. Worth
+ * saying out loud on the tablet before the press rather than finding out
+ * afterwards.
+ */
+fun ArenaState.startsInCarpark(): Boolean {
+    val reach = Arena.ROBOT_SPAN / 2
+    return robot.x - reach >= 0 && robot.y - reach >= 0 &&
+        robot.x + reach < Arena.START_ZONE_SPAN && robot.y + reach < Arena.START_ZONE_SPAN
+}
+
 fun ArenaState.cleared(): ArenaState = ArenaState()
 
 private const val MAX_TRAIL = 64
@@ -235,7 +272,28 @@ enum class Task(val budgetSec: Long, val label: String) {
  * phase is not cosmetic -- [OVERRUN] is the moment the attempt stopped
  * counting.
  */
-enum class RunPhase { IDLE, RUNNING, FINISHED, OVERRUN }
+/**
+ * Where a run is.
+ *
+ * Task 1 is two presses, not one. The Pi has to plan a route before the robot
+ * can drive it, and planning takes long enough that doing it inside the
+ * six minutes would be throwing away budget. So COMPUTE goes first, off the
+ * clock, and START only becomes pressable once the Pi says it has a route.
+ *
+ * Task 2 has nothing to plan -- its obstacles are not known until the run is
+ * under way -- so it goes straight from IDLE to RUNNING.
+ */
+enum class RunPhase {
+    IDLE,
+    /** COMPUTE sent; waiting for the Pi to come back with a route. */
+    COMPUTING,
+    /** A route exists. START is now live. */
+    READY,
+    /** START pressed. The Pi may still be counting down before it drives. */
+    RUNNING,
+    FINISHED,
+    OVERRUN,
+}
 
 /**
  * The state of one timed attempt.
@@ -250,8 +308,22 @@ data class RunState(
     val identified: Int = 0,
     /** Obstacles placed on the map. */
     val placed: Int = 0,
+    /** Moves in the route the Pi planned, once it has one. */
+    val plannedSteps: Int = 0,
+    /**
+     * Seconds until the robot actually moves, counted down after START.
+     *
+     * The Pi waits before driving so the team can step back and put the
+     * tablet down, as the rules require. It comes from the Pi rather than
+     * being assumed here, so the two cannot disagree.
+     */
+    val armingSec: Long = 0,
 ) {
     val running: Boolean get() = phase == RunPhase.RUNNING || phase == RunPhase.OVERRUN
+
+    /** START is only pressable once there is something to run. */
+    val canStart: Boolean get() = phase == RunPhase.READY ||
+        (task == Task.TASK2 && phase == RunPhase.IDLE)
 
     /** Seconds left of the budget; negative once it is blown. */
     val remainingSec: Long get() = task.budgetSec - elapsedSec
@@ -262,7 +334,7 @@ data class RunState(
      */
     val clock: String
         get() = when (phase) {
-            RunPhase.IDLE -> formatClock(task.budgetSec)
+            RunPhase.IDLE, RunPhase.COMPUTING, RunPhase.READY -> formatClock(task.budgetSec)
             else -> formatClock(remainingSec)
         }
 

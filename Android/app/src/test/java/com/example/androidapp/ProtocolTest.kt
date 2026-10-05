@@ -3,9 +3,11 @@ package com.example.androidapp
 import com.example.androidapp.arena.Facing
 import com.example.androidapp.protocol.Inbound
 import com.example.androidapp.protocol.Outbound
+import com.example.androidapp.protocol.PlanState
 import com.example.androidapp.protocol.parseInbound
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -134,6 +136,50 @@ class ProtocolTest {
             Inbound.StmReply("[WARN] COLLISION AVOIDED! STOPPING EARLY."),
             parseInbound("STM,[WARN] COLLISION AVOIDED! Stopping early."),
         )
+    }
+
+    // --- the plan gate, STATUS,PLAN,<state> ------------------------------
+    //
+    // What turns START from dead to live. rpi/run_task1.py sends these.
+
+    @Test fun `a ready route carries its move count`() {
+        assertEquals(
+            Inbound.Plan(PlanState.READY, "42", 42),
+            parseInbound("STATUS,PLAN,READY,42"),
+        )
+    }
+
+    @Test fun `a failed plan carries the reason, not a number`() {
+        val plan = parseInbound("STATUS,PLAN,FAILED,planner returned no route") as Inbound.Plan
+        assertEquals(PlanState.FAILED, plan.state)
+        assertEquals("planner returned no route", plan.detail)
+        assertNull(plan.value)
+    }
+
+    @Test fun `the arming delay comes from the Pi, so it cannot drift`() {
+        val plan = parseInbound("STATUS,PLAN,ARMED,30") as Inbound.Plan
+        assertEquals(PlanState.ARMED, plan.state)
+        assertEquals(30, plan.value)
+    }
+
+    @Test fun `a bare working state needs no detail`() {
+        assertEquals(Inbound.Plan(PlanState.WORKING, "", null), parseInbound("STATUS,PLAN,WORKING"))
+    }
+
+    @Test fun `plan states are case-insensitive like the rest`() {
+        assertEquals(PlanState.READY, (parseInbound("status,plan,ready,3") as Inbound.Plan).state)
+    }
+
+    @Test fun `an unknown plan state degrades to a status line, not a crash`() {
+        assertTrue(parseInbound("STATUS,PLAN,WOBBLE") is Inbound.Message)
+    }
+
+    // --- outbound: the start pose ----------------------------------------
+
+    @Test fun `the start pose goes out in the same shape it comes in`() {
+        assertEquals("ROBOT,2,3,E", Outbound.robotAt(2, 3, Facing.E))
+        // Symmetric on purpose: it means the same thing in both directions.
+        assertEquals(Inbound.Robot(2, 3, Facing.E), parseInbound(Outbound.robotAt(2, 3, Facing.E)))
     }
 
     @Test fun `map acknowledgement is a receipt, not a status line`() {

@@ -8,6 +8,8 @@ import com.example.androidapp.arena.Task
 import com.example.androidapp.arena.allIdentified
 import com.example.androidapp.arena.isRunOverNotice
 import com.example.androidapp.arena.runBlocker
+import com.example.androidapp.arena.startsInCarpark
+import com.example.androidapp.arena.withStartPose
 import com.example.androidapp.arena.withObstacleAdded
 import com.example.androidapp.arena.withTargetFace
 import com.example.androidapp.arena.withTargetReported
@@ -177,6 +179,73 @@ class RunStateTest {
             "Reached obstacle 3, capturing",
             "Robot ready.",
         ).forEach { assertFalse("should not end the run: $it", isRunOverNotice(it)) }
+    }
+
+    // --- START is gated on having a route --------------------------------
+    //
+    // Task 1 is two presses: the Pi has to plan before the robot can drive,
+    // and planning inside the six minutes would be giving budget away.
+
+    @Test fun `task 1 cannot start until a route exists`() {
+        assertFalse(RunState(phase = RunPhase.IDLE).canStart)
+        assertFalse(RunState(phase = RunPhase.COMPUTING).canStart)
+        assertTrue(RunState(phase = RunPhase.READY).canStart)
+    }
+
+    @Test fun `task 2 can start straight away, having nothing to plan`() {
+        // Its obstacles are not placed until after the preparation time, so
+        // there is no route to compute and gating START would be wrong.
+        assertTrue(RunState(task = Task.TASK2, phase = RunPhase.IDLE).canStart)
+    }
+
+    @Test fun `the clock shows the full budget until the run actually starts`() {
+        listOf(RunPhase.IDLE, RunPhase.COMPUTING, RunPhase.READY).forEach {
+            assertEquals("failed on $it", "6:00", RunState(phase = it).clock)
+        }
+    }
+
+    // --- the start pose is editable --------------------------------------
+    //
+    // The planner is told where we are parked rather than assuming (1,1,N):
+    // which carpark cell, facing which way, is the supervisor's call.
+
+    @Test fun `the start pose can be moved and turned`() {
+        val moved = ArenaState().withStartPose(2, 2, Facing.E)
+        assertNotNull(moved)
+        assertEquals(2, moved!!.robot.x)
+        assertEquals(Facing.E, moved.robot.facing)
+    }
+
+    @Test fun `moving the start pose leaves no trail`() {
+        // A trail would claim the robot drove there. It did not; this is an
+        // edit to the plan, made before anything moves.
+        val moved = ArenaState().withStartPose(5, 5, Facing.N)!!
+        assertTrue(moved.trail.isEmpty())
+    }
+
+    @Test fun `the start pose cannot be put where the robot would not fit`() {
+        // Its body is 3 x 3, so a centre on the boundary hangs off the arena.
+        assertNull(ArenaState().withStartPose(0, 0, Facing.N))
+        assertNull(ArenaState().withStartPose(19, 19, Facing.N))
+    }
+
+    @Test fun `the start pose cannot sit on an obstacle`() {
+        val withBlock = mapOf(5 to 5)
+        assertNull("robot body would cover B1", withBlock.withStartPose(5, 5, Facing.N))
+        assertNull("still covers it one cell away", withBlock.withStartPose(6, 6, Facing.N))
+        assertNotNull("clear of it here", withBlock.withStartPose(9, 9, Facing.N))
+    }
+
+    @Test fun `the carpark check wants the whole body inside`() {
+        // Leaving the carpark during preparation is a disqualification
+        // (FAQ 9), so this is worth saying before the press.
+        assertTrue(ArenaState().startsInCarpark())                       // (1,1)
+        assertTrue(ArenaState().withStartPose(2, 2, Facing.N)!!.startsInCarpark())
+        assertFalse(
+            "centre at (3,3) puts a third of the body outside the 4x4 zone",
+            ArenaState().withStartPose(3, 3, Facing.N)!!.startsInCarpark(),
+        )
+        assertFalse(ArenaState().withStartPose(9, 9, Facing.N)!!.startsInCarpark())
     }
 
     @Test fun `task 2 starts from an empty map, because that is correct`() {
