@@ -161,21 +161,28 @@ check("START ends its own wait", android.written, [])
 # --- the arming countdown ------------------------------------------------
 # The Pi waits before driving so the team can step back. It announces how
 # long so the tablet can count the same number down.
-run_task1.ARMING_DELAY_SECONDS = 0
-android = FakeAndroid([])
-run_task1.time.sleep = lambda _: None
-ok = run_task1.arm_and_wait(android)
-check("the arming delay is announced to the tablet", android.written[:1],
-      ["STATUS,PLAN,ARMED,0"])
-check("and the run proceeds when it expires", ok, True)
+# The hold defaults to zero. It only ever existed to disguise planning that
+# happened during setup, and Prof Smitha confirmed that overlap is allowed,
+# so there is nothing to disguise and the time is pure cost.
+check("the hold is zero by default", run_task1.ARMING_DELAY_SECONDS, 0)
 
-# A STOP during the countdown must cancel: the robot has not moved yet, and
-# this is exactly when someone notices it is pointing the wrong way.
+run_task1.time.sleep = lambda _: None
+run_task1.preflight = lambda stm, android: True
+
+android = FakeAndroid([])
+ok = run_task1.arm_and_wait(None, android)
+check("the hold is announced to the tablet", android.written[:1], ["STATUS,PLAN,ARMED,0"])
+check("and the robot is declared ready", android.written[-1:], ["STATUS,PLAN,SET"])
+check("so START becomes live", ok, True)
+
+# A STOP during the hold must cancel: the robot has not moved yet, and this
+# is exactly when someone notices it is pointing the wrong way.
 run_task1.ARMING_DELAY_SECONDS = 5
 android = FakeAndroid(["STOP"])
-ok = run_task1.arm_and_wait(android)
-check("STOP during the countdown cancels the run", ok, False)
+ok = run_task1.arm_and_wait(None, android)
+check("STOP during the hold cancels the run", ok, False)
 check("and says so", android.written[-1:], ["MSG,Run cancelled before moving"])
+run_task1.ARMING_DELAY_SECONDS = 0
 
 print()
 if FAILURES:

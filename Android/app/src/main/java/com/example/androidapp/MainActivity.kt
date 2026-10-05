@@ -253,8 +253,14 @@ class MainActivity : AppCompatActivity() {
      */
     private fun wireRunControls() {
         ui.btnCompute.setOnClickListener {
-            val blocker = vm.startBlocker()
-            if (blocker == null) vm.computeRoute() else confirmComputeAnyway(blocker)
+            if (vm.run.value.canPlan) {
+                // Second press: pre-flight. Nothing to check about the map
+                // here, the route already exists.
+                vm.armRun()
+            } else {
+                val blocker = vm.startBlocker()
+                if (blocker == null) vm.computeRoute() else confirmComputeAnyway(blocker)
+            }
         }
         ui.btnTask1.setOnClickListener { vm.selectTask(Task.TASK1) }
         ui.btnTask2.setOnClickListener { vm.selectTask(Task.TASK2) }
@@ -262,7 +268,7 @@ class MainActivity : AppCompatActivity() {
             when (vm.run.value.phase) {
                 RunPhase.RUNNING, RunPhase.OVERRUN -> confirmStopRun()
                 RunPhase.FINISHED -> vm.resetRun()
-                RunPhase.IDLE, RunPhase.COMPUTING, RunPhase.READY -> {
+                else -> {
                     val blocker = vm.startBlocker()
                     if (blocker == null) vm.startRun() else confirmStartAnyway(blocker)
                 }
@@ -305,14 +311,7 @@ class MainActivity : AppCompatActivity() {
         // Before the run the big number IS the budget, so repeating it
         // underneath says nothing. Only once it is counting down does the
         // caption tell you what it is counting down from.
-        ui.runBudget.visibility =
-            if (state.phase == RunPhase.IDLE || state.phase == RunPhase.COMPUTING ||
-                state.phase == RunPhase.READY
-            ) {
-                View.INVISIBLE
-            } else {
-                View.VISIBLE
-            }
+        ui.runBudget.visibility = if (state.running) View.VISIBLE else View.INVISIBLE
         ui.runBudget.text =
             getString(R.string.run_budget, RunState.formatClock(state.task.budgetSec))
 
@@ -338,33 +337,34 @@ class MainActivity : AppCompatActivity() {
         // green button while the robot was sitting still.
         ui.btnStart.setText(
             when (state.phase) {
-                RunPhase.IDLE, RunPhase.COMPUTING, RunPhase.READY -> R.string.run_start
                 RunPhase.FINISHED -> R.string.run_again
                 RunPhase.RUNNING, RunPhase.OVERRUN -> R.string.run_stop
+                else -> R.string.run_start
             }
         )
         ui.btnStart.setKey(
             if (state.running) R.drawable.btn_danger_selector else R.drawable.btn_go_selector
         )
-        // START is live only once there is a route to run (Task 2 has
-        // nothing to plan, so it is live as soon as we are connected).
+        // Task 1 is three presses and only one is live at a time, so the
+        // operator cannot take them out of order under time pressure.
         val connected = vm.linkState.value is LinkState.Connected
         ui.btnStart.isEnabled = state.running || state.phase == RunPhase.FINISHED ||
             (connected && state.canStart)
 
-        // PLAN ROUTE belongs to Task 1 only, and not while a run is going.
         ui.btnCompute.visibility =
             if (state.task == Task.TASK1 && !state.running && state.phase != RunPhase.FINISHED) {
                 View.VISIBLE
             } else {
                 View.GONE
             }
-        ui.btnCompute.isEnabled = connected && state.phase != RunPhase.COMPUTING
+        ui.btnCompute.isEnabled = connected && !state.busy
         ui.btnCompute.setText(
             when (state.phase) {
                 RunPhase.COMPUTING -> R.string.run_computing
-                RunPhase.READY -> R.string.run_replan
-                else -> R.string.run_compute
+                RunPhase.ARMING -> R.string.run_checking
+                RunPhase.PLANNED -> R.string.run_compute      // "PLAN"
+                RunPhase.ARMED -> R.string.run_replan         // plan again, if the map changed
+                else -> R.string.run_setup
             }
         )
 
@@ -386,11 +386,19 @@ class MainActivity : AppCompatActivity() {
 
             state.phase == RunPhase.COMPUTING -> getString(R.string.run_planning_hint)
 
-            state.phase == RunPhase.READY ->
-                vm.startBlocker() ?: getString(R.string.run_moves, state.plannedSteps)
+            // "PATH FOUND" -- the Pi has a route and PLAN is the next press.
+            state.phase == RunPhase.PLANNED ->
+                getString(R.string.run_path_found, state.plannedSteps)
+
+            state.phase == RunPhase.ARMING && state.armingSec > 0 ->
+                getString(R.string.run_arming, state.armingSec.toInt())
+
+            state.phase == RunPhase.ARMING -> getString(R.string.run_planning_hint)
+
+            state.phase == RunPhase.ARMED -> getString(R.string.run_armed_hint)
 
             state.task == Task.TASK1 && state.phase == RunPhase.IDLE ->
-                vm.startBlocker() ?: getString(R.string.run_need_plan)
+                vm.startBlocker() ?: getString(R.string.run_need_setup)
             state.phase == RunPhase.FINISHED -> when (state.task) {
                 Task.TASK1 -> getString(R.string.run_done_hint, state.identified, state.placed)
                 Task.TASK2 -> getString(R.string.run_done_hint_t2)

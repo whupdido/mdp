@@ -87,6 +87,16 @@ object Outbound {
      */
     const val COMPUTE = "COMPUTE"
 
+    /**
+     * Second press: check the robot is actually fit to run, then hold.
+     *
+     * Worth its own press because it happens in the preparation window,
+     * where time is free. It is the last chance to find out that the board
+     * is not answering or the laptop's detection server was never started --
+     * finding that out after the clock has begun costs images.
+     */
+    const val ARM = "ARM"
+
     fun start(task: Task) = if (task == Task.TASK2) START2 else START
 
     private fun Int.pad3(): String = coerceIn(0, 999).toString().padStart(3, '0')

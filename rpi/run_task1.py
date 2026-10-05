@@ -25,15 +25,23 @@ import algo_client
 from capture_and_report import report_obstacle
 
 
-# Zhenxi: how long the Pi waits after START before it drives.
+# Zhenxi: how long the Pi holds on the PLAN press before declaring ready.
 #
-# Asked for so the team can step back and put the tablet on the table, as the
-# rules require, without the robot already moving. Be aware it is spent out of
-# the six minutes -- the supervisor times from the button press, not from the
-# first wheel turn -- so 30 s is 8% of the budget. Lower it if that starts to
-# matter. The tablet counts it down from the number announced below, so the
-# two cannot disagree.
-ARMING_DELAY_SECONDS = 30
+# Zero by default, and it should stay zero unless someone has a reason.
+#
+# This started as a 30 s pause to make it look like planning happened inside
+# the run window. It does not need to: Prof Smitha confirmed the setup time
+# may overlap the execution time, so computing the route during preparation
+# is simply allowed. With nothing to disguise, the pause is pure cost -- it
+# happens before START only if you put it there, and anywhere after START it
+# comes straight out of the six minutes, which also breaks ties between teams
+# on equal scores (FAQ 14).
+#
+# Kept as a variable because Peter asked for one, and because a couple of
+# seconds is genuinely useful if the robot lurches before you have put the
+# tablet down. The Pi announces whatever this is and the tablet counts that
+# number down, so the two cannot disagree.
+ARMING_DELAY_SECONDS = 0
 
 # Where the robot is parked. Android sends this before COMPUTE; the default is
 # only a fallback for driving the runner by hand over SSH.
@@ -88,6 +96,22 @@ def wait_for(android, trigger, prompt):
     """
     print(f"[TASK1] {prompt}")
     while True:
+        # Zhenxi: look in the queue before the port.
+        #
+        # Waiting on the board drains Android through
+        # a1_bridge.forward_stop_if_pending(), which parks everything that is
+        # not a STOP in a1_bridge.inbox. So a press that lands while we are
+        # mid-pre-flight -- exactly when an impatient operator presses START,
+        # since the two presses are seconds apart -- ends up in that queue and
+        # never on the port. Reading only the port lost it, and the button
+        # simply did nothing.
+        while a1_bridge.inbox:
+            command = a1_bridge.inbox.pop(0)
+            if command == trigger:
+                print(f"[TASK1] {trigger} received from the tablet (queued).")
+                return True
+            pump_map(android, command)
+
         if android.in_waiting:
             command = a1_bridge.read_command(android)
             if command == trigger:
@@ -101,20 +125,59 @@ def wait_for(android, trigger, prompt):
         time.sleep(0.05)
 
 
-def arm_and_wait(android):
-    """Count down before driving, telling the tablet how long it has."""
+def preflight(stm, android):
+    """Is the robot actually fit to run? Report honestly either way.
+
+    Zhenxi: this is what earns the PLAN press.
+
+    It happens in the preparation window, where time is free, and it is the
+    last chance to discover that the board is asleep or that nobody started
+    the detection server on the laptop. Finding either of those out after the
+    clock has begun costs images, and there is no second chance for a run
+    that was never going to work.
+
+    Nothing here moves the robot: a zero-length move asks the board whether
+    it is awake and idle without turning a wheel.
+    """
+    a1_bridge.send_line(android, "STATUS,PLAN,CHECKING")
+
+    a1_bridge.send_line(stm, "FW000")
+    reply = wait_for_stm_reply(stm, android)
+    if reply != "DONE":
+        print(f"[TASK1] Pre-flight: board answered {reply}, not DONE.")
+        a1_bridge.send_line(android, f"STATUS,PLAN,FAILED,board answered {reply}")
+        return False
+    print("[TASK1] Pre-flight: board awake.")
+
+    if not algo_client.server_reachable():
+        print("[TASK1] Pre-flight: cannot reach the laptop's algo server.")
+        a1_bridge.send_line(android, "STATUS,PLAN,FAILED,laptop algo server unreachable")
+        return False
+    print("[TASK1] Pre-flight: laptop reachable.")
+    return True
+
+
+def arm_and_wait(stm, android):
+    """Pre-flight, then hold for ARMING_DELAY_SECONDS, then declare ready."""
+    if not preflight(stm, android):
+        return False
+
     a1_bridge.send_line(android, f"STATUS,PLAN,ARMED,{ARMING_DELAY_SECONDS}")
-    print(f"[TASK1] Starting in {ARMING_DELAY_SECONDS}s -- step back.")
+    if ARMING_DELAY_SECONDS:
+        print(f"[TASK1] Holding {ARMING_DELAY_SECONDS}s -- step back.")
     deadline = time.monotonic() + ARMING_DELAY_SECONDS
     while time.monotonic() < deadline:
-        # A STOP during the countdown has to be honoured: the robot has not
-        # moved yet, and this is exactly when someone notices it is pointing
-        # the wrong way.
+        # A STOP during the hold has to be honoured: the robot has not moved
+        # yet, and this is exactly when someone notices it is pointing the
+        # wrong way.
         if android.in_waiting and a1_bridge.read_command(android) == "STOP":
-            print("[TASK1] STOP during countdown -- not starting.")
+            print("[TASK1] STOP during the hold -- not starting.")
             a1_bridge.send_line(android, "MSG,Run cancelled before moving")
             return False
         time.sleep(0.1)
+
+    a1_bridge.send_line(android, "STATUS,PLAN,SET")
+    print("[TASK1] Ready. Waiting for START.")
     return True
 
 
@@ -285,7 +348,7 @@ def main():
             # preparation for exactly this. So COMPUTE plans, off the clock,
             # and START only drives a route that already exists.
             while True:
-                wait_for(android, "COMPUTE", "Place obstacles, then press PLAN ROUTE on the tablet.")
+                wait_for(android, "COMPUTE", "Place obstacles, then press SETUP on the tablet.")
 
                 obstacles = obstacles_payload()
                 if not obstacles:
@@ -305,10 +368,15 @@ def main():
                 print(f"[TASK1] Route ready: {moves} moves. Waiting for START.")
                 break
 
-            wait_for(android, "START", "Press START on the tablet when the supervisor says go.")
-            if not arm_and_wait(android):
-                return
+            # Second press: pre-flight and hold, still in the prep window.
+            while True:
+                wait_for(android, "ARM", "Press PLAN on the tablet to check the robot.")
+                if arm_and_wait(stm, android):
+                    break
+                print("[TASK1] Pre-flight failed -- fix it and press PLAN again.")
 
+            # Third press: go. The clock is the supervisor's from here.
+            wait_for(android, "START", "Press START when the supervisor says go.")
             run_route(steps, stm, android)
 
 

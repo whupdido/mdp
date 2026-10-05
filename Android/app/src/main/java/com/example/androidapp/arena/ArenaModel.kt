@@ -284,12 +284,17 @@ enum class Task(val budgetSec: Long, val label: String) {
  * under way -- so it goes straight from IDLE to RUNNING.
  */
 enum class RunPhase {
+    /** Nothing done yet. SETUP is the only live button. */
     IDLE,
-    /** COMPUTE sent; waiting for the Pi to come back with a route. */
+    /** SETUP sent; the Pi is planning. Off the clock, in the prep window. */
     COMPUTING,
-    /** A route exists. START is now live. */
-    READY,
-    /** START pressed. The Pi may still be counting down before it drives. */
+    /** A route exists -- "PATH FOUND". PLAN is now live. */
+    PLANNED,
+    /** PLAN sent; the Pi is pre-flighting and holding. */
+    ARMING,
+    /** Pre-flight passed and the hold is over. START is now live. */
+    ARMED,
+    /** START sent. The robot is driving. */
     RUNNING,
     FINISHED,
     OVERRUN,
@@ -321,9 +326,27 @@ data class RunState(
 ) {
     val running: Boolean get() = phase == RunPhase.RUNNING || phase == RunPhase.OVERRUN
 
-    /** START is only pressable once there is something to run. */
-    val canStart: Boolean get() = phase == RunPhase.READY ||
+    /**
+     * Task 1 is three presses, in this order, and each one is only live when
+     * the one before it has finished:
+     *
+     *   SETUP  plan a route, during the two-minute preparation window
+     *   PLAN   pre-flight the robot and hold while the team steps back
+     *   START  drive
+     *
+     * Task 2 has nothing to plan and no map to key in, so its START is live
+     * as soon as there is a link.
+     */
+    val canSetup: Boolean get() = task == Task.TASK1 &&
+        (phase == RunPhase.IDLE || phase == RunPhase.PLANNED || phase == RunPhase.ARMED)
+
+    val canPlan: Boolean get() = task == Task.TASK1 && phase == RunPhase.PLANNED
+
+    val canStart: Boolean get() = phase == RunPhase.ARMED ||
         (task == Task.TASK2 && phase == RunPhase.IDLE)
+
+    /** True while the Pi is working and nothing should be pressed. */
+    val busy: Boolean get() = phase == RunPhase.COMPUTING || phase == RunPhase.ARMING
 
     /** Seconds left of the budget; negative once it is blown. */
     val remainingSec: Long get() = task.budgetSec - elapsedSec
@@ -334,8 +357,8 @@ data class RunState(
      */
     val clock: String
         get() = when (phase) {
-            RunPhase.IDLE, RunPhase.COMPUTING, RunPhase.READY -> formatClock(task.budgetSec)
-            else -> formatClock(remainingSec)
+            RunPhase.RUNNING, RunPhase.FINISHED, RunPhase.OVERRUN -> formatClock(remainingSec)
+            else -> formatClock(task.budgetSec)
         }
 
     /** "3 / 5" -- what the supervisor is scoring in Task 1. */

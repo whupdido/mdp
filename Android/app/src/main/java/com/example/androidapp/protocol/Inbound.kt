@@ -16,12 +16,16 @@ import com.example.androidapp.arena.Facing
 enum class PlanState {
     /** Planning has started. Nothing to do but wait. */
     WORKING,
+    /** Pre-flight running: is the board awake, is the laptop reachable. */
+    CHECKING,
     /** A route exists; START is live. */
     READY,
     /** No route. START stays dead and the reason is shown. */
     FAILED,
-    /** START accepted; the Pi waits this many seconds before driving. */
-    ARMED;
+    /** Pre-flight passed; the Pi is holding for this many seconds. */
+    ARMED,
+    /** Hold over, robot ready. START is now live. */
+    SET;
 
     companion object {
         fun from(token: String): PlanState? =

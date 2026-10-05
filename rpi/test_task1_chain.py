@@ -11,8 +11,9 @@ receives comes out the other, with the planner and the camera stubbed.
 Covers the whole sequence the rules describe:
 
   prep       tablet sends the start pose and the obstacles
-  press 1    COMPUTE -> plan -> STATUS,PLAN,READY,<moves>
-  press 2    START -> ARMED countdown -> drive
+  press 1    SETUP -> COMPUTE -> plan -> STATUS,PLAN,READY,<moves>
+  press 2    PLAN  -> ARM -> pre-flight -> STATUS,PLAN,SET
+  press 3    START -> drive
   during     TARGET,<n>,<id>,<face> per obstacle, live on the map
   end        route complete, robot stopped by itself
 
@@ -137,6 +138,7 @@ def install_fakes(plans, detections):
         return target
 
     algo_client.plan_route = plan_route
+    algo_client.server_reachable = lambda timeout=2.0: True
     run_task1.algo_client = algo_client
     run_task1.report_obstacle = report_obstacle
     capture_and_report.report_obstacle = report_obstacle
@@ -148,8 +150,18 @@ def fresh():
     a1_bridge.inbox.clear()
     run_task1.start_pose.update({"x": 1, "y": 1, "face": "N"})
     run_task1.select.select = lambda *a, **k: ([], [], [])
-    run_task1.time.sleep = lambda _: None
     run_task1.ARMING_DELAY_SECONDS = 0
+
+    # wait_for() spins until its trigger arrives. If one is ever missed we
+    # want a failure that names it, not a test that hangs.
+    spins = {"n": 0}
+
+    def guarded_sleep(_):
+        spins["n"] += 1
+        if spins["n"] > 2000:
+            raise AssertionError("wait_for never saw its trigger -- press swallowed?")
+
+    run_task1.time.sleep = guarded_sleep
 
 
 def move(cmd):
@@ -177,7 +189,7 @@ fresh()
 route = [move("FW030"), capture(1), move("FL090"), capture(2), move("FW020"), capture(3)]
 calls = install_fakes([route], {1: 35, 2: 17, 3: 31})
 
-android = Port(PREP + ["COMPUTE", "START"])
+android = Port(PREP + ["COMPUTE", "ARM", "START"])
 board = Board()
 run_task1.wait_for(android, "COMPUTE", "prep")
 
@@ -193,12 +205,18 @@ steps = algo_client.plan_route(run_task1.obstacles_payload(), start=dict(run_tas
 check("the planner is asked to route from the tablet's pose, not (1,1,N)",
       calls["plan"][0]["start"], {"x": 2, "y": 2, "face": "E"})
 
-run_task1.wait_for(android, "START", "go")
-check("the arming delay is announced before driving",
-      [w for w in android.written if w.startswith("STATUS,PLAN,ARMED")],
-      [])          # announced by arm_and_wait, not by wait_for
-check("arming completes when nobody stops it", run_task1.arm_and_wait(android), True)
+# Press 2: PLAN. Pre-flight the robot, in the prep window where time is free.
+run_task1.wait_for(android, "ARM", "arm")
+preflight_board = Board()
+check("pre-flight passes when the board and the laptop answer",
+      run_task1.arm_and_wait(preflight_board, android), True)
+check("pre-flight asks the board without moving it", preflight_board.written, ["FW000"])
+check("the tablet is told the robot is checked and ready",
+      [w for w in android.written if w.startswith("STATUS,PLAN,")],
+      ["STATUS,PLAN,CHECKING", "STATUS,PLAN,ARMED,0", "STATUS,PLAN,SET"])
 
+# Press 3: START.
+run_task1.wait_for(android, "START", "go")
 android.written.clear()
 run_task1.run_route(steps, board, android)
 
@@ -284,6 +302,52 @@ board = AlwaysBlocks()
 run_task1.run_route(list(loop), board, android)
 check("re-planning is bounded", len(calls["plan"]), run_task1.MAX_REPLANS)
 check_contains("and it ends by saying so", android.written, "MSG,Run ended early: BLOCKED")
+
+# =====================================================================
+# 5. A press that lands during pre-flight must not be lost
+# =====================================================================
+# Waiting on the board drains Android into a1_bridge.inbox, so a START
+# pressed while pre-flight is still running never reaches the port. The two
+# presses are seconds apart, so an impatient operator hits this every time
+# -- and the symptom is simply that the button does nothing.
+print()
+fresh()
+install_fakes([], {})
+algo_client.server_reachable = lambda timeout=2.0: True
+
+android = Port(["START"])            # pressed early, during the pre-flight
+board = Board()
+run_task1.arm_and_wait(board, android)
+check("the early press was taken off the port by the pre-flight",
+      a1_bridge.inbox, ["START"])
+check("and wait_for still finds it", run_task1.wait_for(android, "START", "go"), True)
+check("without leaving it in the queue", a1_bridge.inbox, [])
+
+# =====================================================================
+# 6. Pre-flight catches a robot that is not fit to run
+# =====================================================================
+# The whole point of doing this on the PLAN press: find out in the prep
+# window, not when the clock is running and the run is already lost.
+print()
+fresh()
+install_fakes([], {})
+algo_client.server_reachable = lambda timeout=2.0: True
+
+android = Port()
+asleep = Board(fail_on=1, reply="NO_REPLY")
+asleep.pending = []
+check("a board that does not answer fails pre-flight",
+      run_task1.arm_and_wait(asleep, android), False)
+check_contains("and the tablet is told why", android.written,
+               "STATUS,PLAN,FAILED,board answered NO_REPLY")
+
+android = Port()
+algo_client.server_reachable = lambda timeout=2.0: False
+check("an unreachable laptop fails pre-flight",
+      run_task1.arm_and_wait(Board(), android), False)
+check_contains("and says so plainly", android.written,
+               "STATUS,PLAN,FAILED,laptop algo server unreachable")
+algo_client.server_reachable = lambda timeout=2.0: True
 
 print()
 if FAILURES:

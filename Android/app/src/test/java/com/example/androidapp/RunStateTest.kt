@@ -183,25 +183,51 @@ class RunStateTest {
 
     // --- START is gated on having a route --------------------------------
     //
-    // Task 1 is two presses: the Pi has to plan before the robot can drive,
-    // and planning inside the six minutes would be giving budget away.
+    // Task 1 is three presses -- SETUP, PLAN, START -- and only one is live
+    // at a time, so they cannot be taken out of order under time pressure.
 
-    @Test fun `task 1 cannot start until a route exists`() {
-        assertFalse(RunState(phase = RunPhase.IDLE).canStart)
-        assertFalse(RunState(phase = RunPhase.COMPUTING).canStart)
-        assertTrue(RunState(phase = RunPhase.READY).canStart)
+    @Test fun `exactly one task 1 press is live in each phase`() {
+        data class Expect(val phase: RunPhase, val setup: Boolean, val plan: Boolean, val start: Boolean)
+        listOf(
+            Expect(RunPhase.IDLE, setup = true, plan = false, start = false),
+            Expect(RunPhase.COMPUTING, setup = false, plan = false, start = false),
+            Expect(RunPhase.PLANNED, setup = true, plan = true, start = false),
+            Expect(RunPhase.ARMING, setup = false, plan = false, start = false),
+            Expect(RunPhase.ARMED, setup = true, plan = false, start = true),
+        ).forEach { e ->
+            val run = RunState(phase = e.phase)
+            assertEquals("setup on ${e.phase}", e.setup, run.canSetup)
+            assertEquals("plan on ${e.phase}", e.plan, run.canPlan)
+            assertEquals("start on ${e.phase}", e.start, run.canStart)
+        }
+    }
+
+    @Test fun `start is dead until the robot has been checked`() {
+        // PLANNED means a route exists but nothing has verified the board is
+        // awake or the laptop is reachable. That is what PLAN is for.
+        assertFalse(RunState(phase = RunPhase.PLANNED).canStart)
+        assertTrue(RunState(phase = RunPhase.ARMED).canStart)
+    }
+
+    @Test fun `nothing is pressable while the Pi is working`() {
+        assertTrue(RunState(phase = RunPhase.COMPUTING).busy)
+        assertTrue(RunState(phase = RunPhase.ARMING).busy)
+        assertFalse(RunState(phase = RunPhase.PLANNED).busy)
+        assertFalse(RunState(phase = RunPhase.ARMED).busy)
     }
 
     @Test fun `task 2 can start straight away, having nothing to plan`() {
         // Its obstacles are not placed until after the preparation time, so
         // there is no route to compute and gating START would be wrong.
         assertTrue(RunState(task = Task.TASK2, phase = RunPhase.IDLE).canStart)
+        assertFalse("and it has no SETUP press at all",
+            RunState(task = Task.TASK2, phase = RunPhase.IDLE).canSetup)
     }
 
     @Test fun `the clock shows the full budget until the run actually starts`() {
-        listOf(RunPhase.IDLE, RunPhase.COMPUTING, RunPhase.READY).forEach {
-            assertEquals("failed on $it", "6:00", RunState(phase = it).clock)
-        }
+        // All three presses happen in the preparation window, off the clock.
+        listOf(RunPhase.IDLE, RunPhase.COMPUTING, RunPhase.PLANNED, RunPhase.ARMING, RunPhase.ARMED)
+            .forEach { assertEquals("failed on $it", "6:00", RunState(phase = it).clock) }
     }
 
     // --- the start pose is editable --------------------------------------

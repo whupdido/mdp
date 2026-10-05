@@ -474,6 +474,22 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Second press: ask the Pi to pre-flight and hold.
+     *
+     * In the preparation window, so it costs nothing. The hold length is
+     * the Pi's to decide and it announces it; zero is a perfectly good
+     * answer and is the default, since nothing in the rules asks us to wait
+     * and the clock starts at START.
+     */
+    fun armRun() {
+        val live = _run.value
+        if (!live.canPlan) return
+        _run.value = live.copy(phase = RunPhase.ARMING)
+        say("Checking the robot…")
+        viewModelScope.launch { transmit(Outbound.ARM) }
+    }
+
     /** The Pi reporting on the route it was asked for. */
     private fun onPlan(msg: Inbound.Plan) {
         val live = _run.value
@@ -483,9 +499,19 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
                 say("Robot is planning…")
             }
 
+            PlanState.CHECKING -> {
+                if (!live.running) _run.value = live.copy(phase = RunPhase.ARMING)
+                say("Checking the robot…")
+            }
+
+            PlanState.SET -> {
+                if (!live.running) _run.value = _run.value.copy(phase = RunPhase.ARMED, armingSec = 0)
+                say("Robot ready. START is live.")
+            }
+
             PlanState.READY -> {
                 if (!live.running) {
-                    _run.value = live.copy(phase = RunPhase.READY, plannedSteps = msg.value ?: 0)
+                    _run.value = live.copy(phase = RunPhase.PLANNED, plannedSteps = msg.value ?: 0)
                 }
                 val moves = msg.value?.let { " $it moves." } ?: ""
                 say("Route ready.$moves START is live.")
@@ -501,8 +527,8 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
             // thinking the robot has hung.
             PlanState.ARMED -> {
                 val secs = (msg.value ?: 0).toLong()
-                _run.value = _run.value.copy(armingSec = secs)
-                say("Robot moves in ${secs}s.")
+                _run.value = _run.value.copy(phase = RunPhase.ARMING, armingSec = secs)
+                if (secs > 0) say("Holding ${secs}s — step back.")
                 armingTicker?.cancel()
                 armingTicker = viewModelScope.launch {
                     var left = secs
