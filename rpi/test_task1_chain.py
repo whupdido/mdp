@@ -323,6 +323,26 @@ check("the early press was taken off the port by the pre-flight",
 check("and wait_for still finds it", run_task1.wait_for(android, "START", "go"), True)
 check("without leaving it in the queue", a1_bridge.inbox, [])
 
+# Same timing, wrong task: switch to Task 2 and press START while the Task 1
+# pre-flight is still waiting on the board, and START2 lands in the queue
+# rather than on the port. It has to produce the same "wrong runner" notice
+# either way -- otherwise whether you get told anything depends on how fast
+# you pressed, which is the worst kind of bug to debug on the day.
+fresh()
+android = Port()
+run_task1.handle_other(android, "START2")
+check("a non-trigger START2 is answered, not dropped", android.written,
+      ["MSG,This is the Task 1 runner. Run a1_bridge.py for Task 2."])
+
+# And through wait_for itself, from the queue, with the real trigger behind it.
+fresh()
+android = Port(["START"])
+a1_bridge.inbox.append("START2")
+check("wait_for answers a queued START2 and still waits for its own trigger",
+      run_task1.wait_for(android, "START", "go"), True)
+check("the notice went out", android.written,
+      ["MSG,This is the Task 1 runner. Run a1_bridge.py for Task 2."])
+
 # =====================================================================
 # 6. Pre-flight catches a robot that is not fit to run
 # =====================================================================
