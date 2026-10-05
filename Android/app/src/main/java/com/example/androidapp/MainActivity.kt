@@ -302,10 +302,17 @@ class MainActivity : AppCompatActivity() {
         renderTaskPicker(state)
 
         ui.runCountdown.text = state.clock
-        // Idle, the big number IS the budget, so repeating it underneath says
-        // nothing. Once it is counting down, the caption is what tells you
-        // what it is counting down from.
-        ui.runBudget.visibility = if (state.phase == RunPhase.IDLE) View.INVISIBLE else View.VISIBLE
+        // Before the run the big number IS the budget, so repeating it
+        // underneath says nothing. Only once it is counting down does the
+        // caption tell you what it is counting down from.
+        ui.runBudget.visibility =
+            if (state.phase == RunPhase.IDLE || state.phase == RunPhase.COMPUTING ||
+                state.phase == RunPhase.READY
+            ) {
+                View.INVISIBLE
+            } else {
+                View.VISIBLE
+            }
         ui.runBudget.text =
             getString(R.string.run_budget, RunState.formatClock(state.task.budgetSec))
 
@@ -326,11 +333,14 @@ class MainActivity : AppCompatActivity() {
         ui.tallyRow.visibility = if (state.showsTally) View.VISIBLE else View.GONE
         ui.runTally.text = if (state.placed == 0) getString(R.string.run_tally_empty) else state.tally
 
+        // Spelled out rather than defaulted: COMPUTING and READY are both
+        // "not started yet", and an `else -> STOP RUN` put the word STOP on a
+        // green button while the robot was sitting still.
         ui.btnStart.setText(
             when (state.phase) {
-                RunPhase.IDLE -> R.string.run_start
+                RunPhase.IDLE, RunPhase.COMPUTING, RunPhase.READY -> R.string.run_start
                 RunPhase.FINISHED -> R.string.run_again
-                else -> R.string.run_stop
+                RunPhase.RUNNING, RunPhase.OVERRUN -> R.string.run_stop
             }
         )
         ui.btnStart.setKey(
