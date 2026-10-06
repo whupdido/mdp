@@ -8,6 +8,8 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
+from server.detection_labels import draw_detection_annotations
+
 HERE = Path(__file__).parent
 MODEL_PATH = HERE / "best.pt"
 MAPPING_PATH = HERE / "mapping.json"
@@ -49,24 +51,14 @@ def get_frame(sock: socket.socket) -> np.ndarray:
 
 
 def draw_detections(frame, results, mapping, names):
+    boxes = []
+    image_ids = []
     for box in results.boxes:
         raw_class_id = int(box.cls[0])
-        conf = float(box.conf[0])
-        image_id = mapping.get(raw_class_id)
-        name = names.get(image_id, "?")
-        x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+        image_ids.append(mapping.get(raw_class_id, raw_class_id))
+        boxes.append(box.xyxy[0].tolist())
 
-        if image_id == BULLSEYE_PLACEHOLDER:
-            color = (0, 165, 255)  # orange -- marker, not a scorable image
-            label = f"MARKER (raw {raw_class_id})"
-        else:
-            color = (0, 220, 0)    # green -- real recognized image
-            label = f"Image ID: {image_id} ({name})  (raw {raw_class_id}, {conf:.2f})"
-
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-        cv2.putText(frame, label, (x1, max(0, y1 - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    return frame
+    return draw_detection_annotations(frame, boxes, image_ids, names)
 
 
 def main(rpi_ip: str, conf: float):

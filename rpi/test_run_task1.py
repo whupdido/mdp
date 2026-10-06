@@ -30,6 +30,8 @@ sys.modules.setdefault("cv2", cv2)
 import a1_bridge
 import run_task1
 
+REAL_WAIT_FOR_STM_REPLY = run_task1.wait_for_stm_reply
+
 FAILURES = []
 
 
@@ -57,6 +59,26 @@ class FakeAndroid:
         if not self.script:
             return b""
         return (self.script.pop(0) + "\n").encode("ascii")
+
+    def write(self, data):
+        self.written.append(data.decode("ascii").rstrip("\n"))
+
+    def flush(self):
+        pass
+
+
+class FakeStm:
+    def __init__(self, replies=()):
+        self.replies = list(replies)
+        self.written = []
+
+    def readline(self):
+        if not self.replies:
+            return b""
+        reply = self.replies.pop(0)
+        if reply is None:
+            return b""
+        return (reply + "\n").encode("ascii")
 
     def write(self, data):
         self.written.append(data.decode("ascii").rstrip("\n"))
@@ -183,6 +205,152 @@ ok = run_task1.arm_and_wait(None, android)
 check("STOP during the hold cancels the run", ok, False)
 check("and says so", android.written[-1:], ["MSG,Run cancelled before moving"])
 run_task1.ARMING_DELAY_SECONDS = 0
+
+# --- a mid-move STOP's ACK ends the wait cleanly ------------------------
+android = FakeAndroid(["STOP"])
+stm = FakeStm(["ACK"])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android)
+check("a mid-move STOP reaches the STM", stm.written, ["STOP"])
+check("the STOP acknowledgement is terminal", reply, "STOPPED")
+check("the STOP acknowledgement is relayed", android.written[-1:], ["STM,ACK"])
+
+# An unrelated/delayed ACK must still not complete a normal movement.
+android = FakeAndroid([])
+stm = FakeStm(["ACK", "DONE"])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android)
+check("an ACK without a forwarded STOP is ignored", reply, "DONE")
+
+# A status probe distinguishes an in-progress move from a recovered terminal
+# result. STATUS,BUSY is not the same as a rejected command's bare BUSY.
+android = FakeAndroid([])
+stm = FakeStm(["STATUS,BUSY,FW050", "STATUS,IDLE,DONE,FW050"])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android, expected_command="FW050")
+check("STATUS,BUSY keeps waiting for movement completion", reply, "DONE")
+
+# If the original DONE is lost, silence triggers '?' and the retained STM
+# result completes the transaction without repeating the movement command.
+real_monotonic = run_task1.time.monotonic
+clock = {"now": 0.0}
+
+
+def advancing_monotonic():
+    clock["now"] += 1.0
+    return clock["now"]
+
+
+run_task1.time.monotonic = advancing_monotonic
+android = FakeAndroid([])
+stm = FakeStm([None, "STATUS,IDLE,DONE,FW050"])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android, expected_command="FW050")
+run_task1.time.monotonic = real_monotonic
+check("silence triggers a non-moving status probe", stm.written, ["?"])
+check("a retained DONE recovers the lost terminal line", reply, "DONE")
+
+# A DONE can arrive after '?' was sent but before the STM consumes the probe.
+# Drain the matching status response before the caller sends another move.
+clock["now"] = 0.0
+run_task1.time.monotonic = advancing_monotonic
+android = FakeAndroid([])
+stm = FakeStm([None, "DONE", "STATUS,IDLE,DONE,FW030"])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android, expected_command="FW030")
+run_task1.time.monotonic = real_monotonic
+check("DONE after a probe still completes the move", reply, "DONE")
+check("the outstanding probe response is drained before returning", stm.replies, [])
+
+# Legacy firmware may never provide a STATUS line. The short settling window
+# falls back to the valid terminal reply rather than becoming NO_REPLY.
+clock["now"] = 0.0
+run_task1.time.monotonic = advancing_monotonic
+android = FakeAndroid([])
+stm = FakeStm([None, "DONE", None])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android, expected_command="FW030")
+run_task1.time.monotonic = real_monotonic
+check("a legacy terminal reply survives the probe settling window", reply, "DONE")
+
+# A probe that still reports an older command proves the current command was
+# dropped before dispatch, so retrying it is safe and bounded.
+clock["now"] = 0.0
+run_task1.time.monotonic = advancing_monotonic
+android = FakeAndroid([])
+stm = FakeStm([None, "STATUS,IDLE,DONE,FL045", "ACK,BW010", "DONE"])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android, expected_command="BW010")
+run_task1.time.monotonic = real_monotonic
+check("a provably dropped movement is retried", stm.written, ["?", "BW010"])
+check("the retried movement waits for completion", reply, "DONE")
+check(
+    "the tablet is told about the retry",
+    "STATUS,RETRY,BW010,2" in android.written,
+    True,
+)
+
+# Staggered deployment is safe: older firmware answers '?' with bare BUSY.
+clock["now"] = 0.0
+run_task1.time.monotonic = advancing_monotonic
+android = FakeAndroid([])
+stm = FakeStm([None, "BUSY", "DONE"])
+reply = REAL_WAIT_FOR_STM_REPLY(stm, android)
+run_task1.time.monotonic = real_monotonic
+check("a legacy probe BUSY does not abort the active move", reply, "DONE")
+
+# --- Task 1 image results belong to Android, not the STM -----------------
+capture_calls = []
+reply_waits = []
+
+
+def fake_report_obstacle(obstacle_number, android_serial, stm_serial=None, **kwargs):
+    capture_calls.append({
+        "obstacle_number": obstacle_number,
+        "android_serial": android_serial,
+        "stm_serial": stm_serial,
+        **kwargs,
+    })
+    return 16
+
+
+run_task1.report_obstacle = fake_report_obstacle
+run_task1.wait_for_stm_reply = lambda *args, **kwargs: reply_waits.append((args, kwargs)) or "NO_REPLY"
+android = FakeAndroid([])
+stm = FakeStm()
+run_task1.run_route(
+    [{"type": "capture", "obstacle_id": 2}],
+    stm,
+    android,
+    run_id="test-run",
+)
+check("Task 1 capture does not receive the STM connection", capture_calls[0]["stm_serial"], None)
+check("Task 1 capture sends no IMxxx command", stm.written, [])
+check("Task 1 capture waits for no STM image acknowledgement", reply_waits, [])
+check("the route continues after reporting the image", android.written[-1:], ["MSG,Task 1 route complete"])
+
+# --- safety policy after probe recovery is exhausted --------------------
+run_task1.wait_for_stm_reply = lambda *args, **kwargs: "NO_REPLY"
+android = FakeAndroid([])
+stm = FakeStm()
+run_task1.run_route(
+    [
+        {"type": "move", "command": "BL030"},
+        {"type": "move", "command": "FW010"},
+    ],
+    stm,
+    android,
+)
+check("no command follows an unrecovered NO_REPLY", stm.written, ["BL030"])
+check("NO_REPLY is surfaced as an early end", android.written[-1:], ["MSG,Run ended early: NO_REPLY"])
+
+# --- a requested STOP ends the route instead of sending the next move ----
+run_task1.wait_for_stm_reply = lambda *args, **kwargs: "STOPPED"
+android = FakeAndroid([])
+stm = FakeStm()
+run_task1.run_route(
+    [
+        {"type": "move", "command": "BW010"},
+        {"type": "move", "command": "FL060"},
+    ],
+    stm,
+    android,
+)
+check("no command is sent after a requested STOP", stm.written, ["BW010"])
+check("a requested STOP does not become NO_REPLY", android.written[-1:], ["MSG,Task 1 stopped"])
 
 print()
 if FAILURES:
