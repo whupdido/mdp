@@ -22,6 +22,7 @@ whoever is building it.
 - [If you are integrating, read this](#if-you-are-integrating-read-this)
 - [The message protocol](#the-message-protocol)
 - [Starting a run](#starting-a-run)
+- [Where the robot starts](#where-the-robot-starts)
 - [Quick start](#quick-start)
 - [Using the app](#using-the-app)
 - [Testing without a robot](#testing-without-a-robot)
@@ -90,7 +91,9 @@ in isolation and the error only appears once they are connected.
 | Obstacle dragged off the arena | `SUB,B<n>` | C.6 |
 | Target face annotated | `FACE,B<n>,<D>` | C.7 |
 | Drive controls | `FW<ddd>` `BW<ddd>` `FL<ddd>` `FR<ddd>` `BL<ddd>` `BR<ddd>` `STOP` | C.3 |
-| START pressed, Task 1 | the whole map again, then `START` | rules |
+| SETUP pressed | `ROBOT,<x>,<y>,<D>`, the whole map, then `COMPUTE` | rules |
+| PLAN pressed | `ARM` | rules |
+| START pressed, Task 1 | `START` | rules |
 | START pressed, Task 2 | `START2` | rules |
 
 Two-letter verb, three zero-padded digits: `FW010` is forward 10 cm, `FL090` a
@@ -102,17 +105,127 @@ dragging.
 
 The rules are strict about this: the run must be started **from a button on the
 tablet**, and during the attempt the team may not touch anything else — not the
-laptop, not the robot. So the tablet has a START button, and
-`rpi/run_task1.py` waits for the `START` it sends. (Pressing Enter in the Pi's
-SSH session still works, for testing off the clock. Don't use it on the day.)
+laptop, not the robot. (Pressing Enter in the Pi's SSH session still works, for
+testing off the clock. Don't use it on the day.)
 
-Pressing START **re-sends the entire map first** — every `ADD` and `FACE`, one
-line every 50 ms — and only then sends `START`. Map edits already go out as
-they are made; this repeat exists because `run_task1.py` only starts collecting
-obstacles once it is running, so anything keyed in before someone launched it
-was being dropped, and the route would plan around a map with obstacles missing.
-Repeating is safe: `ADD` and `FACE` overwrite by obstacle number on the Pi
-rather than accumulate.
+#### First: start the right program on the Pi
+
+**This is the easiest thing to get wrong.** Two programs listen on the same
+Bluetooth link and neither does the other's job, so the wrong one makes the
+buttons look dead:
+
+| On the Pi | Handles | Use for |
+|---|---|---|
+| `python3 run_task1.py` | `COMPUTE`, `ARM`, `START`, the map and start pose | **Task 1 only** |
+| `python3 a1_bridge.py` | drive commands, `STOP`, `START2` | **Task 2**, manual driving, checklist demos |
+
+Each one now says so if it receives the other's trigger, rather than ignoring
+it — silence is indistinguishable from a broken button.
+
+#### Task 1 is three presses
+
+All three happen in the **two-minute preparation window**, except the last.
+Nothing below costs run time until START.
+
+| | Press | Tablet sends | Pi answers |
+|---|---|---|---|
+| 1 | **SETUP** | `ROBOT,<x>,<y>,<D>`, the whole map, `COMPUTE` | `STATUS,PLAN,WORKING` → `READY,<moves>` or `FAILED,<why>` |
+| 2 | **PLAN** | `ARM` | `STATUS,PLAN,CHECKING` → `ARMED,<secs>` → `SET` |
+| 3 | **START** | `START` | drives |
+
+**SETUP** plans. Planning is slow and the six minutes are precious; the rules
+give two minutes of preparation and that is the budget it should come from.
+The tablet shows *PATH FOUND — n moves* and the button becomes PLAN.
+
+**PLAN** pre-flights. A zero-length move asks whether the board is awake
+without turning a wheel, and a socket probe asks whether anyone actually
+started `server/algo_server.py` on the laptop. Both are free here and both
+cost the whole run if you discover them later. START goes green on `SET`.
+
+**START** drives, immediately. `ARMING_DELAY_SECONDS` in `run_task1.py` is
+**0**: a hold only ever existed to make planning look like it happened inside
+the run window, and it does not need to — Prof Smitha confirmed the setup time
+may overlap the execution time. Anywhere after START it comes straight out of
+the six minutes, and FAQ 14 separates equal scores on timing. It is still a
+variable if someone wants a second or two before the robot lurches.
+
+Only one press is live at a time, so they cannot be taken out of order under
+pressure. **Any edit to the map or the start pose sends you back to SETUP** —
+running a route planned for a different layout is exactly the kind of mistake
+the rules give no second chance for, and it would otherwise be invisible.
+
+The map goes out in full on SETUP — every `ADD` and `FACE`, one line every
+50 ms — even though edits also go out as they are made. `run_task1.py` only
+starts collecting obstacles once it is running, so anything keyed in before
+someone launched it was being dropped. Repeating is safe: `ADD` and `FACE`
+overwrite by obstacle number on the Pi rather than accumulate.
+
+#### What a run looks like on the wire
+
+```
+-- sending start pose and 3 obstacle(s) --
+TX  ROBOT,1,1,N
+TX  ADD,B1,(5,13)    TX  FACE,B1,W
+TX  ADD,B2,(5,7)     TX  FACE,B2,S
+TX  ADD,B3,(12,9)    TX  FACE,B3,E
+TX  COMPUTE                          <- press 1, SETUP
+RX  STATUS,PLAN,READY,42             <- "PATH FOUND"
+TX  ARM                              <- press 2, PLAN
+RX  STATUS,PLAN,CHECKING
+RX  STATUS,PLAN,SET                  <- START goes green
+TX  START                            <- press 3
+RX  ROBOT,1,4,N                      <- pose updates as it drives
+RX  TARGET,1,35,W                    <- image ID, live on the map
+...
+RX  MSG,Task 1 route complete
+```
+
+#### Everything that has to be running
+
+```bash
+# Laptop
+python -m server.algo_server      # route planning, port 5002
+python -m server.yolo_task1       # image detection, port 5001
+
+# Pi
+sudo rfcomm bind 0 <tablet-mac>
+python3 run_task1.py              # Task 1   (a1_bridge.py for Task 2)
+
+# Tablet
+Connect -> pick the Pi
+```
+
+Forget the laptop's algo server and **PLAN will tell you** before the clock
+starts. That is the whole reason it is a separate press.
+
+#### When a move goes wrong mid-run
+
+`run_task1.py` does not abandon the route on the first problem — each
+unvisited obstacle is worth ten points.
+
+| Board says | What happens |
+|---|---|
+| `BLOCKED` | IR stopped it short, robot is safe. Backs off 10 cm, re-plans over the obstacles still to do, continues. Twice at most. |
+| `STALL`, `TIMEOUT` | May be wedged. Stops: driving more is how a run loses the ability to stop itself. |
+| `BUSY`, `ERR` | Protocol fault. Stops rather than flooding the board. |
+
+An obstacle already photographed is never read again — a second look can
+detect something different, and a wrong image ID is minus ten points (FAQ 4).
+
+### Where the robot starts
+
+The planner is **told** the start pose rather than assuming `(1,1,N)`. The
+robot starts in the carpark, but which cell of it and facing which way is the
+supervisor's call on the day.
+
+On the map, the robot uses the same two gestures obstacles already do: **drag
+it** to move it, **tap it** for the compass. It is sent as
+`ROBOT,<x>,<y>,<D>` — the same shape as the inbound line, because it means the
+same thing in both directions — and `rpi/run_task1.py` passes it to
+`algo_client.plan_route(obstacles, start=…)`.
+
+The app warns before planning if the robot's 3 × 3 body is not **wholly inside
+the carpark**: leaving it during preparation is a disqualification (FAQ 9).
 
 **Task 2 sends `START2` and no map**, because its obstacles are placed after
 the preparation time and their distances are deliberately withheld — there is
@@ -137,6 +250,12 @@ leaves B3 called B3, because the robot has already been told about B3.
 | `STATUS,<text>` | one line in the status box | — |
 | `STATUS,SENT,<cmd>` | "Sent `<cmd>` to the robot." | — |
 | `STATUS,MAP,<msg>` | receipt for one of our own map edits; Traffic only | — |
+| `STATUS,PLAN,WORKING` | planning started, after SETUP | rules |
+| `STATUS,PLAN,READY,<moves>` | route exists — "PATH FOUND". Enables **PLAN**, not START | rules |
+| `STATUS,PLAN,CHECKING` | pre-flight running, after PLAN | rules |
+| `STATUS,PLAN,ARMED,<secs>` | pre-flight passed; the Pi is holding this long (0 by default) | rules |
+| `STATUS,PLAN,SET` | hold over — **this is what makes START live** | rules |
+| `STATUS,PLAN,FAILED,<why>` | no route, or pre-flight failed; the reason is shown | rules |
 | `STM,<reply>` | relayed board reply | — |
 | `STM,[WARN] <text>` | board diagnostic; a warning, not a status line | — |
 | `ERR,<reason>` | warning — something we sent was refused | — |
@@ -193,7 +312,7 @@ sdk.dir=C:/path/to/your/Android/Sdk
 ```bash
 ./gradlew installDebug     # build and push to a connected device
 ./gradlew assembleDebug    # just build the APK
-./gradlew test             # 66 unit tests, no device needed
+./gradlew test             # 86 unit tests, no device needed
 ```
 
 **Toolchain:** AGP 9.3.1, Gradle 9.5, JDK 25, `compileSdk` 37, `minSdk` 24.

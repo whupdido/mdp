@@ -265,6 +265,20 @@ UNCALIBRATED_SIMULATION_CONFIG = PlanningConfig(
 )
 
 
+# Where the camera and the body sit relative to the rear-axle midpoint, in cm
+# along the direction of travel. The planner's pose, and every turn radius in
+# calib.h, is the rear-axle midpoint, so these two numbers decide where the
+# planner thinks the front of the car and the camera are.
+#
+# Measured on the car 06-Oct-2026: body 23 cm long, rear-axle midpoint 3.3 cm
+# from the back, camera 11.5 cm ahead of the axle. So the body centre is
+# 11.5 - 3.3 = 8.2 cm ahead of the axle, and the front bumper 19.7 cm ahead.
+# These used to be 0.0 and 11.5, i.e. the axle in the middle of the body,
+# which put the real front 8.2 cm further forward than the planner knew.
+REAR_AXLE_TO_BODY_CENTRE_CM = 8.2
+REAR_AXLE_TO_CAMERA_CM = 11.5
+
+
 def task1_robot_config(
     calibration_path: Path | None = None,
     *,
@@ -281,7 +295,12 @@ def task1_robot_config(
     base = UNCALIBRATED_SIMULATION_CONFIG
     production = replace(
         base,
-        robot=replace(base.robot, safety_margin_cm=3.0),
+        robot=replace(
+            base.robot,
+            safety_margin_cm=3.0,
+            rear_axle_to_body_center_forward_cm=REAR_AXLE_TO_BODY_CENTRE_CM,
+        ),
+        camera=replace(base.camera, forward_offset_cm=REAR_AXLE_TO_CAMERA_CM),
         observation_lateral_offsets_cm=(0.0,),
         guaranteed_max_candidates_per_target=1,
         max_expanded_nodes=5000,

@@ -167,9 +167,17 @@ for cmd in ["ADD,B1,(10)", "ADD,GARBAGE", "SUB,", "FACE,B2,Q", "FACE,B2"]:
 # the string exists whenever the app is running -- including in checklist
 # demos, when this plain bridge is what is listening. It must not come back
 # as ERR: the tablet paints every ERR as a red warning.
-to_android, to_stm = run(["START"])
-check("START is not refused", to_android[-1:], ["MSG,Bridge only. Start Task 1 from run_task1.py."])
-check("START never reaches the board", to_stm, [])
+# Task 1's triggers and start pose belong to run_task1.py. This bridge must
+# still not answer ERR -- the tablet paints that red, and the button is not
+# the thing at fault.
+for cmd in ["START", "COMPUTE", "ROBOT,1,1,N", "ROBOT,18,3,E"]:
+    to_android, to_stm = run([cmd])
+    check(
+        f"{cmd} is not refused",
+        to_android[-1:],
+        ["MSG,Bridge only. Start Task 1 from run_task1.py."],
+    )
+    check(f"{cmd} never reaches the board", to_stm, [])
 
 # --- START2: Task 2 runs on the board ------------------------------------
 # Wen Rong added START2 to command.c's dispatch, so unlike START this one is
@@ -198,7 +206,11 @@ to_android, to_stm = run(["START2"], ["BUSY"])
 check("a refused START2 ends the wait", to_android[-1:], ["STM,BUSY"])
 
 # --- things that should still be refused --------------------------------
-for cmd in ["ROBOT,7,2,W", "NONSENSE", "FW10", "FWABC", "FW0100"]:
+# ROBOT,7,2,W used to be in this list. It is not any more: the tablet now
+# sends that shape to say where the robot is parked, so the planner can route
+# from the real start pose instead of assuming (1,1,N). A ROBOT line that is
+# not that shape is still refused, which is what the last two cases pin.
+for cmd in ["NONSENSE", "FW10", "FWABC", "FW0100", "ROBOT,7,2,Q", "ROBOT,7,2"]:
     to_android, to_stm = run([cmd])
     check(f"{cmd} is refused", to_android[-1:], ["ERR,INVALID_COMMAND"])
     check(f"{cmd} never reaches the board", to_stm, [])

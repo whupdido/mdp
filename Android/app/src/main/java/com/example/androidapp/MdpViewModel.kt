@@ -16,6 +16,8 @@ import com.example.androidapp.arena.allIdentified
 import com.example.androidapp.arena.isRunOverNotice
 import com.example.androidapp.arena.runBlocker
 import com.example.androidapp.arena.withObstacleAdded
+import com.example.androidapp.arena.withStartPose
+import com.example.androidapp.arena.startsInCarpark
 import com.example.androidapp.arena.withObstacleMoved
 import com.example.androidapp.arena.withObstacleRemoved
 import com.example.androidapp.arena.withRobotAt
@@ -27,6 +29,7 @@ import com.example.androidapp.link.Link
 import com.example.androidapp.link.LinkState
 import com.example.androidapp.link.RemoteDevice
 import com.example.androidapp.protocol.Inbound
+import com.example.androidapp.protocol.PlanState
 import com.example.androidapp.protocol.Move
 import com.example.androidapp.protocol.Outbound
 import com.example.androidapp.protocol.parseInbound
@@ -131,7 +134,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
     val run: StateFlow<RunState> = _run.asStateFlow()
 
     private var runTicker: Job? = null
-    private var startPublisher: Job? = null
+    private var armingTicker: Job? = null
     private var runStartMs = 0L
 
     private var ticker: Job? = null
@@ -251,6 +254,8 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
             is Inbound.Rejected -> warn("Robot rejected our message: ${msg.reason}")
 
+            is Inbound.Plan -> onPlan(msg)
+
             is Inbound.StmReply -> onStmReply(msg)
 
             is Inbound.Unknown -> Unit // logged above, never surfaced, never thrown
@@ -322,6 +327,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         pushUndo()
         _arena.value = result.first
         transmit(Outbound.add(result.second.id, x, y))
+        invalidatePlan("Obstacle added")
     }
 
     /**
@@ -333,6 +339,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         pushUndo()
         _arena.value = next
         transmit(Outbound.add(id, x, y))
+        invalidatePlan("Obstacle moved")
     }
 
     /** C.6: dragged past the boundary. Survivors keep their numbers. */
@@ -341,6 +348,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         pushUndo()
         _arena.value = _arena.value.withObstacleRemoved(id)
         transmit(Outbound.sub(id))
+        invalidatePlan("Obstacle removed")
     }
 
     /** C.7: face chosen from the quadrant selector. */
@@ -349,6 +357,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         pushUndo()
         _arena.value = _arena.value.withTargetFace(id, face)
         transmit(Outbound.face(id, face))
+        invalidatePlan("Face changed")
     }
 
     /** C.3 */
@@ -371,9 +380,47 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         _run.value = RunState(task = task)
     }
 
-    /** Why START is refused right now, or null if it would go through. */
+    /**
+     * Drag the robot to the cell the run will start from. C.5-adjacent: the
+     * planner is told this pose, so it has to be editable.
+     */
+    fun setStartCell(x: Int, y: Int) {
+        if (_run.value.running) return
+        val next = _arena.value.withStartPose(x, y, _arena.value.robot.facing) ?: return
+        pushUndo()
+        _arena.value = next
+        invalidatePlan("Start moved")
+    }
+
+    /** Tap the robot, pick a quadrant: which way it is parked. */
+    fun setStartFacing(facing: Facing) {
+        if (_run.value.running) return
+        val r = _arena.value.robot
+        if (r.facing == facing) return
+        val next = _arena.value.withStartPose(r.x, r.y, facing) ?: return
+        pushUndo()
+        _arena.value = next
+        invalidatePlan("Start facing changed")
+    }
+
+    /**
+     * Any edit to the map or the start pose makes an existing route stale, so
+     * START goes back to dead and COMPUTE has to be pressed again. Silently
+     * running a route planned for a different layout is exactly the kind of
+     * mistake the rules give no second chance for.
+     */
+    private fun invalidatePlan(why: String) {
+        val live = _run.value
+        if (live.running || live.phase == RunPhase.IDLE) return
+        _run.value = live.copy(phase = RunPhase.IDLE, plannedSteps = 0)
+        say("$why — plan again before starting.")
+    }
+
+    /** Why the next press is refused right now, or null if it would go through. */
     fun startBlocker(): String? = when {
         linkState.value !is LinkState.Connected -> "Not connected to the robot."
+        !_arena.value.startsInCarpark() ->
+            "Robot is not fully inside the carpark. Leaving it during prep is a disqualification."
         else -> _arena.value.runBlocker(_run.value.task)
     }
 
@@ -395,22 +442,108 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
      * burst, and RFCOMM plus the bridge's line-at-a-time reader are happier
      * with a gap than with eight messages inside one buffer.
      */
-    private suspend fun publishMapThenStart(task: Task) {
-        if (task == Task.TASK1) {
-            val obstacles = _arena.value.obstacles
-            if (obstacles.isNotEmpty()) {
-                note("-- re-sending ${obstacles.size} obstacle(s) before START --")
-                for (obstacle in obstacles) {
-                    transmit(Outbound.add(obstacle.id, obstacle.x, obstacle.y))
-                    delay(MAP_GAP_MS)
-                    obstacle.targetFace?.let {
-                        transmit(Outbound.face(obstacle.id, it))
-                        delay(MAP_GAP_MS)
+    private suspend fun publishMap() {
+        val arena = _arena.value
+        note("-- sending start pose and ${arena.obstacles.size} obstacle(s) --")
+        // Start pose first: the planner needs somewhere to route from, and
+        // (1,1,N) is only the default, not necessarily where we are parked.
+        transmit(Outbound.robotAt(arena.robot.x, arena.robot.y, arena.robot.facing))
+        delay(MAP_GAP_MS)
+        for (obstacle in arena.obstacles) {
+            transmit(Outbound.add(obstacle.id, obstacle.x, obstacle.y))
+            delay(MAP_GAP_MS)
+            obstacle.targetFace?.let {
+                transmit(Outbound.face(obstacle.id, it))
+                delay(MAP_GAP_MS)
+            }
+        }
+    }
+
+    /**
+     * Task 1, first press: send the map and ask the Pi to plan a route.
+     *
+     * Off the clock on purpose. Planning takes long enough that doing it
+     * inside the six minutes would be giving budget away, and the rules give
+     * two minutes of preparation precisely for this kind of setup. START
+     * stays dead until the Pi answers.
+     */
+    fun computeRoute() {
+        val live = _run.value
+        if (live.task != Task.TASK1 || live.running) return
+        _run.value = live.copy(phase = RunPhase.COMPUTING, plannedSteps = 0)
+        say("Planning a route…")
+        viewModelScope.launch {
+            publishMap()
+            transmit(Outbound.COMPUTE)
+        }
+    }
+
+    /**
+     * Second press: ask the Pi to pre-flight and hold.
+     *
+     * In the preparation window, so it costs nothing. The hold length is
+     * the Pi's to decide and it announces it; zero is a perfectly good
+     * answer and is the default, since nothing in the rules asks us to wait
+     * and the clock starts at START.
+     */
+    fun armRun() {
+        val live = _run.value
+        if (!live.canPlan) return
+        _run.value = live.copy(phase = RunPhase.ARMING)
+        say("Checking the robot…")
+        viewModelScope.launch { transmit(Outbound.ARM) }
+    }
+
+    /** The Pi reporting on the route it was asked for. */
+    private fun onPlan(msg: Inbound.Plan) {
+        val live = _run.value
+        when (msg.state) {
+            PlanState.WORKING -> {
+                if (!live.running) _run.value = live.copy(phase = RunPhase.COMPUTING)
+                say("Robot is planning…")
+            }
+
+            PlanState.CHECKING -> {
+                if (!live.running) _run.value = live.copy(phase = RunPhase.ARMING)
+                say("Checking the robot…")
+            }
+
+            PlanState.SET -> {
+                if (!live.running) _run.value = _run.value.copy(phase = RunPhase.ARMED, armingSec = 0)
+                say("Robot ready. START is live.")
+            }
+
+            PlanState.READY -> {
+                if (!live.running) {
+                    _run.value = live.copy(phase = RunPhase.PLANNED, plannedSteps = msg.value ?: 0)
+                }
+                val moves = msg.value?.let { " $it moves." } ?: ""
+                say("Route ready.$moves START is live.")
+            }
+
+            PlanState.FAILED -> {
+                if (!live.running) _run.value = live.copy(phase = RunPhase.IDLE, plannedSteps = 0)
+                warn("Planning failed: ${msg.detail.ifEmpty { "no reason given" }}")
+            }
+
+            // The Pi waits before it drives so the team can step back and put
+            // the tablet down. Counting it down here keeps the operator from
+            // thinking the robot has hung.
+            PlanState.ARMED -> {
+                val secs = (msg.value ?: 0).toLong()
+                _run.value = _run.value.copy(phase = RunPhase.ARMING, armingSec = secs)
+                if (secs > 0) say("Holding ${secs}s — step back.")
+                armingTicker?.cancel()
+                armingTicker = viewModelScope.launch {
+                    var left = secs
+                    while (left > 0 && _run.value.running) {
+                        delay(1000)
+                        left -= 1
+                        _run.value = _run.value.copy(armingSec = left.coerceAtLeast(0))
                     }
                 }
             }
         }
-        transmit(Outbound.start(task))
     }
 
     /**
@@ -421,19 +554,23 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
      * happens before the first wheel turns.
      */
     fun startRun() {
-        if (_run.value.running) return
-        val task = _run.value.task
+        val previous = _run.value
+        if (previous.running || !previous.canStart) return
+        val task = previous.task
         clearRecording()
         _run.value = RunState(
             task = task,
             phase = RunPhase.RUNNING,
             placed = _arena.value.obstacles.size,
             identified = _arena.value.obstacles.count { it.targetId != null },
+            plannedSteps = previous.plannedSteps,
         )
         runStartMs = System.currentTimeMillis()
         say("${task.label} started. ${task.budgetSec / 60} minutes.")
-        startPublisher?.cancel()
-        startPublisher = viewModelScope.launch { publishMapThenStart(task) }
+        // The clock starts at the press, not when the wheels turn: that is
+        // what the supervisor is timing, and the Pi's arming delay is spent
+        // out of our budget whether we like it or not.
+        viewModelScope.launch { transmit(Outbound.start(task)) }
         runTicker?.cancel()
         runTicker = viewModelScope.launch {
             while (true) {
@@ -463,12 +600,12 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * STOP is a transport barrier, not an ordinary movement command.
-     * Cancelling the map/START publisher first guarantees that nothing the
-     * app had scheduled can be transmitted behind STOP and restart the run.
+     * Cancel any pending arming UI work before forwarding it so the app
+     * cannot make the stopped run look ready again.
      */
     private fun emergencyStop() {
-        startPublisher?.cancel()
-        startPublisher = null
+        armingTicker?.cancel()
+        armingTicker = null
         transmit(Outbound.STOP)
         if (!_run.value.running) {
             say("Emergency stop sent. Pending commands cleared.")
@@ -482,8 +619,8 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Back to a fresh attempt, without touching the map the supervisor keyed in. */
     fun resetRun() {
-        startPublisher?.cancel()
-        startPublisher = null
+        armingTicker?.cancel()
+        armingTicker = null
         runTicker?.cancel()
         runTicker = null
         _run.value = RunState(task = _run.value.task)
@@ -527,7 +664,9 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         if (!live.running) return
         runTicker?.cancel()
         runTicker = null
-        _run.value = live.copy(phase = RunPhase.FINISHED)
+        armingTicker?.cancel()
+        armingTicker = null
+        _run.value = live.copy(phase = RunPhase.FINISHED, armingSec = 0)
         say("$note in ${RunState.formatClock(live.elapsedSec)}.")
     }
 

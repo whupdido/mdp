@@ -54,6 +54,16 @@ class ArenaView @JvmOverloads constructor(
     var onRemoveObstacle: (id: Int) -> Unit = { }
     var onSetTargetFace: (id: Int, face: Facing) -> Unit = { _, _ -> }
 
+    /**
+     * The robot's start pose is editable, because the planner is told it and
+     * the supervisor decides on the day which carpark cell we park in and
+     * which way round. Drag the robot to move it, tap it for the compass --
+     * the same two gestures obstacles already use, so there is nothing new
+     * to learn under time pressure.
+     */
+    var onMoveRobot: (x: Int, y: Int) -> Unit = { _, _ -> }
+    var onSetStartFacing: (face: Facing) -> Unit = { }
+
     /** Cell under the finger. For the readout chip. */
     var onHover: (x: Int, y: Int) -> Unit = { _, _ -> }
     var onHoverEnd: () -> Unit = { }
@@ -64,7 +74,10 @@ class ArenaView @JvmOverloads constructor(
         set(value) {
             val previous = field
             field = value
-            if (selectorFor != null && value.obstacle(selectorFor!!) == null) selectorFor = null
+            val open = selectorFor
+            if (open != null && open != robotSelector && value.obstacle(open) == null) {
+                selectorFor = null
+            }
             if (previous.robot != value.robot) animateRobotTo(value.robot) else invalidate()
         }
 
@@ -87,7 +100,14 @@ class ArenaView @JvmOverloads constructor(
     var replayTrail: List<Pair<Int, Int>>? = null
         set(value) { field = value; invalidate() }
 
+    /** [selectorFor] holds this instead of an obstacle id when the compass
+     *  belongs to the robot. Obstacle numbers start at 1, so it cannot clash. */
+    private val robotSelector = -1
+
     private var selectorFor: Int? = null
+
+    /** Set while a drag is moving the robot rather than an obstacle. */
+    private var draggingRobot = false
 
     private var dragId: Int? = null
     private var dragging = false
@@ -550,14 +570,19 @@ class ArenaView @JvmOverloads constructor(
      */
     private fun drawFaceSelector(canvas: Canvas) {
         val id = selectorFor ?: return
-        val o = state.obstacle(id) ?: return
+        val (sx, sy) = selectorCell(id) ?: return
 
         canvas.drawRect(gridLeft, gridTop, gridLeft + cell * Arena.SIZE, gridBottom, scrimPaint)
 
-        val cx = selectorCentreX(o)
-        val cy = selectorCentreY(o)
+        val cx = selectorCentreX(sx)
+        val cy = selectorCentreY(sy)
         val outer = selectorRadius()
         val inner = outer * 0.34f
+
+        // Which quadrant reads as already chosen: the obstacle's annotated
+        // image face, or for the robot the way it is parked.
+        val litFace =
+            if (id == robotSelector) state.robot.facing else state.obstacle(id)?.targetFace
 
         Facing.entries.forEach { face ->
             path.reset()
@@ -569,7 +594,7 @@ class ArenaView @JvmOverloads constructor(
             rect.set(cx - inner, cy - inner, cx + inner, cy + inner)
             path.arcTo(rect, sweepStart + 90f, -90f, false)
             path.close()
-            canvas.drawPath(path, if (o.targetFace == face) facePaint else quadrantPaint)
+            canvas.drawPath(path, if (litFace == face) facePaint else quadrantPaint)
             canvas.drawPath(path, quadrantEdge)
 
             val mid = outer * 0.68f
@@ -578,7 +603,17 @@ class ArenaView @JvmOverloads constructor(
             canvas.drawText(face.name, lx, ly + quadrantLabel.textSize * 0.35f, quadrantLabel)
         }
 
-        drawObstacle(canvas, o, cx - inner * 0.7f, cy - inner * 0.7f, inner * 1.4f)
+        // The thing being annotated, drawn in the hub so it is obvious what
+        // the compass belongs to.
+        val hub = inner * 1.4f
+        val obstacle = if (id == robotSelector) null else state.obstacle(id)
+        if (obstacle != null) {
+            drawObstacle(canvas, obstacle, cx - inner * 0.7f, cy - inner * 0.7f, hub)
+        } else {
+            rect.set(cx - inner * 0.7f, cy - inner * 0.7f, cx + inner * 0.7f, cy + inner * 0.7f)
+            canvas.drawRoundRect(rect, hub * 0.22f, hub * 0.22f, robotBody)
+            canvas.drawRoundRect(rect, hub * 0.22f, hub * 0.22f, robotEdge)
+        }
     }
 
     // -----------------------------------------------------------------
@@ -598,6 +633,9 @@ class ArenaView @JvmOverloads constructor(
                 if (selectorFor != null) return true
                 val gx = cellXAt(ex); val gy = cellYAt(ey)
                 dragId = if (inArena(ex, ey)) state.obstacleAt(gx, gy)?.id else null
+                // An obstacle on top of the robot wins the drag: it is the
+                // smaller target and the one more likely to be meant.
+                draggingRobot = dragId == null && inArena(ex, ey) && onRobot(ex, ey)
                 if (inArena(ex, ey)) onHover(gx, gy)
                 return true
             }
@@ -605,7 +643,9 @@ class ArenaView @JvmOverloads constructor(
             MotionEvent.ACTION_MOVE -> {
                 dragX = ex; dragY = ey
                 if (selectorFor == null) {
-                    if (!dragging && dragId != null && hypot(ex - downX, ey - downY) > slop) {
+                    if (!dragging && (dragId != null || draggingRobot) &&
+                        hypot(ex - downX, ey - downY) > slop
+                    ) {
                         dragging = true
                     }
                     if (inArena(ex, ey)) onHover(cellXAt(ex), cellYAt(ey)) else onHoverEnd()
@@ -625,22 +665,30 @@ class ArenaView @JvmOverloads constructor(
                     return true
                 }
                 val id = dragId
-                if (dragging && id != null) {
+                if (dragging && draggingRobot) {
+                    // The robot is never deleted by dragging it off, unlike an
+                    // obstacle -- there is always a robot.
+                    if (inArena(ex, ey)) onMoveRobot(cellXAt(ex), cellYAt(ey))
+                } else if (dragging && id != null) {
                     if (inArena(ex, ey)) onMoveObstacle(id, cellXAt(ex), cellYAt(ey))
                     else onRemoveObstacle(id)
                 } else if (!dragging && inArena(ex, ey)) {
                     val gx = cellXAt(ex); val gy = cellYAt(ey)
                     val hit = state.obstacleAt(gx, gy)
-                    if (hit != null) { selectorFor = hit.id; performClick() } else onAddObstacle(gx, gy)
+                    when {
+                        hit != null -> { selectorFor = hit.id; performClick() }
+                        onRobot(ex, ey) -> { selectorFor = robotSelector; performClick() }
+                        else -> onAddObstacle(gx, gy)
+                    }
                 }
-                dragId = null; dragging = false
+                dragId = null; dragging = false; draggingRobot = false
                 invalidate()
                 return true
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 onHoverEnd()
-                dragId = null; dragging = false; selectorFor = null
+                dragId = null; dragging = false; draggingRobot = false; selectorFor = null
                 invalidate()
                 return true
             }
@@ -654,9 +702,9 @@ class ArenaView @JvmOverloads constructor(
     }
 
     private fun resolveSelector(id: Int, ex: Float, ey: Float) {
-        val o = state.obstacle(id) ?: return
-        val cx = selectorCentreX(o)
-        val cy = selectorCentreY(o)
+        val (sx, sy) = selectorCell(id) ?: return
+        val cx = selectorCentreX(sx)
+        val cy = selectorCentreY(sy)
         val outer = selectorRadius()
         val inner = outer * 0.34f
         val d = hypot(ex - cx, ey - cy)
@@ -669,7 +717,7 @@ class ArenaView @JvmOverloads constructor(
             degrees >= -135 && degrees < -45 -> Facing.S
             else -> Facing.W
         }
-        onSetTargetFace(id, face)
+        if (id == robotSelector) onSetStartFacing(face) else onSetTargetFace(id, face)
     }
 
     // -----------------------------------------------------------------
@@ -694,14 +742,28 @@ class ArenaView @JvmOverloads constructor(
 
     private fun selectorRadius(): Float = maxOf(cell * 2.6f, dp(58f))
 
-    private fun selectorCentreX(o: Obstacle): Float {
+    private fun selectorCentreX(x: Int): Float {
         val r = selectorRadius()
-        return cellCentreX(o.x).coerceIn(gridLeft + r, gridLeft + cell * Arena.SIZE - r)
+        return cellCentreX(x).coerceIn(gridLeft + r, gridLeft + cell * Arena.SIZE - r)
     }
 
-    private fun selectorCentreY(o: Obstacle): Float {
+    private fun selectorCentreY(y: Int): Float {
         val r = selectorRadius()
-        return cellCentreY(o.y).coerceIn(gridTop + r, gridBottom - r)
+        return cellCentreY(y).coerceIn(gridTop + r, gridBottom - r)
+    }
+
+    /** The cell the open compass is centred on: an obstacle, or the robot. */
+    private fun selectorCell(id: Int): Pair<Int, Int>? =
+        if (id == robotSelector) state.robot.x to state.robot.y
+        else state.obstacle(id)?.let { it.x to it.y }
+
+    /** Is (px,py) inside the robot's 3 x 3 body? */
+    private fun onRobot(px: Float, py: Float): Boolean {
+        val reach = Arena.ROBOT_SPAN / 2
+        val gx = cellXAt(px)
+        val gy = cellYAt(py)
+        return gx in (state.robot.x - reach)..(state.robot.x + reach) &&
+            gy in (state.robot.y - reach)..(state.robot.y + reach)
     }
 
     private fun withAlpha(color: Int, alpha: Int) =
