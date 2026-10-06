@@ -25,6 +25,7 @@ typedef enum {
 static volatile control_mode_t current_mode = MODE_IDLE;
 static volatile move_result_t  last_result  = MOVE_NONE;
 static volatile uint8_t        busy_flag    = 0;
+static volatile uint8_t        abort_latched = 0;
 static float current_speed_ramp = 0.0f;
 static float pivot_speed_ramp = 0.0f;
 /* Track cumulative signed ticks during in-place pivots */
@@ -91,6 +92,7 @@ void control_init(void)
     current_mode = MODE_IDLE;
     last_result  = MOVE_NONE;
     busy_flag    = 0;
+    abort_latched = 0u;
     global_yaw_deg = 0.0f;
     /* Ensure steering is centered while idle at startup */
 	servo_us(SERVO_CENTRE);
@@ -106,7 +108,18 @@ uint8_t motion_busy(void)
 
 void motion_stop(void)
 {
+    abort_latched = 1u;
     stop_hardware(MOVE_ABORT);
+}
+
+uint8_t motion_abort_requested(void)
+{
+    return abort_latched;
+}
+
+void motion_abort_clear(void)
+{
+    abort_latched = 0u;
 }
 
 move_result_t motion_result(void)
@@ -128,7 +141,12 @@ float motion_yaw_deg(void)
 
 uint8_t move_straight_mm(int32_t mm)
 {
+    if (motion_abort_requested()) return 0;
     if (mm == 0) { last_result = MOVE_DONE; return 1; } /* Zhenxi: see report_result() in command.c */
+
+    /* Lock wheels to calibrated center at launch */
+	servo_us(SERVO_CENTRE);
+	HAL_Delay(150);
 
     target_counts_total       = (int32_t)(fabsf((float)mm) / MM_PER_COUNT);
     dir_forward               = (mm > 0) ? 1 : -1;
@@ -143,10 +161,6 @@ uint8_t move_straight_mm(int32_t mm)
     stall_ticks_count         = 0;
     locked_heading_deg        = global_yaw_deg;
     last_result               = MOVE_NONE; /* Zhenxi: this move has no verdict yet */
-
-    /* Lock wheels to calibrated center at launch */
-    servo_us(SERVO_CENTRE);
-    HAL_Delay(150);
 
     reset_speed_pid();
     busy_flag    = 1;
@@ -167,21 +181,22 @@ uint8_t move_straight_mm(int32_t mm)
 		command_poll();
 
 		/* Only check for front collisions if we are driving forward */
-		if (dir_forward == 1 && check_front_collision()) {
+		//if (dir_forward == 1 && check_front_collision()) {
 			/* Zhenxi: was MOVE_DONE, which made a 15 cm move that stopped at
 			 * 3 cm indistinguishable from one that completed. The [WARN]
 			 * line below still goes out; BLOCKED is what the Pi and tablet
 			 * key off.                                                    */
-			stop_hardware(MOVE_BLOCKED);
-			busy_flag = 0;
+			//stop_hardware(MOVE_BLOCKED);
+			//stop_hardware(MOVE_DONE);
+			//busy_flag = 0;
 
 			/* GYRO FIX: Wait for chassis mechanical vibrations to stop
 			 * before returning control, preventing phantom IMU spikes! */
-			HAL_Delay(300);
+			//HAL_Delay(300);
 
-			command_send("\r\n[WARN] COLLISION AVOIDED! Stopping early.\r\n");
-			return 0; /* Return 0 = Aborted */
-		}
+			//command_send("\r\n[WARN] COLLISION AVOIDED! Stopping early.\r\n");
+			//return 0; /* Return 0 = Aborted */
+		//}
 		HAL_Delay(5);
 	}
 
@@ -201,6 +216,7 @@ uint8_t move_straight_mm(int32_t mm)
 
 uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 {
+    if (motion_abort_requested()) return 0;
     if (degrees <= 0) { last_result = MOVE_DONE; return 1; } /* Zhenxi: see report_result() in command.c */
 
     turn_left           = left;
@@ -229,46 +245,50 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 		command_poll();
 
 		/* Only check for front collisions if driving FORWARD in the turn */
-		if (dir_forward == 1 && check_front_collision()) {
-			stop_hardware(MOVE_DONE);
-
-			/* GYRO FIX: Let the physical crash shockwave dissipate so
-			 * the gyro returns to absolute 0 before calculating remaining angle! */
-			HAL_Delay(400);
-
-			float remaining_deg = target_deg_total - accum_deg;
-
-			if (remaining_deg > 3.0f) {
-				command_send("\r\n[WARN] COLLISION! Completing turn in REVERSE.\r\n");
-
-				/* To continue the same yaw rotation while driving backward,
-				 * we MUST invert the steering direction! */
-				turn_left = !turn_left;
-				dir_forward = -1;
-
-				/* Reset accumulators for the reverse phase */
-				target_deg_total = remaining_deg;
-				accum_deg = 0.0f;
-				left_pid_integral = 0.0f;
-				right_pid_integral = 0.0f;
-
-				/* Physically swing the wheels to the opposite lock */
-				if (turn_left) servo_us(SERVO_LEFT);
-				else           servo_us(SERVO_RIGHT);
-				HAL_Delay(250);
-
-				reset_speed_pid();
-
-				/* THE CRITICAL FIX: Wake the motor ISR back up!
-				 * stop_hardware() turned it off, so we must re-arm it. */
-				current_mode = MODE_TURN_DEG;
-
-				busy_flag = 1; /* Continue the while loop, now in reverse! */
-			} else {
-				busy_flag = 0; /* Turn is basically complete, safe to abort */
-				command_send("\r\n[WARN] Turn almost complete. Aborting.\r\n");
-			}
-		}
+//		if (dir_forward == 1 && check_front_collision()) {
+//			stop_hardware(MOVE_DONE);
+//
+//			/* GYRO FIX: Let the physical crash shockwave dissipate so
+//			 * the gyro returns to absolute 0 before calculating remaining angle! */
+//			HAL_Delay(400);
+//
+//			float remaining_deg = target_deg_total - accum_deg;
+//
+//			if (remaining_deg > 3.0f && target_deg_total > 45) {
+//				command_send("\r\n[WARN] COLLISION! Completing turn in REVERSE.\r\n");
+//
+//				/* To continue the same yaw rotation while driving backward,
+//				 * we MUST invert the steering direction! */
+//				turn_left = !turn_left;
+//				dir_forward = -1;
+//
+//				/* Reset accumulators for the reverse phase */
+//				target_deg_total = remaining_deg;
+//				accum_deg = 0.0f;
+//				left_pid_integral = 0.0f;
+//				right_pid_integral = 0.0f;
+//
+//				/* Physically swing the wheels to the opposite lock */
+//				if (turn_left) servo_us(SERVO_LEFT);
+//				else           servo_us(SERVO_RIGHT);
+//				HAL_Delay(250);
+//
+//				reset_speed_pid();
+//
+//				/* THE CRITICAL FIX: Wake the motor ISR back up!
+//				 * stop_hardware() turned it off, so we must re-arm it. */
+//				current_mode = MODE_TURN_DEG;
+//
+//				busy_flag = 1; /* Continue the while loop, now in reverse! */
+//			} else {
+//				//stop_hardware(MOVE_BLOCKED);
+//				stop_hardware(MOVE_DONE);
+//				busy_flag = 0; /* Turn is basically complete, safe to abort */
+//				HAL_Delay(250);
+//				command_send("\r\n[WARN] Turn almost complete. Aborting.\r\n");
+//				return 0;
+//			}
+//		}
 		HAL_Delay(5);
 	}
 
@@ -285,6 +305,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 
 void move_pivot_deg(int8_t left, int32_t degrees)
 {
+    if (motion_abort_requested()) return;
     if (degrees <= 0) return;
 
     turn_left           = left;
@@ -311,6 +332,7 @@ void move_pivot_deg(int8_t left, int32_t degrees)
     current_mode = MODE_PIVOT_DEG;
 
     while (busy_flag) {
+        command_poll();
         HAL_Delay(5);
     }
 }
@@ -321,6 +343,7 @@ void move_pivot_deg(int8_t left, int32_t degrees)
  */
 uint8_t move_kturn_90(int8_t left)
 {
+    if (motion_abort_requested()) return 0;
     uint8_t safe = 1;
 
     if (left)
@@ -357,6 +380,7 @@ uint8_t move_kturn_90(int8_t left)
 
 void move_turn(int8_t left, int8_t forward, int32_t counts)
 {
+    if (motion_abort_requested()) return;
     if (counts <= 0) return;
 
     turn_left           = left;
@@ -378,6 +402,7 @@ void move_turn(int8_t left, int8_t forward, int32_t counts)
     current_mode = MODE_TURN_RAW;
 
     while (busy_flag) {
+        command_poll();
         HAL_Delay(5);
     }
 }
@@ -445,6 +470,19 @@ void control_tick(void)
 			float target_speed = (float)(dir_forward * SPEED_STRAIGHT);
 			int32_t remaining_counts = target_counts_total - accum_counts;
 			const int32_t DECEL_TICKS = 250; /* Tune this! Distance to start braking */
+
+			/* In control_tick() under MODE_STRAIGHT */
+			int32_t remaining = abs(target_counts_total - accum_counts);
+
+			/* If within 2 mm (~15 counts) and wheels have stopped spinning */
+			if (remaining <= 15 && abs(left_delta) <= 1 && abs(right_delta) <= 1) {
+			    static uint8_t in_pos_ticks = 0;
+			    if (++in_pos_ticks > 20) { /* 200 ms motionless in tolerance */
+			        in_pos_ticks = 0;
+			        stop_hardware(MOVE_DONE);
+			        return;
+			    }
+			}
 
 			/* If we are getting close, change the target speed to a slow crawl */
 			if (remaining_counts < DECEL_TICKS) {
@@ -545,9 +583,13 @@ void control_tick(void)
 				if (right_pid_integral > 250.0f)  right_pid_integral = 250.0f;
 				if (right_pid_integral < -250.0f) right_pid_integral = -250.0f;
 			} else {
-				/* Freeze integrals for tiny distances so the car doesn't jerk/lurch */
-				left_pid_integral = 0.0f;
-				right_pid_integral = 0.0f;
+				/* Allow gentle integral accumulation to overcome stiction */
+				left_pid_integral  += err_l * dt * 0.5f;
+				right_pid_integral += err_r * dt * 0.5f;
+				if (left_pid_integral > 120.0f)  left_pid_integral = 120.0f;
+				if (left_pid_integral < -120.0f) left_pid_integral = -120.0f;
+				if (right_pid_integral > 120.0f)  right_pid_integral = 120.0f;
+				if (right_pid_integral < -120.0f) right_pid_integral = -120.0f;
 			}
 
 			/* Pushes baseline power so the weaker left motor doesn't stall when braking */
@@ -563,7 +605,7 @@ void control_tick(void)
 
     	case MODE_TURN_DEG:
 		{
-			/* 1. True Ackermann Yaw Integration (handles forward AND reverse correctly) */
+			/* 1. True Ackermann Yaw Integration */
 			float step_yaw = delta_yaw * (float)dir_forward;
 			if (turn_left) {
 				accum_deg += step_yaw;
@@ -571,19 +613,39 @@ void control_tick(void)
 				accum_deg -= step_yaw;
 			}
 
-			/* 2. Angle Completion Check */
-			const float BRAKING_LEAD_DEG = 2.5f; /* Compensates for chassis inertia */
+			/* 2. Direction-Aware Inertia Lead:
+			 * Forward coasts ~2.5 deg on momentum.
+			 * Reverse has heavy tire scrub and zero coast, so lead must be much smaller. */
+			float braking_lead = 2.5f;
+			if (target_deg_total <= 45){
+				if (turn_left)
+					braking_lead = (dir_forward == 1) ? 4.5f : 4.3f;
+				else
+					braking_lead = (dir_forward == 1) ? 4.5f : 3.7f;
+			}
 			float remaining_deg = target_deg_total - accum_deg;
 
-			if (remaining_deg <= BRAKING_LEAD_DEG) {
+			if (remaining_deg <= braking_lead) {
 				stop_hardware(MOVE_DONE);
 				return;
 			}
+
+			/* Settle timeout: only trigger if within 0.5 deg of lead and genuinely stopped */
+			if (remaining_deg <= (braking_lead + 0.5f) && fabsf(gz) < 0.25f) {
+				static uint8_t turn_settle_ticks = 0;
+				if (++turn_settle_ticks > 20) { /* 200 ms stopped */
+					turn_settle_ticks = 0;
+					stop_hardware(MOVE_DONE);
+					return;
+				}
+			}
+
 			/* --- Slew-Rate Acceleration & Deceleration Ramp --- */
 			float target_base_speed = (float)(dir_forward * SPEED_TURN);
 
-			/* ONLY decelerate if this is a large turn (e.g., a 90-degree grid turn) */
-			if (target_deg_total >= 45.0f) {
+			/* FIX: Change '>=' to '>' so 45-deg turns carry clean, constant speed
+			 * without losing momentum over a 20-deg crawl window. */
+			if (target_deg_total > 45.0f) {
 				const float DECEL_DEG = 20.0f;
 				if (remaining_deg < DECEL_DEG) {
 					target_base_speed = (float)(dir_forward * 30.0f); /* Crawl speed */

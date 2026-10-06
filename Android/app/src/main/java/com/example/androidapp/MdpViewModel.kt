@@ -362,6 +362,10 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
     /** C.3 */
     fun move(move: Move, distanceCm: Int, angleDeg: Int) {
+        if (move == Move.STOP) {
+            emergencyStop()
+            return
+        }
         moveCutShort = false // a fresh move gets a fresh verdict
         transmit(move.toCommand(distanceCm, angleDeg))
     }
@@ -591,8 +595,22 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
      * incomplete, so the wording says so rather than pretending otherwise.
      */
     fun abortRun() {
+        emergencyStop()
+    }
+
+    /**
+     * STOP is a transport barrier, not an ordinary movement command.
+     * Cancel any pending arming UI work before forwarding it so the app
+     * cannot make the stopped run look ready again.
+     */
+    private fun emergencyStop() {
+        armingTicker?.cancel()
+        armingTicker = null
         transmit(Outbound.STOP)
-        if (!_run.value.running) return
+        if (!_run.value.running) {
+            say("Emergency stop sent. Pending commands cleared.")
+            return
+        }
         runTicker?.cancel()
         runTicker = null
         _run.value = _run.value.copy(phase = RunPhase.IDLE)
@@ -601,6 +619,8 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Back to a fresh attempt, without touching the map the supervisor keyed in. */
     fun resetRun() {
+        armingTicker?.cancel()
+        armingTicker = null
         runTicker?.cancel()
         runTicker = null
         _run.value = RunState(task = _run.value.task)

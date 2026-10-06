@@ -56,10 +56,10 @@
    The left-turn scatter seen on 05-Sep (+-13/14 mm) did not show up here: the
    left turns now repeat as well as the right ones. BR is the only case whose
    value moved by more than the spread (-13 mm).                           */
-#define TURN_RADIUS_FL_MM   272     /* +-2 mm (4 runs recorded)             */
-#define TURN_RADIUS_FR_MM   366     /* +-4 mm                               */
-#define TURN_RADIUS_BL_MM   279     /* +-4 mm                               */
-#define TURN_RADIUS_BR_MM   370     /* +-2 mm                               */
+#define TURN_RADIUS_FL_MM   262     /* +-2 mm (4 runs recorded)             */
+#define TURN_RADIUS_FR_MM   360     /* +-4 mm                               */
+#define TURN_RADIUS_BL_MM   260     /* +-4 mm                               */
+#define TURN_RADIUS_BR_MM   361     /* +-2 mm                               */
 
 /* Target speeds in ENCODER COUNTS PER 10 ms CONTROL TICK.
    A physical quantity, independent of PWM_MAX -- do NOT rescale these

@@ -42,6 +42,9 @@ from capture_and_report import report_obstacle
 # tablet down. The Pi announces whatever this is and the tablet counts that
 # number down, so the two cannot disagree.
 ARMING_DELAY_SECONDS = 0
+STATUS_PROBE_INTERVAL_SECONDS = 1.5
+PROBE_SETTLE_SECONDS = 0.5
+MAX_MOVEMENT_SEND_ATTEMPTS = 3
 
 # Where the robot is parked. Android sends this before COMPUTE; the default is
 # only a fallback for driving the runner by hand over SSH.
@@ -164,7 +167,7 @@ def preflight(stm, android):
     a1_bridge.send_line(android, "STATUS,PLAN,CHECKING")
 
     a1_bridge.send_line(stm, "FW000")
-    reply = wait_for_stm_reply(stm, android)
+    reply = wait_for_stm_reply(stm, android, expected_command="FW000")
     if reply != "DONE":
         print(f"[TASK1] Pre-flight: board answered {reply}, not DONE.")
         a1_bridge.send_line(android, f"STATUS,PLAN,FAILED,board answered {reply}")
@@ -214,23 +217,132 @@ def obstacles_payload():
     return payload
 
 
-def wait_for_stm_reply(stm, android):
-    """Same wait-for-DONE/STALL/... loop as a1_bridge.main(), reused instead
-    of duplicated, including forwarding a mid-move STOP from Android."""
+def wait_for_stm_reply(
+    stm, android, relay_to_android=True, expected_command=None
+):
+    """Wait for a terminal move result and recover a lost result by probing.
+
+    ``?`` never repeats the movement. New STM firmware answers STATUS,BUSY
+    while it is still executing or STATUS,IDLE,<result> after it has stopped.
+    A probe response from older firmware is ignored, so the RPi can be
+    deployed before the STM is reflashed.
+
+    If the movement's original terminal line races ahead of an outstanding
+    probe response, keep reading briefly. This prevents the next movement
+    command from overtaking the queued probe on the STM UART.
+    """
+    stop_requested = False
+    probe_outstanding = False
+    deferred_terminal = None
+    probe_settle_deadline = None
+    command_accepted = False
+    send_attempts = 1
     deadline = time.monotonic() + a1_bridge.STM_TIMEOUT_SECONDS
+    last_probe = time.monotonic()
     while time.monotonic() < deadline:
-        a1_bridge.forward_stop_if_pending(android, stm)
+        stop_requested = (
+            a1_bridge.forward_stop_if_pending(android, stm) or stop_requested
+        )
         reply_raw = stm.readline()
-        if not reply_raw:
+        if reply_raw:
+            reply = reply_raw.decode("ascii", errors="replace").strip()
+            if reply:
+                print(f"STM32 -> RPi: {reply}")
+                if relay_to_android:
+                    a1_bridge.send_line(android, f"STM,{reply}")
+                if reply.startswith("ACK,"):
+                    acknowledged_command = reply.split(",", 1)[1]
+                    if expected_command == acknowledged_command:
+                        command_accepted = True
+                    continue
+                if reply == "ACK":
+                    if stop_requested:
+                        return "STOPPED"
+                    # A delayed ACK from an earlier STOP is not completion of
+                    # the movement currently being awaited.
+                    continue
+                if reply.startswith("STATUS,BUSY"):
+                    probe_outstanding = False
+                    parts = reply.split(",", 2)
+                    reported_command = parts[2] if len(parts) > 2 else None
+                    if (
+                        expected_command is not None
+                        and reported_command is not None
+                        and reported_command != expected_command
+                    ):
+                        return "BUSY"
+                    if reported_command == expected_command:
+                        command_accepted = True
+                    probe_settle_deadline = None
+                    continue
+                if reply.startswith("STATUS,IDLE,"):
+                    response_to_probe = probe_outstanding
+                    probe_outstanding = False
+                    parts = reply.split(",", 3)
+                    result = parts[2]
+                    reported_command = parts[3] if len(parts) > 3 else None
+                    if (
+                        expected_command is not None
+                        and reported_command != expected_command
+                    ):
+                        # The probe still names an older move, so this command
+                        # was not accepted. Retry only in that provable case.
+                        deferred_terminal = None
+                        probe_settle_deadline = None
+                        if (
+                            response_to_probe
+                            and not command_accepted
+                            and send_attempts < MAX_MOVEMENT_SEND_ATTEMPTS
+                        ):
+                            send_attempts += 1
+                            a1_bridge.send_line(stm, expected_command)
+                            if relay_to_android:
+                                a1_bridge.send_line(
+                                    android,
+                                    f"STATUS,RETRY,{expected_command},{send_attempts}",
+                                )
+                            print(
+                                f"[TASK1] STM did not accept {expected_command}; "
+                                f"retrying ({send_attempts}/{MAX_MOVEMENT_SEND_ATTEMPTS})"
+                            )
+                            last_probe = time.monotonic()
+                        continue
+                    command_accepted = True
+                    if result == "STOPPED":
+                        return "STOPPED"
+                    if result in a1_bridge.FINAL_REPLIES:
+                        return result
+                    continue
+                if probe_outstanding and reply in ("BUSY", "ERR"):
+                    # Older firmware interprets '?' as an ordinary command.
+                    probe_outstanding = False
+                    if deferred_terminal is not None:
+                        return deferred_terminal
+                    continue
+                if reply in a1_bridge.FINAL_REPLIES:
+                    if probe_outstanding:
+                        deferred_terminal = reply
+                        probe_settle_deadline = min(
+                            deadline,
+                            time.monotonic() + PROBE_SETTLE_SECONDS,
+                        )
+                        continue
+                    return reply
+
+        now = time.monotonic()
+        if deferred_terminal is not None:
+            if now >= probe_settle_deadline:
+                return deferred_terminal
             continue
-        reply = reply_raw.decode("ascii", errors="replace").strip()
-        if not reply:
-            continue
-        print(f"STM32 -> RPi: {reply}")
-        a1_bridge.send_line(android, f"STM,{reply}")
-        if reply in a1_bridge.FINAL_REPLIES:
-            return reply
-    a1_bridge.send_line(android, "STM,NO_REPLY")
+        if now - last_probe >= STATUS_PROBE_INTERVAL_SECONDS:
+            last_probe = now
+            a1_bridge.send_line(stm, "?")
+            probe_outstanding = True
+            print("RPi -> STM32: ? (status probe)")
+    if deferred_terminal is not None:
+        return deferred_terminal
+    if relay_to_android:
+        a1_bridge.send_line(android, "STM,NO_REPLY")
     return "NO_REPLY"
 
 
@@ -288,9 +400,11 @@ def replan_from_here(remaining, android):
     return algo_client.plan_route(payload, start=dict(start_pose))
 
 
-def run_route(steps, stm, android):
+def run_route(steps, stm, android, run_id=None):
     pose = a1_bridge.PoseTracker()
     a1_bridge.send_pose(android, pose)
+    expected_images = sum(step["type"] == "capture" for step in steps)
+    capture_index = 0
     done = set()
     replans = 0
 
@@ -302,12 +416,19 @@ def run_route(steps, stm, android):
                 a1_bridge.send_line(stm, command)
                 a1_bridge.send_line(android, f"STATUS,SENT,{command}")
                 print(f"RPi -> STM32: {command}")
-                reply = wait_for_stm_reply(stm, android)
+                reply = wait_for_stm_reply(
+                    stm, android, expected_command=command
+                )
 
                 if reply == "DONE":
                     pose.apply(command)
                     a1_bridge.send_pose(android, pose)
                     continue
+
+                if reply == "STOPPED":
+                    print(f"[TASK1] {command} was stopped from Android -- ending route.")
+                    a1_bridge.send_line(android, "MSG,Task 1 stopped")
+                    return
 
                 if reply in FATAL_REPLIES:
                     print(f"[TASK1] Move ended in {reply} -- stopping route.")
@@ -323,8 +444,9 @@ def run_route(steps, stm, android):
                     replans += 1
                     print(f"[TASK1] {reply} -- backing off and re-planning "
                           f"({replans}/{MAX_REPLANS}).")
-                    a1_bridge.send_line(stm, f"BW{BACKOFF_CM:03d}")
-                    wait_for_stm_reply(stm, android)
+                    backoff = f"BW{BACKOFF_CM:03d}"
+                    a1_bridge.send_line(stm, backoff)
+                    wait_for_stm_reply(stm, android, expected_command=backoff)
                     fresh = replan_from_here(left, android)
                     if fresh is None:
                         a1_bridge.send_line(android, "MSG,Re-plan failed, stopping")
@@ -345,8 +467,17 @@ def run_route(steps, stm, android):
                 if obstacle_number in done:
                     print(f"[TASK1] Obstacle {obstacle_number} already done, not re-reading.")
                     continue
+                capture_index += 1
                 print(f"[TASK1] Reached obstacle {obstacle_number}, capturing...")
-                report_obstacle(obstacle_number, android_serial=android, stm_serial=stm)
+                # Task 1 reports classifications to Android and the laptop
+                # collage. The STM does not consume IMxxx for this route.
+                report_obstacle(
+                    obstacle_number,
+                    android_serial=android,
+                    run_id=run_id,
+                    expected_images=expected_images,
+                    capture_index=capture_index,
+                )
                 done.add(obstacle_number)
 
         if not restart:
@@ -363,7 +494,7 @@ def main():
         with serial.Serial(a1_bridge.BT_DEVICE, a1_bridge.BAUD_RATE, timeout=1) as android:
             a1_bridge.send_line(android, "STATUS,Task1 runner ready")
 
-            # Zhenxi: two presses, not one.
+            # Zhenxi: three presses, not one.
             #
             # Planning is slow enough that doing it inside the six minutes
             # would be giving budget away, and the rules give two minutes of
@@ -399,7 +530,8 @@ def main():
 
             # Third press: go. The clock is the supervisor's from here.
             wait_for(android, "START", "Press START when the supervisor says go.")
-            run_route(steps, stm, android)
+            run_id = time.strftime("%Y%m%d-%H%M%S")
+            run_route(steps, stm, android, run_id=run_id)
 
 
 if __name__ == "__main__":
