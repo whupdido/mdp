@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Protocol
 
-from algorithm.config import PlanningConfig
+from algorithm.config import PlanningConfig, task1_robot_config
 from algorithm.constants import START_ZONE_GRID_CELLS
 from algorithm.coordinates import default_start_pose
 from algorithm.enums import CostMetric, Direction, PlanningStatus, RoutingMode
@@ -25,7 +25,7 @@ from .headless import HeadlessSimulator, PlaybackState, simulation_steps_from_ex
 from .task1_demo import task1_demo_config
 
 
-REQUIRED_TASK1_TARGETS = 5
+REQUIRED_TASK1_TARGETS = 6
 DEFAULT_RANDOM_RETRY_LIMIT = 50
 START_ZONE_MAX_CELL = START_ZONE_GRID_CELLS - 1
 MIN_RANDOM_CELL_SEPARATION_SQUARED = 9
@@ -144,22 +144,8 @@ class PerturbationBenchmarkReport:
 
 
 def task1_editor_config() -> PlanningConfig:
-    """Return the full candidate profile used lazily by the B.2 editor."""
-    base = task1_demo_config()
-    return replace(
-        base,
-        observation_lateral_offsets_cm=(0.0, -10.0, 10.0),
-        observation_standoff_distances_cm=(20.0, 10.0, 30.0),
-        guaranteed_max_candidates_per_target=9,
-        adaptive_initial_expansions=200,
-        adaptive_max_expansions=5000,
-        adaptive_growth_factor=5.0,
-        local_planning_timeout_s=10.0,
-        overall_planning_timeout_s=60.0,
-        turn_angles_deg=(30.0, 45.0, 60.0, 90.0),
-        search_turn_angles_deg=(30.0,),
-        heading_bin_rad=math.radians(15.0),
-    )
+    """Return the production Task 1 configuration used by the editor."""
+    return task1_robot_config()
 
 
 def scenario_signature(arena: ArenaInput) -> str:
@@ -422,14 +408,7 @@ def _apply_commands(current, commands, arena, config):
     pose = current
     for command in commands:
         primitive = config.motion.primitives_for(command)[0]
-        if primitive.steering is not Steering.STRAIGHT:
-            sign = 1.0 if primitive.turn_angle_rad > 0 else -1.0
-            primitive = MotionPrimitive(
-                primitive.command, primitive.gear, primitive.steering,
-                turn_angle_rad=sign * math.radians(30.0),
-                radius_cm=primitive.radius_cm,
-                estimated_duration_s=primitive.estimated_duration_s / 3.0,
-            )
+
         if not is_motion_collision_free(pose, primitive, arena, config):
             return None
         pose = propagate_motion(pose, primitive, config)
@@ -701,7 +680,7 @@ class Task1EditorController:
                 adaptive_max_expansions=3000,
                 max_expanded_nodes=3000,
                 local_planning_timeout_s=2.0,
-                overall_planning_timeout_s=60.0,
+                overall_planning_timeout_s=120.0,
             )
             self._random_solvable_planner = Task1Planner(
                 random_config,

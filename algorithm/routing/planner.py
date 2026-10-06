@@ -89,7 +89,7 @@ class Task1Planner:
     ) -> PlanningResult:
         if not isinstance(arena, ArenaInput):
             raise TypeError("arena must be an ArenaInput")
-
+    
         if not isinstance(objective, CostMetric):
             raise TypeError("objective must be a CostMetric")
 
@@ -185,12 +185,10 @@ class Task1Planner:
         else:
             activation_tiers = self.config.candidate_activation_tiers
 
-        active_ranks: set[int] = set()
-
         graph = None
         optimization = None
 
-        tiers_activated = 0
+        tiers_activated = 1
         total_permutations = 0
         total_transitions = 0
 
@@ -198,60 +196,59 @@ class Task1Planner:
 
         planning_budget_exhausted = False
 
-        for tier in activation_tiers:
-            tiers_activated += 1
-
-            active_ranks.update(tier)
-
-            active_groups = tuple(
-                tuple(
-                    candidate
-                    for candidate in group
-                    if candidate.preference_rank in active_ranks
-                )
-                for group in valid_by_target
+        # Each obstacle chooses its own best candidate tier.
+        #
+        # If 20C is valid for an obstacle:
+        #     use only 20C.
+        #
+        # If 20C is invalid:
+        #     use the next available candidates, e.g. 20L / 20R.
+        #
+        # This prevents one obstacle needing a fallback candidate from
+        # forcing every other obstacle to use its fallback candidates.
+        active_groups = tuple(
+            tuple(
+                candidate
+                for candidate in group
+                if candidate.preference_rank
+                == min(candidate.preference_rank for candidate in group)
             )
+            for group in valid_by_target
+        )
 
-            # A target may have no valid candidate in an early tier.
-            # Expanding the next tier requires no path query for that
-            # incomplete graph.
-            if any(not group for group in active_groups):
-                continue
+        graph = self._build_graph(
+            arena,
+            active_groups,
+            objective,
+            deadline_monotonic=(
+                started_at
+                + self.config.overall_planning_timeout_s
+            ),
+            minimum_expansion_budget=(
+                self.config.max_expanded_nodes
+                if mode is RoutingMode.FULL_OPTIMIZATION
+                else None
+            ),
+        )
 
-            graph = self._build_graph(
-                arena,
-                active_groups,
-                objective,
-                deadline_monotonic=(
-                    started_at
-                    + self.config.overall_planning_timeout_s
-                ),
-                minimum_expansion_budget=(
-                    self.config.max_expanded_nodes
-                    if mode is RoutingMode.FULL_OPTIMIZATION
-                    else None
-                ),
-            )
+        optimization = self.route_optimizer.optimize(graph)
 
-            optimization = self.route_optimizer.optimize(graph)
+        total_permutations += (
+            optimization.permutations_evaluated
+        )
 
-            total_permutations += (
-                optimization.permutations_evaluated
-            )
+        total_transitions += (
+            optimization.candidate_transitions_evaluated
+        )
 
-            total_transitions += (
-                optimization.candidate_transitions_evaluated
-            )
-
-            if optimization.solution is not None:
-                break
-
-            if (
+        if (
+            optimization.solution is None
+            and (
                 time.perf_counter() - started_at
                 >= self.config.overall_planning_timeout_s
-            ):
-                planning_budget_exhausted = True
-                break
+            )
+        ):
+            planning_budget_exhausted = True
 
         if graph is None:
             # All tiers were geometrically incomplete. The earlier
@@ -788,17 +785,11 @@ class Task1Planner:
         """Merge adjacent FW/BW straight MoveSteps.
 
         Only consecutive straight movements using the same gear are merged.
-        Turns and CaptureSteps always remain separate boundaries.
 
         Example:
-
             FW10, FW10, FW10 -> FW30
 
-        while:
-
-            FW10, FR30, FW10
-
-        remains unchanged.
+        Turns and CaptureSteps always remain separate.
         """
 
         merged = []

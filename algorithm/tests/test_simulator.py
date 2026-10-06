@@ -375,3 +375,27 @@ def test_renderer_resize_keeps_square_arena_and_rebuilds_layout(monkeypatch):
         assert not flags & getattr(pygame, "NOFRAME", 0)
     finally:
         renderer.shutdown()
+
+def test_command_queue_groups_consecutive_primitives_and_tracks_current_row():
+    first = primitive("FW")
+    second = primitive("FW")
+    third = primitive("FR")
+    steps = simulation_steps_from_primitives(
+        START,
+        (first, second, third),
+        CONFIG,
+    )
+    simulator = simulator_with(*steps)
+
+    assert simulator.state.command_queue == (
+        ("FW", 2),
+        ("FR", 1),
+    )
+    assert simulator.state.current_command_queue_index == 0
+
+    simulator.step_primitive()
+    assert simulator.state.current_command_queue_index == 0
+
+    simulator.step_primitive()
+    assert simulator.state.current_command_queue_index == 1
+    assert simulator.state.current_motion_command == "FR"
