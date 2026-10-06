@@ -185,12 +185,10 @@ class Task1Planner:
         else:
             activation_tiers = self.config.candidate_activation_tiers
 
-        active_ranks: set[int] = set()
-
         graph = None
         optimization = None
 
-        tiers_activated = 0
+        tiers_activated = 1
         total_permutations = 0
         total_transitions = 0
 
@@ -198,60 +196,59 @@ class Task1Planner:
 
         planning_budget_exhausted = False
 
-        for tier in activation_tiers:
-            tiers_activated += 1
-
-            active_ranks.update(tier)
-
-            active_groups = tuple(
-                tuple(
-                    candidate
-                    for candidate in group
-                    if candidate.preference_rank in active_ranks
-                )
-                for group in valid_by_target
+        # Each obstacle chooses its own best candidate tier.
+        #
+        # If 20C is valid for an obstacle:
+        #     use only 20C.
+        #
+        # If 20C is invalid:
+        #     use the next available candidates, e.g. 20L / 20R.
+        #
+        # This prevents one obstacle needing a fallback candidate from
+        # forcing every other obstacle to use its fallback candidates.
+        active_groups = tuple(
+            tuple(
+                candidate
+                for candidate in group
+                if candidate.preference_rank
+                == min(candidate.preference_rank for candidate in group)
             )
+            for group in valid_by_target
+        )
 
-            # A target may have no valid candidate in an early tier.
-            # Expanding the next tier requires no path query for that
-            # incomplete graph.
-            if any(not group for group in active_groups):
-                continue
+        graph = self._build_graph(
+            arena,
+            active_groups,
+            objective,
+            deadline_monotonic=(
+                started_at
+                + self.config.overall_planning_timeout_s
+            ),
+            minimum_expansion_budget=(
+                self.config.max_expanded_nodes
+                if mode is RoutingMode.FULL_OPTIMIZATION
+                else None
+            ),
+        )
 
-            graph = self._build_graph(
-                arena,
-                active_groups,
-                objective,
-                deadline_monotonic=(
-                    started_at
-                    + self.config.overall_planning_timeout_s
-                ),
-                minimum_expansion_budget=(
-                    self.config.max_expanded_nodes
-                    if mode is RoutingMode.FULL_OPTIMIZATION
-                    else None
-                ),
-            )
+        optimization = self.route_optimizer.optimize(graph)
 
-            optimization = self.route_optimizer.optimize(graph)
+        total_permutations += (
+            optimization.permutations_evaluated
+        )
 
-            total_permutations += (
-                optimization.permutations_evaluated
-            )
+        total_transitions += (
+            optimization.candidate_transitions_evaluated
+        )
 
-            total_transitions += (
-                optimization.candidate_transitions_evaluated
-            )
-
-            if optimization.solution is not None:
-                break
-
-            if (
+        if (
+            optimization.solution is None
+            and (
                 time.perf_counter() - started_at
                 >= self.config.overall_planning_timeout_s
-            ):
-                planning_budget_exhausted = True
-                break
+            )
+        ):
+            planning_budget_exhausted = True
 
         if graph is None:
             # All tiers were geometrically incomplete. The earlier
@@ -785,19 +782,14 @@ class Task1Planner:
     def _merge_consecutive_straights(
         execution_steps,
     ):
-        """Merge adjacent compatible movement commands.
+        """Merge adjacent FW/BW straight MoveSteps.
 
-        Straight:
+        Only consecutive straight movements using the same gear are merged.
+
+        Example:
             FW10, FW10, FW10 -> FW30
 
-        Turn:
-            FR10, FR10, FR10 -> FR30
-
-        Only movements with identical command/gear/steering and,
-        for turns, identical radius are merged.
-
-        Turns and CaptureSteps remain separate boundaries when their
-        movement characteristics differ.
+        Turns and CaptureSteps always remain separate.
         """
 
         merged = []
@@ -813,28 +805,15 @@ class Task1Planner:
                 previous_primitive = previous.segment.primitive
                 current_primitive = step.segment.primitive
 
-                same_motion = (
-                    previous_primitive.command
-                    == current_primitive.command
+                same_straight_motion = (
+                    previous_primitive.steering
+                    is Steering.STRAIGHT
+                    and current_primitive.steering
+                    is Steering.STRAIGHT
                     and previous_primitive.gear
                     is current_primitive.gear
-                    and previous_primitive.steering
-                    is current_primitive.steering
-                )
-
-                # Straight movements can always be combined when the
-                # command/gear/steering match.
-                same_straight_motion = (
-                    same_motion
-                    and previous_primitive.steering is Steering.STRAIGHT
-                )
-
-                # Turns can only be combined if they use the same radius.
-                same_turn_motion = (
-                    same_motion
-                    and previous_primitive.steering is not Steering.STRAIGHT
-                    and previous_primitive.radius_cm
-                    == current_primitive.radius_cm
+                    and previous_primitive.command
+                    == current_primitive.command
                 )
 
                 if same_straight_motion:
@@ -856,42 +835,18 @@ class Task1Planner:
                         ),
                     )
 
-                elif same_turn_motion:
-                    combined_primitive = MotionPrimitive(
-                        command=previous_primitive.command,
-                        gear=previous_primitive.gear,
-                        steering=previous_primitive.steering,
-                        turn_angle_rad=(
-                            previous_primitive.turn_angle_rad
-                            + current_primitive.turn_angle_rad
-                        ),
-                        radius_cm=previous_primitive.radius_cm,
-                        estimated_duration_s=(
-                            previous_primitive.estimated_duration_s
-                            + current_primitive.estimated_duration_s
-                        ),
-                        physically_calibrated=(
-                            previous_primitive.physically_calibrated
-                            and current_primitive.physically_calibrated
-                        ),
+                    combined_segment = MotionSegment(
+                        primitive=combined_primitive,
+                        start=previous.segment.start,
+                        end=step.segment.end,
                     )
 
-                else:
-                    merged.append(step)
+                    merged[-1] = MoveStep(
+                        segment=combined_segment,
+                        command=combined_primitive.command,
+                    )
+
                     continue
-
-                combined_segment = MotionSegment(
-                    primitive=combined_primitive,
-                    start=previous.segment.start,
-                    end=step.segment.end,
-                )
-
-                merged[-1] = MoveStep(
-                    segment=combined_segment,
-                    command=combined_primitive.command,
-                )
-
-                continue
 
             merged.append(step)
 

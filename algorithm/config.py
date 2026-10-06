@@ -83,7 +83,7 @@ class MotionModel:
     capture_delay_s: float = 0.0
     direction_change_penalty_s: float = 0.0
     steering_change_penalty_s: float = 0.0
-    consecutive_reverse_penalty_s: float = 0.5
+    consecutive_reverse_penalty_s: float = 2.5
 
     def __post_init__(self) -> None:
         primitives = tuple(self.primitives)
@@ -249,7 +249,7 @@ def _simulation_motion_model() -> MotionModel:
 
 UNCALIBRATED_SIMULATION_CONFIG = PlanningConfig(
     robot=RobotGeometry(
-        length_cm=25.3,
+        length_cm=23.0,
         width_cm=18.8,
         rear_axle_to_body_center_forward_cm=0.0,
         rear_axle_to_body_center_left_cm=0.0,
@@ -301,14 +301,14 @@ def task1_robot_config(
             rear_axle_to_body_center_forward_cm=REAR_AXLE_TO_BODY_CENTRE_CM,
         ),
         camera=replace(base.camera, forward_offset_cm=REAR_AXLE_TO_CAMERA_CM),
-        observation_lateral_offsets_cm=(0.0,),
-        guaranteed_max_candidates_per_target=1,
+        observation_lateral_offsets_cm=(0.0, 10.0, -10.0),
+        guaranteed_max_candidates_per_target=3,
         max_expanded_nodes=5000,
         adaptive_initial_expansions=200,
-        adaptive_max_expansions=5000,
+        adaptive_max_expansions=10000,
         local_planning_timeout_s=5.0,
         overall_planning_timeout_s=120.0,
-        turn_angles_deg=(30.0, 45.0, 60.0, 90.0),
+        turn_angles_deg=(15.0, 30.0, 45.0, 60.0, 90.0),
         search_turn_angles_deg=(30.0,),
         heading_bin_rad=math.radians(15.0),
     )
