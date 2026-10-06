@@ -38,6 +38,11 @@ float   motion_yaw_deg(void);        /* ISR-integrated heading, deg, CCW + */
 
 uint8_t move_straight_mm(int32_t mm);
 
+/* FW/BW from the Pi: as above, but comes to rest on the commanded distance
+   (brakes early by STRAIGHT_STOP_LEAD_*_MM and counts every encoder edge).
+   Task 2 keeps move_straight_mm(), which its distances were tuned against. */
+uint8_t move_straight_exact_mm(int32_t mm);
+
 /* Raw form: counts is the arc length in encoder counts. Used for calibration. */
 void move_turn(int8_t left, int8_t forward, int32_t counts);
 

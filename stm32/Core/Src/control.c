@@ -27,6 +27,14 @@ static volatile move_result_t  last_result  = MOVE_NONE;
 static volatile uint8_t        busy_flag    = 0;
 static volatile uint8_t        abort_latched = 0;
 static float current_speed_ramp = 0.0f;
+/* Kush: set once a straight move starts slowing for its target; see
+   MODE_STRAIGHT in control_tick(). */
+static volatile uint8_t straight_braking = 0;
+/* Kush: set while move_straight_exact_mm() runs (FW/BW from the Pi). */
+static volatile uint8_t exact_straight = 0;
+/* Kush: |left| + |right| summed over an exact straight move; half of it is
+   the distance in counts. See MODE_STRAIGHT in control_tick(). */
+static volatile int32_t straight_half_counts = 0;
 static float pivot_speed_ramp = 0.0f;
 /* Track cumulative signed ticks during in-place pivots */
 static volatile int32_t pivot_enc_l_accum = 0;
@@ -58,6 +66,10 @@ static float right_pid_integral = 0.0f;
 /* PID Gains for speed control (MG513 motors) */
 #define SPEED_KP    120.0f
 #define SPEED_KI    15.0f
+
+/* Encoder counts of crawl kept before a straight move's target, so the
+   wheels have settled at crawl speed when the brake goes on (~14 mm). */
+#define BRAKE_MARGIN_COUNTS 100
 float steer_integral = 0.0f;
 
 /* ------------------------------------------------------------------------- */
@@ -149,14 +161,25 @@ uint8_t move_straight_mm(int32_t mm)
 	HAL_Delay(150);
 
     target_counts_total       = (int32_t)(fabsf((float)mm) / MM_PER_COUNT);
+    if (exact_straight) {
+        /* Kush: brake early by the distance the car rolls on after the
+         * brake, so it comes to rest on the target instead of ~12 mm past
+         * it. Capped at half the move so a short nudge still goes somewhere. */
+        int32_t lead_counts = (int32_t)(((mm > 0) ? STRAIGHT_STOP_LEAD_FW_MM
+                                                  : STRAIGHT_STOP_LEAD_BW_MM) / MM_PER_COUNT);
+        if (lead_counts > target_counts_total / 2) lead_counts = target_counts_total / 2;
+        target_counts_total -= lead_counts;
+    }
     dir_forward               = (mm > 0) ? 1 : -1;
     accum_counts              = 0;
+    straight_half_counts      = 0;
     enc_left_straight_accum   = 0;
     enc_right_straight_accum  = 0;
     steer_integral            = 0.0f;
     left_pid_integral         = 0.0f;
 	right_pid_integral        = 0.0f;
 	current_speed_ramp        = 0.0f;
+	straight_braking          = 0u;
     move_ticks                = 0;
     stall_ticks_count         = 0;
     locked_heading_deg        = global_yaw_deg;
@@ -212,6 +235,18 @@ uint8_t move_straight_mm(int32_t mm)
     if (last_result == MOVE_NONE) stop_hardware(MOVE_DONE);
     HAL_Delay(100); /* Final settle */
 	return 1;
+}
+
+/* Kush: FW/BW from the Pi. The planner takes FW010 as exactly 100 mm, so
+ * these brake early by the run-on and count every encoder edge. Task 2 calls
+ * move_straight_mm() directly and is left exactly as it was: its distances
+ * were tuned on the car with the run-on already in them. */
+uint8_t move_straight_exact_mm(int32_t mm)
+{
+    exact_straight = 1u;
+    uint8_t ok = move_straight_mm(mm);
+    exact_straight = 0u;
+    return ok;
 }
 
 uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
@@ -459,7 +494,16 @@ void control_tick(void)
     	case MODE_STRAIGHT:
 		{
 			/* 1. Track cumulative ticks for target distance */
-			accum_counts += avg_delta;
+			if (exact_straight) {
+				/* Kush: in half-counts. avg_delta is (|l| + |r|) / 2 in integer
+				 * maths, which drops half a count whenever the sum is odd,
+				 * about a quarter count a tick. The car drove ~1.5 mm further
+				 * than it counted on a FW010 and ~5 mm on a FW100. */
+				straight_half_counts += abs(left_delta) + abs(right_delta);
+				accum_counts = straight_half_counts / 2;
+			} else {
+				accum_counts += avg_delta;
+			}
 
 			if (accum_counts >= target_counts_total) {
 				stop_hardware(MOVE_DONE);
@@ -484,12 +528,24 @@ void control_tick(void)
 			    }
 			}
 
-			/* If we are getting close, change the target speed to a slow crawl */
-			if (remaining_counts < DECEL_TICKS) {
-				target_speed = (float)(dir_forward * 15.0f); /* Crawl speed */
-			}
-
 			const float RAMP_STEP = 1.2f; /* Accelerates/Decelerates smoothly */
+			const float CRAWL_SPEED = 15.0f;
+
+			/* Kush: start slowing early enough to reach crawl speed before the
+			 * target. Ramping down from speed v to crawl at RAMP_STEP per tick
+			 * takes (v^2 - crawl^2) / (2 * RAMP_STEP) counts. The fixed 250-count
+			 * (34 mm) zone alone only covers that from about 28 counts/tick, so
+			 * from the 60 counts/tick cruise the car reached the target still
+			 * doing ~55 and ran on past it. That started to show once the planner
+			 * began joining FW010s into long FW moves. Latched, so a wheel that
+			 * lags the ramp cannot flip it back to cruise speed. */
+			float speed_now = fabsf(current_speed_ramp);
+			int32_t brake_counts = (int32_t)((speed_now * speed_now - CRAWL_SPEED * CRAWL_SPEED)
+			                                 / (2.0f * RAMP_STEP)) + BRAKE_MARGIN_COUNTS;
+			if (straight_braking || remaining_counts < DECEL_TICKS || remaining_counts < brake_counts) {
+				straight_braking = 1u;
+				target_speed = (float)dir_forward * CRAWL_SPEED; /* Crawl speed */
+			}
 
 			if (current_speed_ramp < target_speed) {
 				current_speed_ramp += RAMP_STEP;

@@ -68,6 +68,17 @@
 #define SPEED_STRAIGHT      60
 #define SPEED_TURN          50
 
+/* How far the car keeps rolling after the brake goes on at the end of a FW
+   or BW from the Pi. Those moves brake this much early so the car comes to
+   rest on the commanded distance; without it FW010 and BW010 ended 1-2 cm
+   long. 12 mm is the coast STM32_motion_spec.md measured from crawl speed.
+   Tune: drive FW010 and FW100 a few times each (same for BW). If they still
+   end d mm long on average, add d here; if short, subtract it. A constant
+   error at both lengths belongs here. One that grows with distance does
+   not: that would be MM_PER_COUNT.                                         */
+#define STRAIGHT_STOP_LEAD_FW_MM   12.0f
+#define STRAIGHT_STOP_LEAD_BW_MM   12.0f
+
 /* VERIFIED ON HARDWARE -- DO NOT CHANGE.
    Both motors drive the car backwards on positive duty, so both are 1.
    The matching encoder sign fix lives in encoders.c: the RIGHT delta is
