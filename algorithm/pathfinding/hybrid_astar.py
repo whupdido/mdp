@@ -33,9 +33,9 @@ from .models import (
 
 _COST_EPSILON = 1e-12
 TURN_DURATION_BY_ANGLE = {
-    30.0: 1.5,
-    45.0: 1.75,   # temporary estimate; calibrate this
-    60.0: 2.0,
+    30.0: 2.4,
+    45.0: 2.4,   # temporary estimate; calibrate this
+    60.0: 2.4,
     90.0: 2.4,
 }
 
@@ -328,7 +328,7 @@ class HybridAStarPlanner:
                         primitive.steering,
                         turn_angle_rad=sign * math.radians(angle),
                         radius_cm=primitive.radius_cm,
-                        estimated_duration_s=TURN_DURATION_BY_ANGLE[angle], 
+                        estimated_duration_s=TURN_DURATION_BY_ANGLE[angle],
                         physically_calibrated=primitive.physically_calibrated,
                     )
                 )

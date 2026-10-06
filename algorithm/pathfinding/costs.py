@@ -37,7 +37,14 @@ def transition_cost(
         cost += motion.direction_change_penalty_s
     if previous_steering is not None and previous_steering is not primitive.steering:
         cost += motion.steering_change_penalty_s
+    if (
+        primitive.gear is Gear.REVERSE
+        and previous_gear is Gear.REVERSE
+    ):
+        cost += motion.consecutive_reverse_penalty_s
+
     return cost
+
 
 
 __all__ = ["primitive_execution_time_s", "transition_cost"]

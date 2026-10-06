@@ -89,7 +89,7 @@ class Task1Planner:
     ) -> PlanningResult:
         if not isinstance(arena, ArenaInput):
             raise TypeError("arena must be an ArenaInput")
-
+    
         if not isinstance(objective, CostMetric):
             raise TypeError("objective must be a CostMetric")
 

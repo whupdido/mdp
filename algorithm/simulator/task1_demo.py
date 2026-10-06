@@ -41,7 +41,7 @@ def task1_demo_config() -> PlanningConfig:
         adaptive_initial_expansions=200,
         adaptive_max_expansions=5000,
         local_planning_timeout_s=5.0,
-        overall_planning_timeout_s=60.0,
+        overall_planning_timeout_s=120.0,
         # Keep the fixed regression demo deterministic; the editor and
         # production profile exercise the Phase 6.5 partial-angle set.
         turn_angles_deg=(90.0,),
