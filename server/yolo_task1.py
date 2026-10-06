@@ -179,15 +179,19 @@ class Server:
                 for t in threads:
                     t.join()
 
-                # ---- Weighted fusion ----
-                class_scores = {}
-                class_model_map = {}  # remember which model saw this class
+                # ---- Pick the single closest image ----
+                # A frame can contain several images (e.g. a neighbouring
+                # obstacle in the background).  Only report the one nearest
+                # the camera, i.e. the largest boundary box (scaled by model
+                # weight), and drop every other box.
+                best = None  # (score, model_idx, box, conf, cid)
 
                 for model_idx, result in enumerate(results):
                     if result is None or result.boxes is None or len(result.boxes) == 0:
                         continue
 
                     boxes = result.boxes.xyxy.cpu().numpy()
+                    confs = result.boxes.conf.cpu().numpy()
                     cids = result.boxes.cls.cpu().numpy().astype(int)
 
                     print(cids)
@@ -199,19 +203,20 @@ class Server:
 
                     mask = ~np.isin(cids, self.unwanted)
                     boxes = boxes[mask]
+                    confs = confs[mask]
                     cids = cids[mask]
 
                     for i, cid in enumerate(cids):
                         x1, y1, x2, y2 = boxes[i]
-                        length = abs(y2 - y1)
-                        weighted_val = self.weights[model_idx] * length
-                        class_scores[cid] = class_scores.get(cid, 0.0) + weighted_val
-                        class_model_map[cid] = class_model_map.get(cid, model_idx)
+                        area = abs(x2 - x1) * abs(y2 - y1)
+                        score = self.weights[model_idx] * area
+                        if best is None or score > best[0]:
+                            best = (score, model_idx, boxes[i], confs[i], int(cid))
 
                 # -------------------------------------------------------------------
                 # Always save once — fallback to main model if no detections
                 # -------------------------------------------------------------------
-                if not class_scores:
+                if best is None:
                     # No valid detections → use main model for saving
                     frames = obj.get("frames", [obj["frame"]])
                     for f in frames:
@@ -237,26 +242,15 @@ class Server:
 
                 else:
                     failed = 0
-                    # ---- Find top class ----
-                    best_class = max(class_scores, key=class_scores.get)
-                    best_model_idx = class_model_map.get(best_class, 0)
+                    _, best_model_idx, best_box, best_conf, best_class = best
                     best_result = results[best_model_idx]
 
-                    boxes = best_result.boxes.xyxy.cpu().numpy()
-                    confs = best_result.boxes.conf.cpu().numpy()
-                    cids = best_result.boxes.cls.cpu().numpy().astype(int)
-
-                    # Apply mapping/unwanted to payload for consistency
-                    mapping = self.mappings[best_model_idx]
-                    if mapping is not None:
-                        cids = np.array([mapping.get(str(cid), cid) for cid in cids])
-                    mask = ~np.isin(cids, self.unwanted)
-                    boxes = boxes[mask]
-                    confs = confs[mask]
-                    cids = cids[mask]
+                    boxes = np.array([best_box])
+                    confs = np.array([best_conf])
+                    cids = np.array([best_class])
 
                     # Draw the official image ID and a human-readable
-                    # description inside every retained boundary box.  Using
+                    # description inside the chosen boundary box.  Using
                     # result.plot() here would label the raw model class
                     # instead of the post-mapping MDP image ID.
                     annotated = draw_detection_annotations(
