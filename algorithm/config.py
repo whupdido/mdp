@@ -118,6 +118,7 @@ class PlanningConfig:
     motion: MotionModel
     arena_size_cm: float = ARENA_SIZE_CM
     cell_size_cm: float = CELL_SIZE_CM
+    obstacle_buffer_cm: float = 5.0
     observation_lateral_offsets_cm: tuple[float, ...] = (0.0, -10.0, 10.0)
     observation_standoff_distances_cm: tuple[float, ...] = ()
     collision_translation_step_cm: float = 1.0
@@ -162,6 +163,7 @@ class PlanningConfig:
         positive_values = {
             "arena_size_cm": self.arena_size_cm,
             "cell_size_cm": self.cell_size_cm,
+            "obstacle_buffer_cm": self.obstacle_buffer_cm,
             "collision_translation_step_cm": self.collision_translation_step_cm,
             "collision_arc_step_rad": self.collision_arc_step_rad,
             "position_bin_cm": self.position_bin_cm,
@@ -247,7 +249,7 @@ def _simulation_motion_model() -> MotionModel:
 
 UNCALIBRATED_SIMULATION_CONFIG = PlanningConfig(
     robot=RobotGeometry(
-        length_cm=23.0,
+        length_cm=25.3,
         width_cm=18.8,
         rear_axle_to_body_center_forward_cm=0.0,
         rear_axle_to_body_center_left_cm=0.0,

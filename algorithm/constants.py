@@ -8,8 +8,8 @@ module only contains values fixed by the Android integration contract.
 ARENA_SIZE_CM = 200
 GRID_SIZE = 20
 CELL_SIZE_CM = ARENA_SIZE_CM // GRID_SIZE
-START_CELL_X = 1
-START_CELL_Y = 1
+START_CELL_X = 2
+START_CELL_Y = 2
 START_ZONE_SIZE_CM = 40
 START_ZONE_GRID_CELLS = START_ZONE_SIZE_CM // CELL_SIZE_CM
 

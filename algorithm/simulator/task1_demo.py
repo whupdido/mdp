@@ -54,10 +54,11 @@ def task1_demo_obstacles() -> tuple[Obstacle, ...]:
     """Return the stable five-target reference layout."""
     return (
         Obstacle(1, GridCell(15, 12), Direction.WEST),
-        Obstacle(2, GridCell(12, 9), Direction.NORTH),
-        Obstacle(3, GridCell(2, 7), Direction.NORTH),
-        Obstacle(4, GridCell(2, 19), Direction.SOUTH),
-        Obstacle(5, GridCell(7, 14), Direction.WEST),
+        Obstacle(2, GridCell(14, 6), Direction.WEST),
+        Obstacle(3, GridCell(4, 8), Direction.EAST),
+        Obstacle(4, GridCell(10, 19), Direction.SOUTH),
+        Obstacle(5, GridCell(7, 15), Direction.WEST),
+        Obstacle(6, GridCell(19, 18), Direction.WEST),
     )
 
 
