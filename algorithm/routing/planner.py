@@ -785,20 +785,19 @@ class Task1Planner:
     def _merge_consecutive_straights(
         execution_steps,
     ):
-        """Merge adjacent FW/BW straight MoveSteps.
+        """Merge adjacent compatible movement commands.
 
-        Only consecutive straight movements using the same gear are merged.
-        Turns and CaptureSteps always remain separate boundaries.
-
-        Example:
-
+        Straight:
             FW10, FW10, FW10 -> FW30
 
-        while:
+        Turn:
+            FR10, FR10, FR10 -> FR30
 
-            FW10, FR30, FW10
+        Only movements with identical command/gear/steering and,
+        for turns, identical radius are merged.
 
-        remains unchanged.
+        Turns and CaptureSteps remain separate boundaries when their
+        movement characteristics differ.
         """
 
         merged = []
@@ -814,15 +813,28 @@ class Task1Planner:
                 previous_primitive = previous.segment.primitive
                 current_primitive = step.segment.primitive
 
-                same_straight_motion = (
-                    previous_primitive.steering
-                    is Steering.STRAIGHT
-                    and current_primitive.steering
-                    is Steering.STRAIGHT
+                same_motion = (
+                    previous_primitive.command
+                    == current_primitive.command
                     and previous_primitive.gear
                     is current_primitive.gear
-                    and previous_primitive.command
-                    == current_primitive.command
+                    and previous_primitive.steering
+                    is current_primitive.steering
+                )
+
+                # Straight movements can always be combined when the
+                # command/gear/steering match.
+                same_straight_motion = (
+                    same_motion
+                    and previous_primitive.steering is Steering.STRAIGHT
+                )
+
+                # Turns can only be combined if they use the same radius.
+                same_turn_motion = (
+                    same_motion
+                    and previous_primitive.steering is not Steering.STRAIGHT
+                    and previous_primitive.radius_cm
+                    == current_primitive.radius_cm
                 )
 
                 if same_straight_motion:
@@ -844,18 +856,42 @@ class Task1Planner:
                         ),
                     )
 
-                    combined_segment = MotionSegment(
-                        primitive=combined_primitive,
-                        start=previous.segment.start,
-                        end=step.segment.end,
+                elif same_turn_motion:
+                    combined_primitive = MotionPrimitive(
+                        command=previous_primitive.command,
+                        gear=previous_primitive.gear,
+                        steering=previous_primitive.steering,
+                        turn_angle_rad=(
+                            previous_primitive.turn_angle_rad
+                            + current_primitive.turn_angle_rad
+                        ),
+                        radius_cm=previous_primitive.radius_cm,
+                        estimated_duration_s=(
+                            previous_primitive.estimated_duration_s
+                            + current_primitive.estimated_duration_s
+                        ),
+                        physically_calibrated=(
+                            previous_primitive.physically_calibrated
+                            and current_primitive.physically_calibrated
+                        ),
                     )
 
-                    merged[-1] = MoveStep(
-                        segment=combined_segment,
-                        command=combined_primitive.command,
-                    )
-
+                else:
+                    merged.append(step)
                     continue
+
+                combined_segment = MotionSegment(
+                    primitive=combined_primitive,
+                    start=previous.segment.start,
+                    end=step.segment.end,
+                )
+
+                merged[-1] = MoveStep(
+                    segment=combined_segment,
+                    command=combined_primitive.command,
+                )
+
+                continue
 
             merged.append(step)
 
