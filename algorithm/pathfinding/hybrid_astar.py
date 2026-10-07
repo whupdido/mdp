@@ -84,6 +84,7 @@ class _SearchNode:
     primitive: MotionPrimitive | None
     previous_gear: Gear | None
     previous_steering: Steering | None
+    search_key: HybridSearchKey
 
 
 class HybridAStarPlanner:
@@ -138,7 +139,8 @@ class HybridAStarPlanner:
                 collision_checks=collision_checks,
             )
 
-        start_node = _SearchNode(start, 0.0, None, None, None, None)
+        start_key = self._dominance_key(start, None, None)
+        start_node = _SearchNode(start, 0.0, None, None, None, None, start_key)
         nodes: list[_SearchNode] = [start_node]
         tie_breaker = itertools.count()
         start_h = self._heuristic(start, goal, objective)
@@ -146,7 +148,7 @@ class HybridAStarPlanner:
             (start_h, angular_distance(start.heading_rad, goal.heading_rad), start_h, next(tie_breaker), 0)
         ]
         best_cost: dict[HybridSearchKey, float] = {
-            self._dominance_key(start, None, None): 0.0
+            start_key: 0.0
         }
         expanded_states: list[Pose] = []
         generated_states: list[Pose] = []
@@ -158,12 +160,8 @@ class HybridAStarPlanner:
         while frontier:
             _, _, _, _, node_index = heapq.heappop(frontier)
             node = nodes[node_index]
-            node_key = self._dominance_key(
-                node.pose,
-                node.previous_gear,
-                node.previous_steering,
-            )
-            if node.g_cost > best_cost.get(node_key, math.inf) + _COST_EPSILON:
+            
+            if node.g_cost > best_cost.get(node.search_key, math.inf) + _COST_EPSILON:
                 continue
 
             if goal_reached(node.pose, goal, self.config):
@@ -230,15 +228,12 @@ class HybridAStarPlanner:
             for primitive in self._successor_primitives():
                 if self._is_redundant_immediate_inverse(node.primitive, primitive):
                     continue
+                
                 successor_pose = propagate_motion(node.pose, primitive, self.config)
                 nodes_generated += 1
                 if collect_debug:
                     generated_states.append(successor_pose)
-                collision_checks += 1
-                if not is_motion_collision_free(node.pose, primitive, arena, self.config):
-                    collision_rejected += 1
-                    continue
-
+                
                 edge_cost = transition_cost(
                     primitive,
                     self.config.motion,
@@ -252,8 +247,14 @@ class HybridAStarPlanner:
                     primitive.gear,
                     primitive.steering,
                 )
+                
                 if successor_g >= best_cost.get(successor_key, math.inf) - _COST_EPSILON:
                     dominated += 1
+                    continue
+
+                collision_checks += 1
+                if not is_motion_collision_free(node.pose, primitive, arena, self.config):
+                    collision_rejected += 1
                     continue
 
                 best_cost[successor_key] = successor_g
@@ -266,6 +267,7 @@ class HybridAStarPlanner:
                         primitive=primitive,
                         previous_gear=primitive.gear,
                         previous_steering=primitive.steering,
+                        search_key=successor_key,
                     )
                 )
                 heuristic = self._heuristic(successor_pose, goal, objective)
