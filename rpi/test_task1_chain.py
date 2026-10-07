@@ -125,7 +125,7 @@ def install_fakes(plans, detections):
         calls["plan"].append({"obstacles": list(obstacles), "start": start})
         return plans.pop(0) if plans else None
 
-    def report_obstacle(obstacle_number, android_serial, stm_serial=None, face=None):
+    def report_obstacle(obstacle_number, android_serial, stm_serial=None, face=None, **_ignored):
         calls["capture"].append(obstacle_number)
         target = detections.get(obstacle_number)
         if target is None:
@@ -368,6 +368,82 @@ check("an unreachable laptop fails pre-flight",
 check_contains("and says so plainly", android.written,
                "STATUS,PLAN,FAILED,laptop algo server unreachable")
 algo_client.server_reachable = lambda timeout=2.0: True
+
+# =====================================================================
+# 7. Ghost obstacles: the Pi must hold exactly what is on screen
+# =====================================================================
+# The Pi only forgot an obstacle on SUB, and the tablet's Undo, Clear and
+# Demo never send one. Key in five, press Clear, key in three: the planner
+# still routed to all five. SETUP now sends CLEAR before the full map.
+print()
+fresh()
+install_fakes([], {})
+quiet = Port()
+first = [(5, 13, "W"), (5, 7, "S"), (12, 9, "E"), (15, 15, "S"), (15, 4, "N")]
+for n, (x, y, f) in enumerate(first, 1):
+    run_task1.pump_map(quiet, f"ADD,B{n},({x},{y})")
+    run_task1.pump_map(quiet, f"FACE,B{n},{f}")
+# Clear on the tablet; then SETUP publishes CLEAR and the three that remain.
+run_task1.pump_map(quiet, "CLEAR")
+for n, (x, y, f) in enumerate([(3, 10, "E"), (10, 3, "N"), (17, 17, "S")], 1):
+    run_task1.pump_map(quiet, f"ADD,B{n},({x},{y})")
+    run_task1.pump_map(quiet, f"FACE,B{n},{f}")
+check("after CLEAR the Pi plans for exactly what is on screen",
+      [o["id"] for o in run_task1.obstacles_payload()], [1, 2, 3])
+check_contains("and CLEAR is acknowledged like any map edit", quiet.written, "STATUS,MAP,CLEAR")
+
+# =====================================================================
+# 8. SETUP works from every stage, so the tablet can always go back
+# =====================================================================
+# The runner used to be three loops in a row and could only go forwards.
+# PLAN AGAIN, a map edit after planning, or a failed pre-flight all send
+# COMPUTE while it was waiting for ARM or START -- ignored, and the tablet
+# froze on "PLANNING...".
+print()
+
+
+def prepared(script, plans, board=None):
+    fresh()
+    calls = install_fakes(plans, {})
+    algo_client.server_reachable = lambda timeout=2.0: True
+    for line in PREP:
+        run_task1.pump_map(Port(), line)
+    android = Port(script)
+    steps = run_task1.prepare(board or Board(), android)
+    return steps, calls, android
+
+
+route_a = [move("FW030"), capture(1)]
+route_b = [move("FW050"), capture(1), move("FL090"), capture(2)]
+
+# PLAN AGAIN after the robot was already checked and ready.
+steps, calls, android = prepared(["COMPUTE", "ARM", "COMPUTE", "ARM", "START"], [route_a, route_b])
+check("SETUP after PLAN is accepted and re-plans", len(calls["plan"]), 2)
+check("and the run drives the new route, not the old one", steps, route_b)
+
+# A failed pre-flight, then the tablet's fallback to SETUP. The board refuses
+# the first check only, so the second attempt can complete and reach START.
+flaky = Board(fail_on=1, reply="ERR")
+steps, calls, android = prepared(
+    ["COMPUTE", "ARM", "COMPUTE", "ARM", "START"], [route_a, route_b], board=flaky)
+check_contains("a failed pre-flight is reported", android.written,
+               "STATUS,PLAN,FAILED,board answered ERR")
+check("and SETUP straight after it is accepted, not ignored", len(calls["plan"]), 2)
+check("so the run can still go ahead on the fresh route", steps, route_b)
+
+# =====================================================================
+# 9. A press the Pi is not ready for gets an answer, not silence
+# =====================================================================
+# The tablet only sends PLAN or START once it believes the earlier steps
+# happened -- so this means the two fell out of step, usually because the
+# runner was restarted. Ignoring it left the tablet on "CHECKING..." for good.
+print()
+for early in ("ARM", "START"):
+    fresh()
+    android = Port()
+    run_task1.handle_other(android, early)
+    check(f"{early} with no route sends the tablet back to SETUP", android.written,
+          ["STATUS,PLAN,FAILED,the Pi has no route yet - press SETUP"])
 
 print()
 if FAILURES:

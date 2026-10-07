@@ -100,6 +100,17 @@ class ArenaView @JvmOverloads constructor(
             val shown = value ?: state.robot
             poseX = shown.x.toFloat(); poseY = shown.y.toFloat()
             poseBearing = shown.facing.bearingDeg
+
+            // Drop any half-finished gesture on the way into replay. Touches
+            // are swallowed while replay is open, which also swallows the tap
+            // that would normally dismiss an open compass -- so a compass left
+            // open when Replay was pressed stayed drawn, scrim and all, over
+            // every replay frame until replay closed.
+            if (value != null) {
+                selectorFor = null
+                dragId = null; dragging = false; draggingRobot = false
+                onHoverEnd()
+            }
             invalidate()
         }
 

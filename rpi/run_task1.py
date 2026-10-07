@@ -106,11 +106,27 @@ def handle_other(android, command):
         print("[TASK1] START2 is Task 2 -- stop this and run a1_bridge.py instead.")
         a1_bridge.send_line(android, "MSG,This is the Task 1 runner. Run a1_bridge.py for Task 2.")
         return
+    if command in ("ARM", "START"):
+        # Zhenxi: a press the Pi is not ready for. The tablet only sends these
+        # once it believes the earlier steps are done, so this means the two
+        # have fallen out of step -- most often because this program was
+        # restarted after the tablet had already planned. Ignoring it left the
+        # tablet on "CHECKING..." for good. FAILED sends it back to SETUP,
+        # which this runner accepts from any state.
+        print(f"[TASK1] {command} arrived before the Pi was ready for it -- asking for SETUP.")
+        a1_bridge.send_line(android, "STATUS,PLAN,FAILED,the Pi has no route yet - press SETUP")
+        return
     pump_map(android, command)
 
 
 def wait_for(android, trigger, prompt):
-    """Collect map traffic until `trigger` arrives from the tablet.
+    """Collect map traffic until `trigger` arrives. Returns True."""
+    wait_for_any(android, (trigger,), prompt)
+    return True
+
+
+def wait_for_any(android, triggers, prompt):
+    """Collect map traffic until one of `triggers` arrives; return which.
 
     Zhenxi: the triggers come from the tablet, not from this terminal. The
     rules do not allow touching the laptop during an attempt (Task 1 item 6),
@@ -132,21 +148,21 @@ def wait_for(android, trigger, prompt):
         # simply did nothing.
         while a1_bridge.inbox:
             command = a1_bridge.inbox.pop(0)
-            if command == trigger:
-                print(f"[TASK1] {trigger} received from the tablet (queued).")
-                return True
+            if command in triggers:
+                print(f"[TASK1] {command} received from the tablet (queued).")
+                return command
             handle_other(android, command)
 
         if android.in_waiting:
             command = a1_bridge.read_command(android)
-            if command == trigger:
-                print(f"[TASK1] {trigger} received from the tablet.")
-                return True
+            if command in triggers:
+                print(f"[TASK1] {command} received from the tablet.")
+                return command
             handle_other(android, command)
         if select.select([sys.stdin], [], [], 0)[0]:
             sys.stdin.readline()
-            print(f"[TASK1] {trigger} given from the terminal.")
-            return True
+            print(f"[TASK1] {triggers[-1]} given from the terminal.")
+            return triggers[-1]
         time.sleep(0.05)
 
 
@@ -487,6 +503,62 @@ def run_route(steps, stm, android, run_id=None):
     a1_bridge.send_line(android, "MSG,Task 1 route complete")
 
 
+# Zhenxi: what each stage will act on. COMPUTE is in every one, which is
+# what lets the tablet always get back to SETUP.
+STAGE_TRIGGERS = {
+    "plan": ("COMPUTE",),
+    "arm": ("COMPUTE", "ARM"),
+    "start": ("COMPUTE", "ARM", "START"),
+}
+STAGE_PROMPTS = {
+    "plan": "Place obstacles, then press SETUP on the tablet.",
+    "arm": "Press PLAN on the tablet to check the robot (or SETUP to re-plan).",
+    "start": "Press START when the supervisor says go (or SETUP / PLAN to redo).",
+}
+
+
+def prepare(stm, android):
+    """Run SETUP / PLAN / START until START arrives; return the route.
+
+    Kept apart from main() so it can be driven in a test without opening any
+    ports -- the whole point of the stage table is behaviour that only shows
+    up across several presses, which is exactly what a unit test of one
+    function at a time would miss.
+    """
+    stage = "plan"
+    steps = None
+    while True:
+        got = wait_for_any(android, STAGE_TRIGGERS[stage], STAGE_PROMPTS[stage])
+        if got == "COMPUTE":
+            steps = plan_once(android)
+            stage = "arm" if steps is not None else "plan"
+        elif got == "ARM":
+            stage = "start" if arm_and_wait(stm, android) else "arm"
+        else:   # START
+            return steps
+
+
+def plan_once(android):
+    """Plan a route over the map the tablet just sent. None if it failed."""
+    obstacles = obstacles_payload()
+    if not obstacles:
+        print("[TASK1] No obstacles with both position and face -- nothing to plan.")
+        a1_bridge.send_line(android, "STATUS,PLAN,FAILED,no obstacles with a face")
+        return None
+
+    a1_bridge.send_line(android, "STATUS,PLAN,WORKING")
+    print(f"[TASK1] Planning for {len(obstacles)} obstacle(s) from {start_pose}...")
+    steps = algo_client.plan_route(obstacles, start=dict(start_pose))
+    if steps is None:
+        a1_bridge.send_line(android, "STATUS,PLAN,FAILED,planner returned no route")
+        return None
+
+    moves = sum(1 for step in steps if step["type"] == "move")
+    a1_bridge.send_line(android, f"STATUS,PLAN,READY,{moves}")
+    print(f"[TASK1] Route ready: {moves} moves.")
+    return steps
+
+
 def main():
     print(f"Opening STM32 on {a1_bridge.STM_DEVICE} at {a1_bridge.BAUD_RATE} baud")
     with serial.Serial(a1_bridge.STM_DEVICE, a1_bridge.BAUD_RATE, timeout=a1_bridge.STM_POLL_SECONDS) as stm:
@@ -494,42 +566,24 @@ def main():
         with serial.Serial(a1_bridge.BT_DEVICE, a1_bridge.BAUD_RATE, timeout=1) as android:
             a1_bridge.send_line(android, "STATUS,Task1 runner ready")
 
-            # Zhenxi: three presses, not one.
+            # Zhenxi: three presses, in order -- but SETUP may come back.
             #
             # Planning is slow enough that doing it inside the six minutes
             # would be giving budget away, and the rules give two minutes of
             # preparation for exactly this. So COMPUTE plans, off the clock,
-            # and START only drives a route that already exists.
-            while True:
-                wait_for(android, "COMPUTE", "Place obstacles, then press SETUP on the tablet.")
+            # ARM pre-flights, and START only drives a route that exists.
+            #
+            # This used to be three loops in a row, so it could only go
+            # forwards. The tablet can go backwards -- PLAN AGAIN, editing the
+            # map after planning, a failed pre-flight -- and each of those
+            # sends COMPUTE while this was still waiting for ARM or START. The
+            # COMPUTE was ignored and the tablet sat on "PLANNING..." for good.
+            # Now COMPUTE is accepted at every stage before the run, so SETUP
+            # always works, and the tablet can drop back to it after any
+            # failure knowing the Pi will follow.
+            steps = prepare(stm, android)
 
-                obstacles = obstacles_payload()
-                if not obstacles:
-                    print("[TASK1] No obstacles with both position and face -- nothing to plan.")
-                    a1_bridge.send_line(android, "STATUS,PLAN,FAILED,no obstacles with a face")
-                    continue
-
-                a1_bridge.send_line(android, "STATUS,PLAN,WORKING")
-                print(f"[TASK1] Planning for {len(obstacles)} obstacle(s) from {start_pose}...")
-                steps = algo_client.plan_route(obstacles, start=dict(start_pose))
-                if steps is None:
-                    a1_bridge.send_line(android, "STATUS,PLAN,FAILED,planner returned no route")
-                    continue
-
-                moves = sum(1 for step in steps if step["type"] == "move")
-                a1_bridge.send_line(android, f"STATUS,PLAN,READY,{moves}")
-                print(f"[TASK1] Route ready: {moves} moves. Waiting for START.")
-                break
-
-            # Second press: pre-flight and hold, still in the prep window.
-            while True:
-                wait_for(android, "ARM", "Press PLAN on the tablet to check the robot.")
-                if arm_and_wait(stm, android):
-                    break
-                print("[TASK1] Pre-flight failed -- fix it and press PLAN again.")
-
-            # Third press: go. The clock is the supervisor's from here.
-            wait_for(android, "START", "Press START when the supervisor says go.")
+            # The clock is the supervisor's from here.
             run_id = time.strftime("%Y%m%d-%H%M%S")
             run_route(steps, stm, android, run_id=run_id)
 

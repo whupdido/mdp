@@ -34,7 +34,8 @@ TASK2_TIMEOUT_SECONDS = 200
 # tablet got ERR,INVALID_COMMAND every time an obstacle was placed, moved or
 # annotated.
 MOVE_PATTERN = re.compile(r"^(?:F[WLR]|B[WLR])\d{3}$|^STOP$")
-MAP_PATTERN = re.compile(r"^(?:ADD|SUB|FACE),")
+# Zhenxi: CLEAR is a map message too -- see handle_map_message.
+MAP_PATTERN = re.compile(r"^(?:(?:ADD|SUB|FACE),|CLEAR$)")
 
 # Real parsers for the three map message shapes Android actually sends
 # (see Android/PROTOCOL.md -- these are Android's fixed outbound formats,
@@ -149,6 +150,20 @@ def handle_map_message(command: str) -> str:
     """Parse one ADD/SUB/FACE message and update `obstacles`. Returns the
     status text to echo back to Android (mirrors the old unconditional ack,
     but now actually does something with the data first)."""
+    # Zhenxi: forget the whole map.
+    #
+    # The Pi only ever forgot an obstacle on SUB, and the tablet's Undo, Clear
+    # and Demo buttons never sent one. So anything removed that way lived on
+    # here as a ghost: key in five, press Clear, key in three, and the planner
+    # still routed to all five. The tablet now sends CLEAR before every full
+    # map it publishes, which makes that publish authoritative -- whatever the
+    # buttons did in between, the Pi ends up holding exactly what is on screen.
+    if command == "CLEAR":
+        forgotten = len(obstacles)
+        obstacles.clear()
+        print(f"[MAP] cleared ({forgotten} obstacle(s) forgotten)")
+        return command
+
     m = ADD_PATTERN.match(command)
     if m:
         n, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -395,7 +410,18 @@ def main(on_face_known=None):
                 # the tablet paints as a red warning for a button that did
                 # nothing wrong. The tablet sends these whenever it is running,
                 # including during checklist demos when this is what listens.
-                if command in ("START", "COMPUTE", "ARM") or TASK1_START_POSE.match(command):
+                # Zhenxi: SETUP and PLAN get a plan failure, not a chat line.
+                #
+                # The tablet sits on "PLANNING..." / "CHECKING..." until it
+                # hears a STATUS,PLAN reply. A plain MSG told the operator what
+                # was wrong but left the buttons dead, so the wrong program --
+                # the likeliest mistake on the day -- froze the tablet. FAILED
+                # puts it straight back to SETUP with the reason on screen.
+                if command in ("COMPUTE", "ARM"):
+                    print(f"[RUN] {command} refused -- this is a1_bridge, run run_task1.py for Task 1")
+                    send_line(android, "STATUS,PLAN,FAILED,wrong program on the Pi - run run_task1.py")
+                    continue
+                if command == "START" or TASK1_START_POSE.match(command):
                     print(f"[RUN] {command} ignored -- this is a1_bridge, run run_task1.py for Task 1")
                     send_line(android, "MSG,Bridge only. Start Task 1 from run_task1.py.")
                     continue

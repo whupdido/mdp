@@ -135,6 +135,21 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
     private var runTicker: Job? = null
     private var armingTicker: Job? = null
+
+    /**
+     * Fires if the Pi goes quiet while SETUP or PLAN is waiting on it.
+     *
+     * Nothing else could leave PLANNING or CHECKING except a reply from the
+     * Pi, and the button that would retry is disabled in both. So a Pi that
+     * never answers -- the wrong program running, run_task1 crashed, the link
+     * dropped mid-plan -- froze every run button for good.
+     *
+     * Short until the Pi shows signs of life, patient once it is visibly
+     * working: the production planner may take up to 150 s, so a single
+     * timeout short enough to catch "nobody is listening" would also cut off
+     * a slow plan that was going to succeed.
+     */
+    private var planWatchdog: Job? = null
     private var runStartMs = 0L
 
     private var ticker: Job? = null
@@ -198,6 +213,14 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         if (text != lastAnnounced) {
             lastAnnounced = text
             say(text)
+        }
+        // A reply to SETUP or PLAN cannot arrive over a link that has gone,
+        // so stop waiting for one rather than leave the buttons dead.
+        val lost = s is LinkState.Disconnected || s is LinkState.Failed
+        if (lost && _run.value.busy) {
+            stopWatchingPlan()
+            _run.value = _run.value.copy(phase = RunPhase.IDLE, plannedSteps = 0, armingSec = 0)
+            warn("Lost the link while the Pi was working. Reconnect, then press SETUP.")
         }
     }
 
@@ -412,6 +435,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
     private fun invalidatePlan(why: String) {
         val live = _run.value
         if (live.running || live.phase == RunPhase.IDLE) return
+        stopWatchingPlan()
         _run.value = live.copy(phase = RunPhase.IDLE, plannedSteps = 0)
         say("$why — plan again before starting.")
     }
@@ -445,7 +469,12 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun publishMap() {
         val arena = _arena.value
         note("-- sending start pose and ${arena.obstacles.size} obstacle(s) --")
-        // Start pose first: the planner needs somewhere to route from, and
+        // Wipe the Pi's map first, so this publish is authoritative: whatever
+        // Undo, Clear or Demo did since, the Pi ends up holding exactly what
+        // is on screen and nothing that was deleted along the way.
+        transmit(Outbound.CLEAR)
+        delay(MAP_GAP_MS)
+        // Start pose next: the planner needs somewhere to route from, and
         // (1,1,N) is only the default, not necessarily where we are parked.
         transmit(Outbound.robotAt(arena.robot.x, arena.robot.y, arena.robot.facing))
         delay(MAP_GAP_MS)
@@ -475,6 +504,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             publishMap()
             transmit(Outbound.COMPUTE)
+            watchPlan(PLAN_ACK_MS)
         }
     }
 
@@ -491,38 +521,70 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         if (!live.canPlan) return
         _run.value = live.copy(phase = RunPhase.ARMING)
         say("Checking the robot…")
-        viewModelScope.launch { transmit(Outbound.ARM) }
+        viewModelScope.launch {
+            transmit(Outbound.ARM)
+            watchPlan(PLAN_ACK_MS)
+        }
+    }
+
+    private fun watchPlan(timeoutMs: Long) {
+        planWatchdog?.cancel()
+        planWatchdog = viewModelScope.launch {
+            delay(timeoutMs)
+            val live = _run.value
+            if (live.busy) {
+                _run.value = live.copy(phase = RunPhase.IDLE, plannedSteps = 0, armingSec = 0)
+                warn("The Pi stopped answering. Is run_task1.py running? Press SETUP to try again.")
+            }
+        }
+    }
+
+    private fun stopWatchingPlan() {
+        planWatchdog?.cancel()
+        planWatchdog = null
     }
 
     /** The Pi reporting on the route it was asked for. */
     private fun onPlan(msg: Inbound.Plan) {
         val live = _run.value
         when (msg.state) {
+            // The Pi is alive and working; give it the planner's full budget.
             PlanState.WORKING -> {
                 if (!live.running) _run.value = live.copy(phase = RunPhase.COMPUTING)
+                watchPlan(PLAN_WORK_MS)
                 say("Robot is planning…")
             }
 
             PlanState.CHECKING -> {
                 if (!live.running) _run.value = live.copy(phase = RunPhase.ARMING)
+                watchPlan(PREFLIGHT_MS)
                 say("Checking the robot…")
             }
 
             PlanState.SET -> {
+                stopWatchingPlan()
                 if (!live.running) _run.value = _run.value.copy(phase = RunPhase.ARMED, armingSec = 0)
                 say("Robot ready. START is live.")
             }
 
             PlanState.READY -> {
+                stopWatchingPlan()
                 if (!live.running) {
                     _run.value = live.copy(phase = RunPhase.PLANNED, plannedSteps = msg.value ?: 0)
                 }
+                // Not "START is live": with three presses, a route makes PLAN
+                // the next press, and the hint beside the button says so.
                 val moves = msg.value?.let { " $it moves." } ?: ""
-                say("Route ready.$moves START is live.")
+                say("Path found.$moves Press PLAN.")
             }
 
+            // Any failure goes back to SETUP. That is always safe, because the
+            // Pi's runner accepts SETUP from every stage before the run.
             PlanState.FAILED -> {
-                if (!live.running) _run.value = live.copy(phase = RunPhase.IDLE, plannedSteps = 0)
+                stopWatchingPlan()
+                if (!live.running) {
+                    _run.value = live.copy(phase = RunPhase.IDLE, plannedSteps = 0, armingSec = 0)
+                }
                 warn("Planning failed: ${msg.detail.ifEmpty { "no reason given" }}")
             }
 
@@ -532,11 +594,14 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
             PlanState.ARMED -> {
                 val secs = (msg.value ?: 0).toLong()
                 _run.value = _run.value.copy(phase = RunPhase.ARMING, armingSec = secs)
+                watchPlan(secs * 1000 + PLAN_ACK_MS)
                 if (secs > 0) say("Holding ${secs}s — step back.")
                 armingTicker?.cancel()
                 armingTicker = viewModelScope.launch {
                     var left = secs
-                    while (left > 0 && _run.value.running) {
+                    // ARMING, not running: the hold happens before START. The
+                    // old `running` check exited at once and froze the count.
+                    while (left > 0 && _run.value.phase == RunPhase.ARMING) {
                         delay(1000)
                         left -= 1
                         _run.value = _run.value.copy(armingSec = left.coerceAtLeast(0))
@@ -786,12 +851,19 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         }
         _arena.value = previous
         say("Undone.")
+        // Undo changes the map like any edit does, so a route planned
+        // before it is for a different layout.
+        invalidatePlan("Undone")
     }
 
     fun resetArena() {
         pushUndo()
         _arena.value = _arena.value.cleared()
         say("Arena cleared.")
+        // Tell the Pi too. SETUP would put it right anyway, but until then
+        // the bridge would be holding obstacles that are gone from screen.
+        transmit(Outbound.CLEAR)
+        invalidatePlan("Arena cleared")
     }
 
     /** Seeds a small layout so C.5 can be demonstrated before anything is connected. */
@@ -804,6 +876,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         s = s.withTargetFace(1, Facing.S)
         _arena.value = s.withRobotAt(1, 1, Facing.N) ?: s
         say("Demo layout loaded.")
+        invalidatePlan("Demo layout loaded")
     }
 
     /** Simulator panel only. */
@@ -849,6 +922,15 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Gap between lines when the whole map is republished at START. */
         private const val MAP_GAP_MS = 50L
+
+        /** How long the Pi has to show any sign of life after a press. */
+        private const val PLAN_ACK_MS = 15_000L
+
+        /** Planning, once begun: the production planner's 150 s, plus slack. */
+        private const val PLAN_WORK_MS = 180_000L
+
+        /** Pre-flight: the board's 25 s move timeout, the socket probe, slack. */
+        private const val PREFLIGHT_MS = 45_000L
         private val CLOCK = SimpleDateFormat("HH:mm:ss", Locale.UK)
         private fun stamp(text: String) = "${CLOCK.format(Date())}  $text"
 
