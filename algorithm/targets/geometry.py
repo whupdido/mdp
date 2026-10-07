@@ -58,17 +58,28 @@ def camera_world_position(pose: Pose, camera: CameraGeometry) -> Point:
     x_cm, y_cm = pose.translated_local(camera.forward_offset_cm, camera.left_offset_cm)
     return Point(x_cm, y_cm)
 
-
 def rear_axle_pose_for_camera(
     camera_position: Point,
-    heading: Direction,
+    heading_rad: float,
     camera: CameraGeometry,
 ) -> Pose:
     """Solve the rear-axle pose that places the camera at a desired point."""
-    camera_pose = Pose.from_direction(camera_position.x_cm, camera_position.y_cm, heading)
-    rear_x, rear_y = camera_pose.translated_local(-camera.forward_offset_cm, -camera.left_offset_cm)
-    return Pose.from_direction(rear_x, rear_y, heading)
+    camera_pose = Pose(
+        x_cm=camera_position.x_cm,
+        y_cm=camera_position.y_cm,
+        heading_rad=heading_rad,
+    )
 
+    rear_x, rear_y = camera_pose.translated_local(
+        -camera.forward_offset_cm,
+        -camera.left_offset_cm,
+    )
+
+    return Pose(
+        x_cm=rear_x,
+        y_cm=rear_y,
+        heading_rad=heading_rad,
+    )
 
 def has_clear_line_of_sight(
     camera_position: Point,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from algorithm.config import PlanningConfig
 from algorithm.geometry import is_pose_collision_free
 from algorithm.models.arena import ArenaInput
@@ -33,9 +35,13 @@ def _lateral_class(offset_cm: float, lateral_index: int) -> ObservationLateralCl
     return ObservationLateralClass.OFFSET
 
 
-def _candidate_kind(distance_index: int, lateral: ObservationLateralClass) -> ObservationCandidateKind:
+def _candidate_kind(
+    distance_index: int,
+    lateral: ObservationLateralClass,
+) -> ObservationCandidateKind:
     if distance_index:
         return ObservationCandidateKind.ALTERNATIVE
+
     return {
         ObservationLateralClass.CENTER: ObservationCandidateKind.NOMINAL,
         ObservationLateralClass.LEFT: ObservationCandidateKind.LEFT,
@@ -67,25 +73,94 @@ def generate_observation_candidates(
         )
 
     face = obstacle.face
-    heading = face.opposite()
-    target_point = image_face_target_point(obstacle, face, config.cell_size_cm)
-    parameter_pairs = (
-        (distance_index, standoff_cm, lateral_index, lateral_offset_cm)
-        for distance_index, standoff_cm in enumerate(config.observation_standoff_distances_cm)
-        for lateral_index, lateral_offset_cm in enumerate(config.observation_lateral_offsets_cm)
+    target_point = image_face_target_point(
+        obstacle,
+        face,
+        config.cell_size_cm,
     )
+
+    parameter_pairs = (
+        (
+            distance_index,
+            standoff_cm,
+            lateral_index,
+            lateral_offset_cm,
+        )
+        for distance_index, standoff_cm in enumerate(
+            config.observation_standoff_distances_cm
+        )
+        for lateral_index, lateral_offset_cm in enumerate(
+            config.observation_lateral_offsets_cm
+        )
+    )
+
     candidates: list[ObservationCandidate] = []
 
-    for index, (distance_index, standoff_cm, lateral_index, lateral_offset_cm) in enumerate(
+    for index, (
+        distance_index,
+        standoff_cm,
+        lateral_index,
+        lateral_offset_cm,
+    ) in enumerate(
         tuple(parameter_pairs)[: config.guaranteed_max_candidates_per_target]
     ):
-        lateral = _lateral_class(lateral_offset_cm, lateral_index)
-        desired_camera = desired_camera_position(
-            obstacle, face, lateral_offset_cm, config, standoff_cm=standoff_cm
+        lateral = _lateral_class(
+            lateral_offset_cm,
+            lateral_index,
         )
-        pose = rear_axle_pose_for_camera(desired_camera, heading, config.camera)
-        actual_camera = camera_world_position(pose, config.camera)
-        collision_free = is_pose_collision_free(pose, arena, config)
+
+        effective_standoff_cm = (
+        standoff_cm + 15.0
+        if lateral_offset_cm != 0.0
+        else standoff_cm
+)
+
+        desired_camera = desired_camera_position(
+            obstacle,
+            face,
+            lateral_offset_cm,
+            config,
+            standoff_cm=standoff_cm,
+        )
+
+        desired_heading_rad = math.atan2(
+            target_point.y_cm - desired_camera.y_cm,
+            target_point.x_cm - desired_camera.x_cm,
+        )
+
+        if lateral_offset_cm == 0.0:
+            heading_rad = desired_heading_rad
+        else:
+            heading_step_rad = math.radians(30.0)
+
+            if lateral_offset_cm < 0.0:
+                # Left-side candidate: round toward the image
+                heading_rad = math.ceil(
+                    desired_heading_rad / heading_step_rad
+                ) * heading_step_rad
+            else:
+                # Right-side candidate: round toward the image
+                heading_rad = math.floor(
+                    desired_heading_rad / heading_step_rad
+                ) * heading_step_rad
+
+        pose = rear_axle_pose_for_camera(
+            desired_camera,
+            heading_rad,
+            config.camera,
+        )
+
+        actual_camera = camera_world_position(
+            pose,
+            config.camera,
+        )
+
+        collision_free = is_pose_collision_free(
+            pose,
+            arena,
+            config,
+        )
+
         line_of_sight_clear = has_clear_line_of_sight(
             actual_camera,
             target_point,
@@ -93,6 +168,7 @@ def generate_observation_candidates(
             arena,
             config,
         )
+
         candidates.append(
             ObservationCandidate(
                 observation_pose=ObservationPose(
@@ -102,7 +178,10 @@ def generate_observation_candidates(
                     nominal=index == 0,
                 ),
                 face=face,
-                kind=_candidate_kind(distance_index, lateral),
+                kind=_candidate_kind(
+                    distance_index,
+                    lateral,
+                ),
                 lateral_offset_cm=lateral_offset_cm,
                 standoff_cm=standoff_cm,
                 lateral_class=lateral,
@@ -115,14 +194,19 @@ def generate_observation_candidates(
         )
 
     issues: tuple[PlanningIssue, ...] = ()
+
     if not any(candidate.valid for candidate in candidates):
         issues = (
             PlanningIssue(
                 code="no_geometrically_valid_observation_pose",
-                message=f"obstacle {obstacle.obstacle_id} has no geometrically valid observation pose",
+                message=(
+                    f"obstacle {obstacle.obstacle_id} "
+                    "has no geometrically valid observation pose"
+                ),
                 obstacle_id=obstacle.obstacle_id,
             ),
         )
+
     return ObservationCandidateGroup(
         obstacle_id=obstacle.obstacle_id,
         face=face,
@@ -137,6 +221,10 @@ def generate_arena_observation_candidates(
 ) -> tuple[ObservationCandidateGroup, ...]:
     """Generate grouped candidates in deterministic arena obstacle order."""
     return tuple(
-        generate_observation_candidates(obstacle, arena, config)
+        generate_observation_candidates(
+            obstacle,
+            arena,
+            config,
+        )
         for obstacle in arena.obstacles
     )
