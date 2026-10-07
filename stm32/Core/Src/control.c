@@ -30,11 +30,9 @@ static float current_speed_ramp = 0.0f;
 /* Kush: set once a straight move starts slowing for its target; see
    MODE_STRAIGHT in control_tick(). */
 static volatile uint8_t straight_braking = 0;
-/* Kush: set while move_straight_exact_mm() runs (FW/BW from the Pi). */
-static volatile uint8_t exact_straight = 0;
-/* Kush: |left| + |right| summed over an exact straight move; half of it is
-   the distance in counts. See MODE_STRAIGHT in control_tick(). */
-static volatile int32_t straight_half_counts = 0;
+/* Kush: rear-axle odometry for the turn test; see motion_odometry_mm(). */
+static volatile float odo_x_mm = 0.0f;
+static volatile float odo_y_mm = 0.0f;
 static float pivot_speed_ramp = 0.0f;
 /* Track cumulative signed ticks during in-place pivots */
 static volatile int32_t pivot_enc_l_accum = 0;
@@ -147,6 +145,16 @@ float motion_yaw_deg(void)
     return global_yaw_deg;
 }
 
+void motion_odometry_mm(float *x_mm, float *y_mm)
+{
+    /* Both coordinates from the same tick: the ISR must not run in between. */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    *x_mm = odo_x_mm;
+    *y_mm = odo_y_mm;
+    __set_PRIMASK(primask);
+}
+
 /* ------------------------------------------------------------------------- */
 /* High-Level Motion Commands (Blocking)                                    */
 /* ------------------------------------------------------------------------- */
@@ -161,18 +169,8 @@ uint8_t move_straight_mm(int32_t mm)
 	HAL_Delay(150);
 
     target_counts_total       = (int32_t)(fabsf((float)mm) / MM_PER_COUNT);
-    if (exact_straight) {
-        /* Kush: brake early by the distance the car rolls on after the
-         * brake, so it comes to rest on the target instead of ~12 mm past
-         * it. Capped at half the move so a short nudge still goes somewhere. */
-        int32_t lead_counts = (int32_t)(((mm > 0) ? STRAIGHT_STOP_LEAD_FW_MM
-                                                  : STRAIGHT_STOP_LEAD_BW_MM) / MM_PER_COUNT);
-        if (lead_counts > target_counts_total / 2) lead_counts = target_counts_total / 2;
-        target_counts_total -= lead_counts;
-    }
     dir_forward               = (mm > 0) ? 1 : -1;
     accum_counts              = 0;
-    straight_half_counts      = 0;
     enc_left_straight_accum   = 0;
     enc_right_straight_accum  = 0;
     steer_integral            = 0.0f;
@@ -237,18 +235,6 @@ uint8_t move_straight_mm(int32_t mm)
 	return 1;
 }
 
-/* Kush: FW/BW from the Pi. The planner takes FW010 as exactly 100 mm, so
- * these brake early by the run-on and count every encoder edge. Task 2 calls
- * move_straight_mm() directly and is left exactly as it was: its distances
- * were tuned on the car with the run-on already in them. */
-uint8_t move_straight_exact_mm(int32_t mm)
-{
-    exact_straight = 1u;
-    uint8_t ok = move_straight_mm(mm);
-    exact_straight = 0u;
-    return ok;
-}
-
 uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 {
     if (motion_abort_requested()) return 0;
@@ -268,7 +254,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
     if (left) servo_us(SERVO_LEFT);
     else      servo_us(SERVO_RIGHT);
 
-    HAL_Delay(250); /* Allow servo to reach mechanical position */
+    HAL_Delay(SERVO_SETTLE_MS); /* Allow servo to reach mechanical position (calib.h) */
 
     reset_speed_pid();
     busy_flag    = 1;
@@ -464,6 +450,16 @@ void control_tick(void)
     int32_t right_delta = enc_right_delta;
     int32_t avg_delta   = (abs(left_delta) + abs(right_delta)) / 2;
 
+    /* Kush: rear-axle odometry for the turn test, before the idle check so
+     * it also follows the coast after a move. Heading is taken mid-tick.
+     * Read-only bookkeeping: nothing below depends on it. */
+    if (left_delta != 0 || right_delta != 0) {
+        float ds_mm  = 0.5f * (float)(left_delta + right_delta) * MM_PER_COUNT;
+        float hd_rad = (global_yaw_deg - 0.5f * delta_yaw) * (3.14159265f / 180.0f);
+        odo_x_mm += ds_mm * cosf(hd_rad);
+        odo_y_mm += ds_mm * sinf(hd_rad);
+    }
+
     if (current_mode == MODE_IDLE) {
         return;
     }
@@ -494,18 +490,10 @@ void control_tick(void)
     	case MODE_STRAIGHT:
 		{
 			/* 1. Track cumulative ticks for target distance */
-			if (exact_straight) {
-				/* Kush: in half-counts. avg_delta is (|l| + |r|) / 2 in integer
-				 * maths, which drops half a count whenever the sum is odd,
-				 * about a quarter count a tick. The car drove ~1.5 mm further
-				 * than it counted on a FW010 and ~5 mm on a FW100. */
-				straight_half_counts += abs(left_delta) + abs(right_delta);
-				accum_counts = straight_half_counts / 2;
-			} else {
-				accum_counts += avg_delta;
-			}
+			accum_counts += avg_delta;
+			const int32_t BRAKE_LEAD_COUNTS = 5/MM_PER_COUNT;
 
-			if (accum_counts >= target_counts_total) {
+			if (accum_counts >= target_counts_total - BRAKE_LEAD_COUNTS) {
 				stop_hardware(MOVE_DONE);
 				return;
 			}
@@ -591,11 +579,14 @@ void control_tick(void)
 				/* --- The Direct Gains --- */
 				float HEADING_KP = 50.0f;
 				float POS_KP     = 2.5f;
-				float STEER_KI   = 0.0f;
+				float STEER_KI   = 2.0f;
 				float STEER_KD   = 5.0f;
 				const int16_t MAX_STEER_TRIM = 220;
 
 				int16_t reverse_bias = 0;
+				if (dir_forward == -1){
+					reverse_bias = -20;
+				}
 
 				/* 4. Integral Accumulation (Auto-Trim) */
 				float combined_error = heading_error + ((float)pos_error * 0.1f);
@@ -675,9 +666,9 @@ void control_tick(void)
 			float braking_lead = 2.5f;
 			if (target_deg_total <= 45){
 				if (turn_left)
-					braking_lead = (dir_forward == 1) ? 4.5f : 4.3f;
+					braking_lead = (dir_forward == 1) ? 4.7f : 4.4f;
 				else
-					braking_lead = (dir_forward == 1) ? 4.5f : 3.7f;
+					braking_lead = (dir_forward == 1) ? 4.0f : 3.3f;
 			}
 			float remaining_deg = target_deg_total - accum_deg;
 
@@ -705,6 +696,13 @@ void control_tick(void)
 				const float DECEL_DEG = 20.0f;
 				if (remaining_deg < DECEL_DEG) {
 					target_base_speed = (float)(dir_forward * 30.0f); /* Crawl speed */
+				}
+			}
+
+			if (target_deg_total <= 45.0f){
+				const float SHORT_DECEL_DEG = 6.0f;
+				if (remaining_deg < SHORT_DECEL_DEG){
+					target_base_speed = (float)(dir_forward * 22.0f);
 				}
 			}
 

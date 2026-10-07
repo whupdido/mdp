@@ -35,13 +35,15 @@ void    motion_abort_clear(void);
 move_result_t motion_result(void); /* valid once motion_busy() is false */
 float   motion_yaw_deg(void);        /* ISR-integrated heading, deg, CCW + */
 
+/* Where the rear-axle centre has moved, in mm, integrated by the 100 Hz ISR
+   in every mode (idle too, so it catches the coast after a move): distance
+   from the mean of the two rear-wheel encoders, heading from the gyro. The
+   origin is arbitrary and x points along yaw 0, so take differences. Read
+   only by the turn test; nothing in the motion control uses it. */
+void    motion_odometry_mm(float *x_mm, float *y_mm);
+
 
 uint8_t move_straight_mm(int32_t mm);
-
-/* FW/BW from the Pi: as above, but comes to rest on the commanded distance
-   (brakes early by STRAIGHT_STOP_LEAD_*_MM and counts every encoder edge).
-   Task 2 keeps move_straight_mm(), which its distances were tuned against. */
-uint8_t move_straight_exact_mm(int32_t mm);
 
 /* Raw form: counts is the arc length in encoder counts. Used for calibration. */
 void move_turn(int8_t left, int8_t forward, int32_t counts);

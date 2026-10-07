@@ -244,8 +244,8 @@ static void dispatch(const char *cmd)
 
     int32_t arg = (strlen(cmd) >= 5u) ? atoi(cmd + 2) : 0;
 
-    if      (!strncmp(cmd, "FW", 2)) { begin_motion(cmd); move_straight_exact_mm( arg * 10); }
-    else if (!strncmp(cmd, "BW", 2)) { begin_motion(cmd); move_straight_exact_mm(-arg * 10); }
+    if      (!strncmp(cmd, "FW", 2)) { begin_motion(cmd); move_straight_mm( arg * 10); }
+    else if (!strncmp(cmd, "BW", 2)) { begin_motion(cmd); move_straight_mm(-arg * 10); }
     else if (!strncmp(cmd, "FL", 2)) { begin_motion(cmd); move_turn_deg(1, 1, arg); }
     else if (!strncmp(cmd, "FR", 2)) { begin_motion(cmd); move_turn_deg(0, 1, arg); }
     else if (!strncmp(cmd, "BL", 2)) { begin_motion(cmd); move_turn_deg(1, 0, arg); }

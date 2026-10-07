@@ -38,6 +38,7 @@
 #include "obstacle_nav.h"
 #include "sensors.h"
 #include "turn_test.h"
+#include "cal_programs.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -54,11 +55,32 @@
    you trust the closed loop. Set back to 0 afterwards. */
 #define SELFTEST 0
 
-/* Set to 1 to turn SW1 into the turning-radius test: each short press runs one
-   90 degree turn (5 x FR, 5 x FL, 5 x BR, 5 x BL, then a summary). Results go
-   to the OLED and to USART3 as "[TT]" lines. Long press still calibrates the
-   gyro. Set back to 0 for normal runs. */
-#define TURN_TEST 0
+/* SW1 calibration programs. Pick one with CAL_PROGRAM and flash. Hold SW1 for
+   2 s to lock the gyro bias, then tap SW1 to step through it. Results go to
+   the OLED and to USART3. Details at the top of cal_programs.c / turn_test.c.
+
+     CAL_OFF        normal runs: a tap shows the IR sensors.
+     CAL_STRAIGHT   FW/BW 10 cm and 100 cm, 5 of each: where every move stops,
+                    and how much it turns and drifts sideways on the way.
+                    Sets BRAKE_LEAD_COUNTS and the straight steering trim
+                    (STEER_KI, reverse_bias) in control.c.
+     CAL_ODOMETER   push the car by hand along a tape: live distance, wheel
+                    counts and heading; a tap zeroes it. Sets COUNTS_PER_REV.
+     CAL_TURN_FR    one kind of 30 degree turn, 5 runs, then one summary page:
+     CAL_TURN_FL    radius and angle, and how much to change that turn's
+     CAL_TURN_BR    braking lead. Sets TURN_RADIUS_*_MM in calib.h and the
+     CAL_TURN_BL    small-turn braking leads in control.c. TT_ANGLE in
+                    turn_test.c sets the angle.
+     CAL_TURN       the same for all four kinds in one go (20 runs).
+     CAL_SIX_FR     WRT4's check: six identical 30 degree turns of that kind
+     CAL_SIX_FL     in a row, which should leave the car facing exactly back.
+     CAL_SIX_BR     Half the gap between floor marks at the start and end is
+     CAL_SIX_BL     the radius.
+
+   A tap drives the car in every program except CAL_OFF and CAL_ODOMETER
+   (which free-wheels the motors instead), so set CAL_PROGRAM back to CAL_OFF
+   before a real run. */
+#define CAL_PROGRAM      CAL_TURN_BR
 
 /* USER CODE END PD */
 
@@ -148,6 +170,22 @@ void testSequence(){
 //	move_turn_deg(1, 1, 180); // turn left forward 180
 }
 
+/* The selected calibration program's ready screen: at boot, and again after
+   the gyro bias is locked. Nothing for CAL_OFF. */
+static void cal_ready_screen(void)
+{
+#if CAL_PROGRAM == CAL_TURN
+    turn_test_show_idle(TT_ALL);
+#elif CAL_IS_TURN_ONE(CAL_PROGRAM)
+    turn_test_show_idle(CAL_TURN_KIND(CAL_PROGRAM));
+#elif CAL_IS_SIX(CAL_PROGRAM)
+    cal_six_show_idle(CAL_TURN_KIND(CAL_PROGRAM));
+#elif CAL_PROGRAM == CAL_STRAIGHT
+    cal_straight_show_idle();
+#elif CAL_PROGRAM == CAL_ODOMETER
+    cal_odometer_start();
+#endif
+}
 /* USER CODE END 0 */
 
 /**
@@ -208,9 +246,7 @@ int main(void)
 #endif
 
   command_send("READY\r\n");
-#if TURN_TEST
-  turn_test_show_idle();
-#endif
+  cal_ready_screen();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -221,6 +257,9 @@ int main(void)
 
       /* USER CODE BEGIN 3 */
       command_poll();
+#if CAL_PROGRAM == CAL_ODOMETER
+      cal_odometer_poll();   /* redraws the live reading every 200 ms */
+#endif
       /* --- User Button (SW1 / PE0) --- *
        * Debounced, and waits for release before acting. The original read the
        * pin bare and called straight into the display, so one press redrew the
@@ -255,9 +294,7 @@ int main(void)
                       icm20948_calib_gyro_bias();
                       command_send("[IMU] Gyro bias locked.\r\n");
                       calibrated = 1;
-#if TURN_TEST
-                      turn_test_show_idle();
-#endif
+                      cal_ready_screen();
                   }
                   HAL_Delay(10); /* Small delay to prevent starving the CPU */
               }
@@ -276,17 +313,21 @@ int main(void)
               /* If it was just a quick press (< 2 seconds), do the normal action */
               if (!long_press_triggered)
               {
-#if TURN_TEST
-                  turn_test_step();
+#if CAL_PROGRAM == CAL_TURN
+                  turn_test_step(TT_ALL);
+#elif CAL_IS_TURN_ONE(CAL_PROGRAM)
+                  turn_test_step(CAL_TURN_KIND(CAL_PROGRAM));
+#elif CAL_IS_SIX(CAL_PROGRAM)
+                  cal_six_step(CAL_TURN_KIND(CAL_PROGRAM));
+#elif CAL_PROGRAM == CAL_STRAIGHT
+                  cal_straight_step();
+#elif CAL_PROGRAM == CAL_ODOMETER
+                  cal_odometer_zero();
 #else
                   display_both_sensors_oled();
 #endif
                   //HAL_Delay(1000);
                   //task_2();
-//                  for (int i = 0; i < 6; i++){
-//                	  move_turn_deg(0 ,0,30);
-//                	  HAL_Delay(250);
-//                  }
               }
           }
       }
