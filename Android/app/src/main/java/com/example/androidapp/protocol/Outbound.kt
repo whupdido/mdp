@@ -88,6 +88,16 @@ object Outbound {
     const val COMPUTE = "COMPUTE"
 
     /**
+     * Forget every obstacle on the Pi.
+     *
+     * Sent first in every full-map publish, so the map the Pi plans over is
+     * exactly the one on screen. Without it the Pi only ever forgot an
+     * obstacle on [sub], and Undo, Clear and Demo never send one -- so
+     * obstacles removed that way lived on as ghosts the planner routed to.
+     */
+    const val CLEAR = "CLEAR"
+
+    /**
      * Second press: check the robot is actually fit to run, then hold.
      *
      * Worth its own press because it happens in the preparation window,

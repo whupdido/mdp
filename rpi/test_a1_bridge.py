@@ -170,7 +170,19 @@ for cmd in ["ADD,B1,(10)", "ADD,GARBAGE", "SUB,", "FACE,B2,Q", "FACE,B2"]:
 # Task 1's triggers and start pose belong to run_task1.py. This bridge must
 # still not answer ERR -- the tablet paints that red, and the button is not
 # the thing at fault.
-for cmd in ["START", "COMPUTE", "ROBOT,1,1,N", "ROBOT,18,3,E"]:
+# SETUP and PLAN get a plan failure instead, so the tablet un-freezes and
+# drops back to SETUP rather than waiting forever on the wrong program.
+for cmd in ["COMPUTE", "ARM"]:
+    to_android, to_stm = run([cmd])
+    check(f"{cmd} gets a plan failure, not silence", to_android[-1:],
+          ["STATUS,PLAN,FAILED,wrong program on the Pi - run run_task1.py"])
+    check(f"{cmd} never reaches the board", to_stm, [])
+
+to_android, to_stm = run(["CLEAR"])
+check("CLEAR is acknowledged as a map edit", to_android[-1:], ["STATUS,MAP,CLEAR"])
+check("CLEAR never reaches the board", to_stm, [])
+
+for cmd in ["START", "ROBOT,1,1,N", "ROBOT,18,3,E"]:
     to_android, to_stm = run([cmd])
     check(
         f"{cmd} is not refused",
