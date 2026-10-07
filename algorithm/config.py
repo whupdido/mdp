@@ -301,7 +301,7 @@ def task1_robot_config(
             rear_axle_to_body_center_forward_cm=REAR_AXLE_TO_BODY_CENTRE_CM,
         ),
         camera=replace(base.camera, forward_offset_cm=REAR_AXLE_TO_CAMERA_CM),
-        observation_lateral_offsets_cm=(0.0, 23.0, -23.0),
+        observation_lateral_offsets_cm=(0.0, 24.5, -24.5),
         guaranteed_max_candidates_per_target=3,
         max_expanded_nodes=5000,
         adaptive_initial_expansions=200,

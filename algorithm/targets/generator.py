@@ -110,7 +110,7 @@ def generate_observation_candidates(
         )
 
         effective_standoff_cm = (
-        standoff_cm + 15.0
+        standoff_cm + 0.0
         if lateral_offset_cm != 0.0
         else standoff_cm
 )
@@ -120,7 +120,7 @@ def generate_observation_candidates(
             face,
             lateral_offset_cm,
             config,
-            standoff_cm=standoff_cm,
+            standoff_cm=effective_standoff_cm,
         )
 
         desired_heading_rad = math.atan2(
@@ -129,20 +129,36 @@ def generate_observation_candidates(
         )
 
         if lateral_offset_cm == 0.0:
+            # Center candidate stays exactly straight-on.
             heading_rad = desired_heading_rad
         else:
-            heading_step_rad = math.radians(30.0)
+            heading_step_rad = math.radians(
+                min(config.search_turn_angles_deg or config.turn_angles_deg)
+            )
 
-            if lateral_offset_cm < 0.0:
-                # Left-side candidate: round toward the image
-                heading_rad = math.ceil(
-                    desired_heading_rad / heading_step_rad
-                ) * heading_step_rad
-            else:
-                # Right-side candidate: round toward the image
-                heading_rad = math.floor(
-                    desired_heading_rad / heading_step_rad
-                ) * heading_step_rad
+            lower = math.floor(desired_heading_rad / heading_step_rad) * heading_step_rad
+            upper = math.ceil(desired_heading_rad / heading_step_rad) * heading_step_rad
+
+            # Direction from the camera toward the image.
+            target_dx = target_point.x_cm - desired_camera.x_cm
+            target_dy = target_point.y_cm - desired_camera.y_cm
+            target_length = math.hypot(target_dx, target_dy)
+
+            target_dx /= target_length
+            target_dy /= target_length
+
+            # Direction the robot/camera would face for each reachable heading.
+            lower_dx = math.cos(lower)
+            lower_dy = math.sin(lower)
+
+            upper_dx = math.cos(upper)
+            upper_dy = math.sin(upper)
+
+            # Dot product = how directly the heading points toward the image.
+            lower_dot = target_dx * lower_dx + target_dy * lower_dy
+            upper_dot = target_dx * upper_dx + target_dy * upper_dy
+
+            heading_rad = lower if lower_dot >= upper_dot else upper
 
         pose = rear_axle_pose_for_camera(
             desired_camera,
