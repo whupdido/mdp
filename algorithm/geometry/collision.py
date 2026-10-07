@@ -93,14 +93,18 @@ def footprint_within_arena(
 
     if not math.isfinite(arena_size_cm) or arena_size_cm <= 0.0:
         raise ValueError("arena_size_cm must be positive and finite")
+    
+    arena_buffer = 2.0
+    
+    total_allowance = NUMERIC_TOLERANCE_CM + arena_buffer
 
     return all(
-        -NUMERIC_TOLERANCE_CM
+        -total_allowance
         <= point.x_cm
-        <= arena_size_cm + NUMERIC_TOLERANCE_CM
-        and -NUMERIC_TOLERANCE_CM
+        <= arena_size_cm + total_allowance
+        and -total_allowance
         <= point.y_cm
-        <= arena_size_cm + NUMERIC_TOLERANCE_CM
+        <= arena_size_cm + total_allowance
         for point in footprint
     )
 
