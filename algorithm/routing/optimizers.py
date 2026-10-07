@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import math
 from dataclasses import dataclass
 
 from .models import (
@@ -64,7 +65,22 @@ class ExhaustiveRouteOptimizer:
         if not target_ids:
             return RouteOptimizationResult(RouteOptimizationSolution((), (), 0.0), 1, 0)
 
+        # --- BRANCH AND BOUND OPTIMIZATION ---
+        # 1. Establish an aggressive initial upper bound using the greedy NN router.
+        # This allows the exhaustive search to instantly prune permutations that are 
+        # mathematically guaranteed to be slower than a path we've already found.
+        nn_solution = NearestNeighbourRouteOptimizer().optimize(graph).solution
         best_complete: _PartialRoute | None = None
+        global_upper_bound = math.inf
+        
+        if nn_solution is not None:
+            global_upper_bound = nn_solution.cost
+            best_complete = _PartialRoute(
+                cost=nn_solution.cost,
+                endpoints=nn_solution.endpoints,
+                entries=nn_solution.entries,
+            )
+
         permutations_evaluated = 0
         transitions_evaluated = 0
         # Different permutations share many leading target layers. Reusing a
@@ -91,11 +107,14 @@ class ExhaustiveRouteOptimizer:
                         entry = graph.entry(graph.start, endpoint)
                         edge_cost = entry.selected_cost
                         if edge_cost is not None:
-                            next_layer[endpoint] = _PartialRoute(
+                            partial = _PartialRoute(
                                 edge_cost,
                                 (endpoint,),
                                 (entry,),
                             )
+                            # PRUNE: Only keep branches strictly competitive with our best known route
+                            if partial.cost <= global_upper_bound + _COST_EPSILON:
+                                next_layer[endpoint] = partial
                 else:
                     for endpoint in graph.candidates_for(target_id):
                         best_endpoint: _PartialRoute | None = None
@@ -106,10 +125,13 @@ class ExhaustiveRouteOptimizer:
                                 endpoint,
                                 graph.entry(previous_endpoint, endpoint),
                             )
-                            if candidate is not None and _is_better(candidate, best_endpoint):
-                                best_endpoint = candidate
+                            # PRUNE: Abort extension if it exceeds the global upper bound
+                            if candidate is not None and candidate.cost <= global_upper_bound + _COST_EPSILON:
+                                if _is_better(candidate, best_endpoint):
+                                    best_endpoint = candidate
                         if best_endpoint is not None:
                             next_layer[endpoint] = best_endpoint
+                            
                 prefix_layers[prefix] = next_layer
                 layer = next_layer
                 if not layer:
@@ -118,6 +140,7 @@ class ExhaustiveRouteOptimizer:
             for partial in layer.values():
                 if len(partial.endpoints) == len(target_ids) and _is_better(partial, best_complete):
                     best_complete = partial
+                    global_upper_bound = partial.cost  # TIGHTEN THE UPPER BOUND
 
         solution = None
         if best_complete is not None:
