@@ -12,7 +12,7 @@ from algorithm.enums import Direction, PlanningStatus
 from algorithm.models import ArenaInput, GridCell, PlanningResult
 
 from .renderer import EditorPanelData, PygameRenderer, RenderOptions
-from .task1_editor_model import EditorState, Task1EditorController
+from .task1_editor_model import EditorState, Task1EditorController, REQUIRED_TASK1_TARGETS
 
 
 class Task1EditorApp:
@@ -102,29 +102,62 @@ class Task1EditorApp:
             selected_obstacle=selected_text,
         )
 
-    def _handle_mouse(self, button: int, position: tuple[int, int]) -> None:
+    def _handle_mouse(
+        self,
+        button: int,
+        position: tuple[int, int],
+    ) -> None:
         cell = self._grid_cell_at(position)
+
         if cell is None:
             return
-        obstacle = next((item for item in self.controller.obstacles if item.cell == cell), None)
+
+        obstacle = next(
+            (item for item in self.controller.obstacles if item.cell == cell),
+            None,
+        )
+
         try:
             if button == 1:
                 if obstacle is not None:
-                    self.selected_obstacle_id = obstacle.obstacle_id
+                    # Clicking the selected obstacle again = deselect
+                    if self.selected_obstacle_id == obstacle.obstacle_id:
+                        self.selected_obstacle_id = None
+                    else:
+                        self.selected_obstacle_id = obstacle.obstacle_id
+
                 elif self.selected_obstacle_id is not None:
-                    self.controller.move_obstacle(self.selected_obstacle_id, cell)
-                else:
-                    obstacle_id = next(
-                        value
-                        for value in range(1, 6)
-                        if all(item.obstacle_id != value for item in self.controller.obstacles)
+                    # Click empty cell = move selected obstacle
+                    self.controller.move_obstacle(
+                        self.selected_obstacle_id,
+                        cell,
                     )
-                    self.controller.add_obstacle(obstacle_id, cell, Direction.NORTH)
+
+                else:
+                    # Nothing selected = add new obstacle
+                    obstacle_id = (
+                        max(
+                            (
+                                item.obstacle_id
+                                for item in self.controller.obstacles
+                            ),
+                            default=0,
+                        )
+                        + 1
+                    )
+                    self.controller.add_obstacle(
+                        obstacle_id,
+                        cell,
+                        Direction.NORTH,
+                    )
                     self.selected_obstacle_id = obstacle_id
+
             elif button == 3 and obstacle is not None:
                 self.controller.remove_obstacle(obstacle.obstacle_id)
+
                 if self.selected_obstacle_id == obstacle.obstacle_id:
                     self.selected_obstacle_id = None
+
         except (KeyError, RuntimeError, ValueError, StopIteration) as exc:
             self.controller.status_message = str(exc)
 

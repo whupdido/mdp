@@ -33,9 +33,10 @@ from .models import (
 
 _COST_EPSILON = 1e-12
 TURN_DURATION_BY_ANGLE = {
-    30.0: 1.5,
-    45.0: 1.75,   # temporary estimate; calibrate this
-    60.0: 2.0,
+    15.0: 1.6,
+    30.0: 2.4,
+    45.0: 2.4,   # temporary estimate; calibrate this
+    60.0: 2.4,
     90.0: 2.4,
 }
 
