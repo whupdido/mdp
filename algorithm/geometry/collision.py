@@ -65,7 +65,12 @@ def polygons_intersect(
     first: Sequence[Point],
     second: Sequence[Point],
 ) -> bool:
-    """Return whether two convex polygons overlap or touch using SAT."""
+    """Return whether two convex polygons overlap or touch using SAT.
+
+    Physical contact is considered a collision. ``NUMERIC_TOLERANCE_CM`` only
+    absorbs floating-point noise and is not a substitute for safety margin.
+    """
+
     axes = _separating_axes(first) + _separating_axes(second)
 
     for axis in axes:
@@ -86,21 +91,20 @@ def footprint_within_arena(
     arena_size_cm: float,
 ) -> bool:
     """Return whether every footprint corner lies inside the square arena."""
+
     if not math.isfinite(arena_size_cm) or arena_size_cm <= 0.0:
         raise ValueError("arena_size_cm must be positive and finite")
 
     return all(
-        -NUMERIC_TOLERANCE_CM <= point.x_cm <= arena_size_cm + NUMERIC_TOLERANCE_CM
-        and -NUMERIC_TOLERANCE_CM <= point.y_cm <= arena_size_cm + NUMERIC_TOLERANCE_CM
+        -NUMERIC_TOLERANCE_CM
+        <= point.x_cm
+        <= arena_size_cm + NUMERIC_TOLERANCE_CM
+        and -NUMERIC_TOLERANCE_CM
+        <= point.y_cm
+        <= arena_size_cm + NUMERIC_TOLERANCE_CM
         for point in footprint
     )
 
-
-# Localized bindings to bypass Python's global namespace dictionary lookups
-_min = min
-_max = max
-_abs = abs
-_hypot = math.hypot
 
 def is_pose_collision_free(
     pose: Pose,
@@ -109,35 +113,36 @@ def is_pose_collision_free(
 ) -> bool:
     """Authoritative collision query for a robot pose in an arena."""
 
-    footprint = robot_footprint(pose, config.robot)
+    # The robot footprint already contains the normal robot safety margin.
+    # This margin applies to both arena walls and obstacles.
+    footprint = robot_footprint(
+        pose,
+        config.robot,
+    )
 
-    # 1. Fast list comprehension extraction (avoids generator allocations)
-    arena_size = config.arena_size_cm
-    tol = NUMERIC_TOLERANCE_CM
-    
-    fp_x = [p.x_cm for p in footprint]
-    fp_y = [p.y_cm for p in footprint]
-    num_points = len(fp_x)
+    # Keep the existing wall/boundary behaviour unchanged.
+    if not footprint_within_arena(
+        footprint,
+        config.arena_size_cm,
+    ):
+        return False
 
-    # 2. Inlined arena boundary check
-    for i in range(num_points):
-        x, y = fp_x[i], fp_y[i]
-        if x < -tol or x > arena_size + tol or y < -tol or y > arena_size + tol:
-            return False
-
-    fp_min_x = _min(fp_x)
-    fp_max_x = _max(fp_x)
-    fp_min_y = _min(fp_y)
-    fp_max_y = _max(fp_y)
-
-    # 3. Lazy SAT Context
-    # We only compute the footprint's normals and projections if the robot
-    # is mathematically guaranteed to be overlapping an obstacle's AABB.
-    axes_computed = False
-    fp_axes_x = []
-    fp_axes_y = []
-    fp_mins = []
-    fp_maxs = []
+    footprint_min_x = min(
+        point.x_cm
+        for point in footprint
+    )
+    footprint_max_x = max(
+        point.x_cm
+        for point in footprint
+    )
+    footprint_min_y = min(
+        point.y_cm
+        for point in footprint
+    )
+    footprint_max_y = max(
+        point.y_cm
+        for point in footprint
+    )
 
     for obstacle in arena.obstacles:
         bounds = _cached_obstacle_bounds(
@@ -147,55 +152,21 @@ def is_pose_collision_free(
             config.obstacle_buffer_cm,
         )
 
-        o_min_x, o_min_y, o_max_x, o_max_y, _ = bounds
-
-        # 4. Fast AABB rejection 
+        # Fast AABB rejection using the BUFFER-EXPANDED obstacle.
         if (
-            o_max_x < fp_min_x - tol
-            or o_min_x > fp_max_x + tol
-            or o_max_y < fp_min_y - tol
-            or o_min_y > fp_max_y + tol
+            bounds[2] < footprint_min_x
+            or bounds[0] > footprint_max_x
+            or bounds[3] < footprint_min_y
+            or bounds[1] > footprint_max_y
         ):
             continue
 
-        # 5. Generate Footprint Normals (Only runs once per pose, and only if near an obstacle)
-        if not axes_computed:
-            for i in range(num_points):
-                nxt = (i + 1) % num_points
-                edge_x = fp_x[nxt] - fp_x[i]
-                edge_y = fp_y[nxt] - fp_y[i]
-
-                if _abs(edge_x) <= tol and _abs(edge_y) <= tol:
-                    continue
-
-                length = _hypot(edge_x, edge_y)
-                ax_x = -edge_y / length
-                ax_y = edge_x / length
-                
-                fp_axes_x.append(ax_x)
-                fp_axes_y.append(ax_y)
-                
-                projs = [fp_x[j] * ax_x + fp_y[j] * ax_y for j in range(num_points)]
-                fp_mins.append(_min(projs))
-                fp_maxs.append(_max(projs))
-            
-            axes_computed = True
-
-        # 6. Specialized SAT Test
-        # We skip evaluating the obstacle's axes because the AABB check already did it.
-        # We only project the 4 AABB obstacle corners onto the robot footprint's axes.
-        op_x = (o_min_x, o_max_x, o_max_x, o_min_x)
-        op_y = (o_min_y, o_min_y, o_max_y, o_max_y)
-
-        collision = True
-        for ax_x, ax_y, f_min, f_max in zip(fp_axes_x, fp_axes_y, fp_mins, fp_maxs):
-            o_projs = [x * ax_x + y * ax_y for x, y in zip(op_x, op_y)]
-            
-            if f_max < _min(o_projs) - tol or _max(o_projs) < f_min - tol:
-                collision = False
-                break
-                
-        if collision:
+        # Precise polygon-vs-polygon collision test using the
+        # BUFFER-EXPANDED obstacle polygon.
+        if polygons_intersect(
+            footprint,
+            bounds[4],
+        ):
             return False
 
     return True
