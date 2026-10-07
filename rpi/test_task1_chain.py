@@ -353,13 +353,34 @@ fresh()
 install_fakes([], {})
 algo_client.server_reachable = lambda timeout=2.0: True
 
+# A board that is genuinely dead says nothing to anything -- not the move,
+# not the status probes, not a resend. (Kenneth's wait_for_stm_reply now
+# probes and resends a command that went unanswered, so a board that was
+# only silent once recovers; this used to model that, and passed for the
+# wrong reason until the recovery landed.)
+class DeadBoard(Port):
+    def write(self, data):
+        self.written.append(data.decode("ascii").rstrip("\n"))
+
+    def readline(self):
+        return b""
+
+
 android = Port()
-asleep = Board(fail_on=1, reply="NO_REPLY")
-asleep.pending = []
-check("a board that does not answer fails pre-flight",
-      run_task1.arm_and_wait(asleep, android), False)
+patience = a1_bridge.STM_TIMEOUT_SECONDS
+a1_bridge.STM_TIMEOUT_SECONDS = 0.5          # 25 s on the robot; not in a test
+dead = DeadBoard()
+check("a board that never answers fails pre-flight",
+      run_task1.arm_and_wait(dead, android), False)
 check_contains("and the tablet is told why", android.written,
                "STATUS,PLAN,FAILED,board answered NO_REPLY")
+a1_bridge.STM_TIMEOUT_SECONDS = patience
+
+# And the recovery itself: silent once, then awake. Pre-flight should pass,
+# because a single dropped line is what the resend exists to absorb.
+android = Port()
+check("a board that drops one reply still passes pre-flight",
+      run_task1.arm_and_wait(Board(fail_on=1, reply="NO_REPLY"), android), True)
 
 android = Port()
 algo_client.server_reachable = lambda timeout=2.0: False
