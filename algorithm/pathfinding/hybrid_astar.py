@@ -331,6 +331,8 @@ class HybridAStarPlanner:
         expanded: list[MotionPrimitive] = []
         angles = self.config.search_turn_angles_deg or self.config.turn_angles_deg
         for primitive in self.config.motion.primitives:
+            if primitive.steering is Steering.STRAIGHT and primitive.gear is Gear.REVERSE:
+                continue
             if primitive.steering is Steering.STRAIGHT or primitive.radius_cm is None:
                 expanded.append(primitive)
                 continue
