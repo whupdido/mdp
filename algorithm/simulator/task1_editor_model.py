@@ -25,7 +25,7 @@ from .headless import HeadlessSimulator, PlaybackState, simulation_steps_from_ex
 from .task1_demo import task1_demo_config
 
 
-REQUIRED_TASK1_TARGETS = 6
+REQUIRED_TASK1_TARGETS = 8
 DEFAULT_RANDOM_RETRY_LIMIT = 50
 START_ZONE_MAX_CELL = START_ZONE_GRID_CELLS - 1
 MIN_RANDOM_CELL_SEPARATION_SQUARED = 9
@@ -161,16 +161,14 @@ def validate_editor_arena(
     config: PlanningConfig,
 ) -> tuple[PlanningIssue, ...]:
     issues: list[PlanningIssue] = []
-    if len(arena.obstacles) != REQUIRED_TASK1_TARGETS:
-        issues.append(
-            PlanningIssue(
-                "incorrect_target_count",
-                f"Task 1 requires exactly {REQUIRED_TASK1_TARGETS} targets; found {len(arena.obstacles)}",
-            )
-        )
+
     issues.extend(arena.task1_issues())
+
     for obstacle in arena.obstacles:
-        if obstacle.cell.x <= START_ZONE_MAX_CELL and obstacle.cell.y <= START_ZONE_MAX_CELL:
+        if (
+            obstacle.cell.x <= START_ZONE_MAX_CELL
+            and obstacle.cell.y <= START_ZONE_MAX_CELL
+        ):
             issues.append(
                 PlanningIssue(
                     "obstacle_in_start_zone",
@@ -178,6 +176,7 @@ def validate_editor_arena(
                     obstacle_id=obstacle.obstacle_id,
                 )
             )
+
     if not is_pose_collision_free(arena.start_pose, arena, config):
         issues.append(
             PlanningIssue(
@@ -185,6 +184,7 @@ def validate_editor_arena(
                 "the edited obstacles collide with the robot at its authoritative start pose",
             )
         )
+
     return tuple(issues)
 
 
@@ -680,7 +680,7 @@ class Task1EditorController:
                 adaptive_max_expansions=3000,
                 max_expanded_nodes=3000,
                 local_planning_timeout_s=2.0,
-                overall_planning_timeout_s=120.0,
+                overall_planning_timeout_s=150.0,
             )
             self._random_solvable_planner = Task1Planner(
                 random_config,
@@ -697,7 +697,7 @@ class Task1EditorController:
         self.planning_result: PlanningResult | None = None
         self.simulator: HeadlessSimulator | None = None
         self.state = EditorState.EDITING
-        self.status_message = "Add exactly five targets"
+        self.status_message = "Add targets"
         self.random_attempts = 0
         self.last_random_diagnostics: tuple[RandomAttemptDiagnostic, ...] = ()
         self._refresh_editing_state()
@@ -722,8 +722,6 @@ class Task1EditorController:
         self._require_editable()
         if obstacle_id in self._obstacles:
             raise ValueError(f"target ID {obstacle_id} already exists")
-        if len(self._obstacles) >= REQUIRED_TASK1_TARGETS:
-            raise ValueError("the Task 1 editor accepts exactly five targets")
         updated = dict(self._obstacles)
         updated[obstacle_id] = Obstacle(obstacle_id, cell, face)
         self._replace_obstacles(updated)
@@ -755,7 +753,7 @@ class Task1EditorController:
             self._set_failed_result(result)
             return result
         self.state = EditorState.PLANNING
-        self.status_message = "Planning all five targets..."
+        self.status_message = f"Planning {len(self._arena.obstacles)} targets..."
         arena = self._arena
         result = self.plan_snapshot(arena)
         self.apply_planning_result(arena, result)
@@ -796,7 +794,7 @@ class Task1EditorController:
             self.status_message = issues[0].message
             return False
         self.state = EditorState.PLANNING
-        self.status_message = "Planning all five targets..."
+        self.status_message = f"Planning {len(self._arena.obstacles)} targets..."
         return True
 
     def randomize(

@@ -135,13 +135,15 @@ class Task1EditorApp:
 
                 else:
                     # Nothing selected = add new obstacle
-                    obstacle_id = next(
-                        value
-                        for value in range(1, REQUIRED_TASK1_TARGETS + 1)
-                        if all(
-                            item.obstacle_id != value
-                            for item in self.controller.obstacles
+                    obstacle_id = (
+                        max(
+                            (
+                                item.obstacle_id
+                                for item in self.controller.obstacles
+                            ),
+                            default=0,
                         )
+                        + 1
                     )
                     self.controller.add_obstacle(
                         obstacle_id,
