@@ -80,7 +80,7 @@
    A tap drives the car in every program except CAL_OFF and CAL_ODOMETER
    (which free-wheels the motors instead), so set CAL_PROGRAM back to CAL_OFF
    before a real run. */
-#define CAL_PROGRAM      CAL_TURN_BR
+#define CAL_PROGRAM      CAL_OFF
 
 /* USER CODE END PD */
 

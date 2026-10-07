@@ -180,10 +180,7 @@ typedef struct {
 
 /* Run order: case = run % CS_NCASES, so each round goes out and back. */
 static const cs_case_t CS_CASES[] = {
-    { "FW010",   100 },
-    { "BW010",  -100 },
     { "FW100",  1000 },
-    { "BW100", -1000 },
 };
 #define CS_NCASES   4u
 #define CS_REPEATS  5u

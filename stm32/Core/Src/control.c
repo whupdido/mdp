@@ -164,8 +164,9 @@ uint8_t move_straight_mm(int32_t mm)
     if (motion_abort_requested()) return 0;
     if (mm == 0) { last_result = MOVE_DONE; return 1; } /* Zhenxi: see report_result() in command.c */
 
-    /* Lock wheels to calibrated center at launch */
-	servo_us(SERVO_CENTRE);
+    /* Lock wheels to calibrated center at launch (plus the reverse trim when
+       backing up, so the wheels are already there as the car starts) */
+	servo_us((uint16_t)(SERVO_CENTRE + ((mm < 0) ? SERVO_REVERSE_TRIM_US : 0)));
 	HAL_Delay(150);
 
     target_counts_total       = (int32_t)(fabsf((float)mm) / MM_PER_COUNT);
@@ -556,9 +557,15 @@ void control_tick(void)
 			const int32_t PID_BYPASS_TICKS = 60/MM_PER_COUNT;
 			uint8_t is_small_distance = (target_counts_total <= PID_BYPASS_TICKS);
 
+			/* Kush: fixed steering trim while reversing (calib.h). Reversing,
+			 * the front wheels get pushed off centre and the car drifted to its
+			 * right. Unlike the old reverse_bias it is not faded with speed: the
+			 * push is there in the slow start and stop too. */
+			int16_t reverse_trim = (dir_forward == -1) ? (int16_t)SERVO_REVERSE_TRIM_US : 0;
+
 			if (is_small_distance) {
 				/* Lock wheels dead center for tiny movements */
-				servo_us(SERVO_CENTRE);
+				servo_us((uint16_t)(SERVO_CENTRE + reverse_trim));
 			} else {
 				/* --- SENSOR FUSION: IMU + Encoders (NORMAL PID LOGIC) --- */
 
@@ -577,16 +584,11 @@ void control_tick(void)
 				float rate_error = (float)(abs(right_delta) - abs(left_delta));
 
 				/* --- The Direct Gains --- */
-				float HEADING_KP = 50.0f;
-				float POS_KP     = 2.5f;
-				float STEER_KI   = 2.0f;
-				float STEER_KD   = 5.0f;
+				float HEADING_KP = 130.0f;
+				float POS_KP     = 0.0f;
+				float STEER_KI   = 0.0f;//2.0f;
+				float STEER_KD   = 3.5f;//5.0f;
 				const int16_t MAX_STEER_TRIM = 220;
-
-				int16_t reverse_bias = 0;
-				if (dir_forward == -1){
-					reverse_bias = -20;
-				}
 
 				/* 4. Integral Accumulation (Auto-Trim) */
 				float combined_error = heading_error + ((float)pos_error * 0.1f);
@@ -599,8 +601,7 @@ void control_tick(void)
 				int16_t steer_correction = (int16_t)((heading_error * HEADING_KP) +
 													 ((float)pos_error * POS_KP) +
 													 (steer_integral * STEER_KI) +
-													 (rate_error * STEER_KD) +
-													 reverse_bias);
+													 (rate_error * STEER_KD));
 
 				/* Understeer Fade for Deceleration */
 				float speed_ratio = fabsf(current_speed_ramp) / (float)SPEED_STRAIGHT;
@@ -611,7 +612,7 @@ void control_tick(void)
 				if (steer_correction < -MAX_STEER_TRIM) steer_correction = -MAX_STEER_TRIM;
 
 				/* Apply to servo */
-				uint16_t commanded_servo = (uint16_t)(SERVO_CENTRE + steer_correction);
+				uint16_t commanded_servo = (uint16_t)(SERVO_CENTRE + reverse_trim + steer_correction);
 				servo_us(commanded_servo);
 			}
 

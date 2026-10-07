@@ -14,7 +14,7 @@
    Before the weights: a 1 m hand-push gave 7318 counts (1494.0), corroborated
    by two driven runs (200 mm -> 210 mm, 500 mm -> 485 mm). The nameplate 1560
    was wrong.                                                               */
-#define COUNTS_PER_REV      1515.3f
+#define COUNTS_PER_REV      1494.0f
 
 /* Wheel diameter in mm, measured under load                                */
 #define WHEEL_DIA_MM        65.0f
@@ -42,6 +42,18 @@
    250 and again with 400. If the radii differ by more than their spread, the
    servo was not reaching lock in time, so keep the longer value.            */
 #define SERVO_SETTLE_MS     250u
+
+/* Steering trim while reversing straight (FW is untouched), in microseconds
+   added to SERVO_CENTRE. Negative steers left. Reversing, caster pushes the
+   front wheels off centre instead of centring them, and the car drifted to
+   its right; this holds the wheels the other way for the whole move. Replaces
+   the old reverse_bias of -20 in control.c, which faded out at low speed.
+   Scale: full left lock is 500 us for roughly 27 deg at the wheels (the
+   282 mm FL radius with a wheelbase of about 15 cm), so about 18 us per
+   degree; -55 is about 3 deg.
+   Tune with CAL_STRAIGHT: BW100's "side" should read about 0 (+ = left).
+   Still drifting right: more negative. Now drifting left: less negative.    */
+#define SERVO_REVERSE_TRIM_US   (-55)
 
 /* --- Turn geometry, MEASURED on hardware ---
    Current values: tape measured 07-Oct-2026 with the front weights on, on
