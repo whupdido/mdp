@@ -88,11 +88,18 @@ class ArenaView @JvmOverloads constructor(
     var replayPose: RobotPose? = null
         set(value) {
             field = value
-            if (value != null) {
-                animator?.cancel()
-                poseX = value.x.toFloat(); poseY = value.y.toFloat()
-                poseBearing = value.facing.bearingDeg
-            }
+            // Snap the drawn robot to whatever should be shown now -- the
+            // replay frame, or the live robot once replay ends.
+            //
+            // This used to move it only on the way in. Closing replay left it
+            // drawn wherever the scrubber stopped, while dragging hit-tests
+            // the live pose: you grabbed the robot you could see and the
+            // touch landed somewhere else. Snapping rather than animating
+            // back is deliberate -- an animation would claim it drove there.
+            animator?.cancel()
+            val shown = value ?: state.robot
+            poseX = shown.x.toFloat(); poseY = shown.y.toFloat()
+            poseBearing = shown.facing.bearingDeg
             invalidate()
         }
 
@@ -622,6 +629,14 @@ class ArenaView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (cell <= 0f) return false
+
+        // Replay is for watching. The robot on screen is a past frame while
+        // every hit-test below checks the live map, so a touch here would edit
+        // something that is not what you are looking at: dragging the robot
+        // you can see dropped a stray obstacle where you let go, and an
+        // obstacle like that is sent to the Pi and planned around. The touch
+        // is swallowed; the replay bar's own controls are a separate view.
+        if (replayPose != null) return true
         val ex = event.x
         val ey = event.y
 
