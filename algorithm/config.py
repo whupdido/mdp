@@ -147,7 +147,7 @@ class PlanningConfig:
     adaptive_max_expansions: int = 100
     adaptive_growth_factor: float = 5.0
     local_planning_timeout_s: float = 2.0
-    overall_planning_timeout_s: float = 120.0
+    overall_planning_timeout_s: float = 150.0
 
     def __post_init__(self) -> None:
         offsets = tuple(self.observation_lateral_offsets_cm)
@@ -297,7 +297,7 @@ def task1_robot_config(
         base,
         robot=replace(
             base.robot,
-            safety_margin_cm=2.0,
+            safety_margin_cm=0.0,
             rear_axle_to_body_center_forward_cm=REAR_AXLE_TO_BODY_CENTRE_CM,
         ),
         camera=replace(base.camera, forward_offset_cm=REAR_AXLE_TO_CAMERA_CM),
@@ -307,7 +307,7 @@ def task1_robot_config(
         adaptive_initial_expansions=200,
         adaptive_max_expansions=30000,
         local_planning_timeout_s=15.0,
-        overall_planning_timeout_s=120.0,
+        overall_planning_timeout_s=150.0,
         turn_angles_deg=(15.0, 30.0, 45.0, 60.0, 90.0),
         search_turn_angles_deg=(30.0,),
         heading_bin_rad=math.radians(15.0),
