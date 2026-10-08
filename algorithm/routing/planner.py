@@ -174,21 +174,28 @@ class Task1Planner:
             for group in candidate_groups
         )
 
-        if mode is RoutingMode.FULL_OPTIMIZATION:
-            activation_tiers = (
-                tuple(
-                    range(
-                        self.config.guaranteed_max_candidates_per_target
-                    )
-                ),
-            )
-        else:
-            activation_tiers = self.config.candidate_activation_tiers
+        # Candidate activation is deliberately staged.  A geometrically
+        # valid center candidate is the preferred observation pose, but it
+        # is not guaranteed to be reachable by Hybrid A*.  Start with the
+        # center candidate (rank 0), and only activate side candidates when
+        # the currently active candidates cannot produce a complete route.
+        #
+        # This is especially important for the editor/FEASIBILITY mode:
+        # checking every side candidate up front can multiply the number of
+        # expensive pairwise Hybrid A* searches.  The pairwise cache means
+        # that paths already checked at an earlier tier are retained.
+        activation_tiers = (
+            tuple(
+                range(
+                    self.config.guaranteed_max_candidates_per_target
+                )
+            ),
+        ) if mode is RoutingMode.FULL_OPTIMIZATION else self.config.candidate_activation_tiers
 
         graph = None
         optimization = None
 
-        tiers_activated = 1
+        tiers_activated = 0
         total_permutations = 0
         total_transitions = 0
 
@@ -196,59 +203,115 @@ class Task1Planner:
 
         planning_budget_exhausted = False
 
-        # Each obstacle chooses its own best candidate tier.
-        #
-        # If 20C is valid for an obstacle:
-        #     use only 20C.
-        #
-        # If 20C is invalid:
-        #     use the next available candidates, e.g. 20L / 20R.
-        #
-        # This prevents one obstacle needing a fallback candidate from
-        # forcing every other obstacle to use its fallback candidates.
-        active_groups = tuple(
-            tuple(
-                candidate
-                for candidate in group
-                if candidate.preference_rank
-                == min(candidate.preference_rank for candidate in group)
-            )
+        # Track the highest activated preference rank for each target.
+        # Every target starts with its best geometrically-valid candidate.
+        # Later tiers are added only for targets that still have no reachable
+        # candidate.
+        activated_ranks = [
+            {min(candidate.preference_rank for candidate in group)}
             for group in valid_by_target
-        )
+        ]
 
-        graph = self._build_graph(
-            arena,
-            active_groups,
-            objective,
-            deadline_monotonic=(
-                started_at
-                + self.config.overall_planning_timeout_s
-            ),
-            minimum_expansion_budget=(
-                self.config.max_expanded_nodes
-                if mode is RoutingMode.FULL_OPTIMIZATION
-                else None
-            ),
-        )
+        def build_active_groups() -> tuple[tuple, ...]:
+            return tuple(
+                tuple(
+                    candidate
+                    for candidate in group
+                    if candidate.preference_rank in activated_ranks[index]
+                )
+                for index, group in enumerate(valid_by_target)
+            )
 
-        optimization = self.route_optimizer.optimize(graph)
+        def targets_needing_fallback() -> set[int]:
+            assert graph is not None
 
-        total_permutations += (
-            optimization.permutations_evaluated
-        )
+            all_candidates = tuple(
+                endpoint
+                for group in graph.candidate_groups
+                for endpoint in group
+            )
 
-        total_transitions += (
-            optimization.candidate_transitions_evaluated
-        )
+            needing_fallback: set[int] = set()
 
-        if (
-            optimization.solution is None
-            and (
+            for group_index, group in enumerate(graph.candidate_groups):
+                if not group:
+                    continue
+
+                obstacle_id = group[0].obstacle_id
+                has_reachable_candidate = any(
+                    graph.entries.get((source, goal)) is not None
+                    and graph.entries[(source, goal)].succeeded
+                    for goal in group
+                    for source in (
+                        (graph.start,)
+                        + tuple(
+                            endpoint
+                            for endpoint in all_candidates
+                            if endpoint.obstacle_id != obstacle_id
+                        )
+                    )
+                )
+
+                if not has_reachable_candidate:
+                    needing_fallback.add(group_index)
+
+            return needing_fallback
+
+        # Keep adding the next configured tier only where it is needed.
+        # If a complete route exists, the loop stops immediately, so side
+        # candidates never become part of the search merely because they are
+        # geometrically valid.
+        for tier_index, tier in enumerate(activation_tiers, start=1):
+            tiers_activated = tier_index
+
+            if tier_index > 1:
+                fallback_targets = targets_needing_fallback()
+                if not fallback_targets:
+                    # No target has an individually unreachable candidate,
+                    # but the global route can still be infeasible because
+                    # of the ordering/continuity constraints.  In that case
+                    # progressively activate this tier for every target.
+                    fallback_targets = set(range(len(valid_by_target)))
+
+                for group_index in fallback_targets:
+                    activated_ranks[group_index].update(tier)
+
+            active_groups = build_active_groups()
+
+            graph = self._build_graph(
+                arena,
+                active_groups,
+                objective,
+                deadline_monotonic=(
+                    started_at
+                    + self.config.overall_planning_timeout_s
+                ),
+                minimum_expansion_budget=(
+                    self.config.max_expanded_nodes
+                    if mode is RoutingMode.FULL_OPTIMIZATION
+                    else None
+                ),
+            )
+
+            optimization = self.route_optimizer.optimize(graph)
+
+            total_permutations += (
+                optimization.permutations_evaluated
+            )
+
+            total_transitions += (
+                optimization.candidate_transitions_evaluated
+            )
+
+            if optimization.solution is not None:
+                break
+
+            if (
                 time.perf_counter() - started_at
                 >= self.config.overall_planning_timeout_s
-            )
-        ):
-            planning_budget_exhausted = True
+            ):
+                planning_budget_exhausted = True
+                break
 
         if graph is None:
             # All tiers were geometrically incomplete. The earlier
