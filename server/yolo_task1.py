@@ -11,7 +11,7 @@ import numpy as np
 import json
 
 from server.utils import recv_pickle, send_json, send_pickle
-from server.detection_labels import draw_detection_annotations
+from server.detection_labels import BULLSEYE_ID, draw_detection_annotations
 from server.collage import Task1CollageCollector
 
 class Server:
@@ -183,7 +183,9 @@ class Server:
                 # A frame can contain several images (e.g. a neighbouring
                 # obstacle in the background).  Only report the one nearest
                 # the camera, i.e. the largest boundary box (scaled by model
-                # weight), and drop every other box.
+                # weight), and drop every other box.  The bullseye is never a
+                # result, so any real image beats it regardless of size; it
+                # only wins when it is the sole detection.
                 best = None  # (score, model_idx, box, conf, cid)
 
                 for model_idx, result in enumerate(results):
@@ -209,7 +211,7 @@ class Server:
                     for i, cid in enumerate(cids):
                         x1, y1, x2, y2 = boxes[i]
                         area = abs(x2 - x1) * abs(y2 - y1)
-                        score = self.weights[model_idx] * area
+                        score = (cid != BULLSEYE_ID, self.weights[model_idx] * area)
                         if best is None or score > best[0]:
                             best = (score, model_idx, boxes[i], confs[i], int(cid))
 
