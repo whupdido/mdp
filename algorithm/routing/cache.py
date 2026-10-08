@@ -104,6 +104,10 @@ class DirectedPairwisePathCache:
         minimum_expansion_budget: int | None = None,
     ) -> None:
         """Eagerly compute multiple directed paths across CPU cores."""
+        # Workers construct Hybrid A*, so custom planners must resolve through
+        # get_or_plan instead of silently being replaced during graph warmup.
+        if type(self._planner) is not HybridAStarPlanner:
+            return
         requested_budget = minimum_expansion_budget or config.adaptive_max_expansions
         maximum_budget = max(config.adaptive_max_expansions, requested_budget)
         timeout = config.local_planning_timeout_s
