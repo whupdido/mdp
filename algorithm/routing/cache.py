@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import time
+import concurrent.futures
 
 from algorithm.config import PlanningConfig
 from algorithm.enums import CostMetric
@@ -18,6 +19,46 @@ from .models import (
     PairwiseCacheStats,
     RouteEndpoint,
 )
+
+
+def _parallel_plan_worker(payload: tuple) -> tuple:
+    """Module-level worker for pickling compatibility in ProcessPoolExecutor."""
+    start, goal, arena, config, objective, requested_budget, maximum_budget, timeout = payload
+    planner = HybridAStarPlanner(config)
+    
+    budget = config.adaptive_initial_expansions
+    deadline = time.perf_counter() + timeout
+    attempts = 0
+    cumulative_nodes = 0
+    cumulative_time = 0.0
+    
+    while True:
+        result = planner.plan(
+            start.pose,
+            goal.pose,
+            arena,
+            objective=objective,
+            max_expanded_nodes=budget,
+            max_planning_time_s=max(0.001, deadline - time.perf_counter()),
+        )
+        attempts += 1
+        cumulative_nodes += result.metrics.nodes_expanded
+        cumulative_time += result.metrics.planning_time_s
+        final_budget = budget
+        
+        if result.status not in (LocalPlanningStatus.SEARCH_LIMIT_REACHED,):
+            break
+        if budget >= requested_budget or budget >= maximum_budget:
+            break
+        if time.perf_counter() >= deadline:
+            break
+        budget = min(
+            requested_budget,
+            maximum_budget,
+            max(budget + 1, math.ceil(budget * config.adaptive_growth_factor)),
+        )
+        
+    return start, goal, result, final_budget, attempts, cumulative_nodes, cumulative_time
 
 
 class DirectedPairwisePathCache:
@@ -54,6 +95,56 @@ class DirectedPairwisePathCache:
     def size(self) -> int:
         return len(self._entries)
 
+    def warmup(
+        self,
+        pairs: list[tuple[RouteEndpoint, RouteEndpoint]],
+        arena: ArenaInput,
+        config: PlanningConfig,
+        objective: CostMetric,
+        minimum_expansion_budget: int | None = None,
+    ) -> None:
+        """Eagerly compute multiple directed paths across CPU cores."""
+        requested_budget = minimum_expansion_budget or config.adaptive_max_expansions
+        maximum_budget = max(config.adaptive_max_expansions, requested_budget)
+        timeout = config.local_planning_timeout_s
+        
+        tasks = []
+        for start, goal in pairs:
+            key = PairwiseCacheKey(arena, config, objective, start, goal)
+            if key not in self._entries:
+                tasks.append((start, goal, arena, config, objective, requested_budget, maximum_budget, timeout))
+                
+        if not tasks:
+            return
+
+        self._requests += len(tasks)
+        self._misses += len(tasks)
+        
+        # Farm the requests out to all available CPU cores.
+        # ProcessPoolExecutor naturally defaults to os.cpu_count().
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            results = executor.map(_parallel_plan_worker, tasks)
+            
+            # The results are collected sequentially in the main process,
+            # meaning dictionary assignment remains 100% thread-safe.
+            for start, goal, result, final_budget, attempts, c_nodes, c_time in results:
+                key = PairwiseCacheKey(arena, config, objective, start, goal)
+                entry = PairwiseCacheEntry(
+                    key,
+                    result,
+                    expansion_budget=final_budget,
+                    attempts=attempts,
+                    cumulative_nodes_expanded=c_nodes,
+                    cumulative_planning_time_s=c_time,
+                )
+                self._entries[key] = entry
+                self._nodes_expanded += c_nodes
+                self._planning_time_s += c_time
+                if entry.succeeded:
+                    self._successful_paths += 1
+                else:
+                    self._failed_paths += 1
+
     def get_or_plan(
         self,
         start: RouteEndpoint,
@@ -69,6 +160,7 @@ class DirectedPairwisePathCache:
         cached = self._entries.get(key)
         requested_budget = minimum_expansion_budget or config.adaptive_max_expansions
         maximum_budget = max(config.adaptive_max_expansions, requested_budget)
+        
         if cached is not None and (
             cached.result.status is not LocalPlanningStatus.SEARCH_LIMIT_REACHED
             or (cached.expansion_budget or 0) >= requested_budget
