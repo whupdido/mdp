@@ -181,6 +181,20 @@ fun ArenaState.withTargetReported(id: Int, targetId: Int, face: Facing?): ArenaS
     )
 }
 
+/**
+ * The map as a new attempt should start it: same obstacles, same image sides,
+ * no image IDs.
+ *
+ * The obstacles and their sides are the layout that was keyed in; the IDs are
+ * the previous run's results. Leaving the IDs in place made a re-run on the
+ * same map start with every obstacle already "identified", so the first face
+ * the robot scanned completed the set and ended the run on the spot -- and the
+ * supervisor would have been shown last run's answers before the robot got
+ * there.
+ */
+fun ArenaState.withTargetsCleared(): ArenaState =
+    copy(obstacles = obstacles.map { it.copy(targetId = null) })
+
 /** Applies an inbound ROBOT report (C.10), recording the old cell as a breadcrumb. */
 fun ArenaState.withRobotAt(x: Int, y: Int, facing: Facing): ArenaState? {
     if (!Arena.isLegalRobotCentre(x, y)) return null

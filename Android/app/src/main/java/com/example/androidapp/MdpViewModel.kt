@@ -17,6 +17,7 @@ import com.example.androidapp.arena.isRunOverNotice
 import com.example.androidapp.arena.runBlocker
 import com.example.androidapp.arena.withObstacleAdded
 import com.example.androidapp.arena.withStartPose
+import com.example.androidapp.arena.withTargetsCleared
 import com.example.androidapp.arena.startsInCarpark
 import com.example.androidapp.arena.withObstacleMoved
 import com.example.androidapp.arena.withObstacleRemoved
@@ -623,11 +624,17 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         if (previous.running || !previous.canStart) return
         val task = previous.task
         clearRecording()
+        // A new attempt starts with nothing found. This used to count the
+        // previous run's image IDs, still sitting on the obstacles, as already
+        // identified -- so on a re-run of the same map the first face scanned
+        // completed the set and ended the run. Set directly rather than through
+        // an edit, which would invalidate the route we are about to drive.
+        _arena.value = _arena.value.withTargetsCleared()
         _run.value = RunState(
             task = task,
             phase = RunPhase.RUNNING,
             placed = _arena.value.obstacles.size,
-            identified = _arena.value.obstacles.count { it.targetId != null },
+            identified = 0,
             plannedSteps = previous.plannedSteps,
         )
         runStartMs = System.currentTimeMillis()
