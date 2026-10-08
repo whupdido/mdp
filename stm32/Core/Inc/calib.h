@@ -14,7 +14,7 @@
    Before the weights: a 1 m hand-push gave 7318 counts (1494.0), corroborated
    by two driven runs (200 mm -> 210 mm, 500 mm -> 485 mm). The nameplate 1560
    was wrong.                                                               */
-#define COUNTS_PER_REV      1494.0f
+#define COUNTS_PER_REV      1500.0f
 
 /* Wheel diameter in mm, measured under load                                */
 #define WHEEL_DIA_MM        65.0f

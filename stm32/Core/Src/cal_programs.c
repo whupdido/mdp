@@ -39,10 +39,56 @@
  *               and after, and the radius is half the gap. The OLED shows the
  *               total angle the gyro saw and the radius from the encoders.
  *
+ * CAL_SEQ       Turns followed by a straight, back to back as in a real run:
+ *                   FL030, FR030, FW100     (SEQ_MOVES below, Pi command strings)
+ *               Each tap runs the whole sequence once; 5 runs, then a summary
+ *               tap and one more to start over. Square the car up to a floor
+ *               line before each tap and give it about 1.5 m of room ahead
+ *               (the two turns alone move it 32 cm on and 8 cm left).
+ *               A straight holds whatever heading it starts with, so if the
+ *               turns before it come out at 31 and 29 deg instead of 30 and 30,
+ *               the straight runs dead straight but on a tilted line. CAL_STRAIGHT
+ *               cannot show that, because there you line the car up by hand.
+ *                 ang   how far each turn actually turned (gyro), target 30.
+ *                 tilt  direction the straight actually drove, against the
+ *                       direction the plan expects, + = left. It is the sum
+ *                       of the turn errors before it when those are to blame.
+ *                 side  where the straight ended against a line drawn from
+ *                       its start in the planned direction, + = left. Check it
+ *                       on the floor with a tape.
+ *                 end   heading at the end against the plan, + = left.
+ *               SEQ_GAP_MS is the pause between moves; the Pi sends the next
+ *               command as soon as DONE arrives, so it is short.
+ *
+ * CAL_TRACE     Watches one straight (TR_MM, FW100) from inside the 100 Hz
+ *               loop, to find out why straights end up turned. Tap to drive,
+ *               tap twice more for pages 2 and 3, then tap for the next run.
+ *               The move is split by what the commanded speed is doing:
+ *               acc rising, cru flat at cruise, dec falling for the target,
+ *               crl flat at crawl (the last stretch before the brake).
+ *                 page 1  L% R%  each wheel's actual speed as a % of the
+ *                                commanded speed, phase by phase.
+ *                         hdg    heading change in that phase, + = left.
+ *                 page 2  how far and how long it crawled, the average
+ *                         steering during the crawl (R/L), ticks where one
+ *                         wheel stood while the other turned, the heading
+ *                         change after the brake, and over the whole move.
+ *                 page 3  average motor duty per wheel at cruise and crawl,
+ *                         and the integral part of it at the brake.
+ *               The idea it tests: the speed loop is close to proportional
+ *               only, so the weaker left wheel lags; the car slows too early,
+ *               crawls a long way, and pivots left there, where the steering
+ *               is at a quarter strength. That shows up as cru L% and R% well
+ *               under 100 with L below R; a crawl far longer than ~14 mm;
+ *               crl L% well below R% or L stalls; hdg + in crl while the
+ *               crawl steering is R; and Iend small next to the duty.
+ *               Every tick also goes to USART3 as "[TRS]" CSV lines.
+ *
  * Nothing here changes how the car drives. As in a real run the brake stays
  * on after each move, and the readings keep running for CAL_SETTLE_MS
  * afterwards so the coast is included. Every result also goes to USART3:
- * "[CS]" straight, "[OD]" odometer, "[T30]" six turns.
+ * "[CS]" straight, "[OD]" odometer, "[T30]" six turns, "[SEQ]" sequence,
+ * "[TR]"/"[TRS]" trace.
  */
 
 #include "main.h"
@@ -57,6 +103,8 @@
 #include "icm20948.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
 #define CAL_SETTLE_MS   700u   /* keep reading after a move: the coast           */
@@ -180,9 +228,12 @@ typedef struct {
 
 /* Run order: case = run % CS_NCASES, so each round goes out and back. */
 static const cs_case_t CS_CASES[] = {
-    { "FW100",  1000 },
+    { "FW100",  500 },
 };
-#define CS_NCASES   4u
+/* Counts the list, so entries can be added or removed. It was a fixed 4: with
+   one entry left, taps 2 to 4 read past the end of CS_CASES and drove
+   whatever number happened to sit there in flash. */
+#define CS_NCASES   ((uint8_t)(sizeof CS_CASES / sizeof CS_CASES[0]))
 #define CS_REPEATS  5u
 
 /* CS_SUM_* mean "the next tap shows that page". */
@@ -443,4 +494,532 @@ void cal_six_step(uint8_t kind)
              "[T30] type=%s turns=%u result=%s turned_deg=%.1f chord_mm=%.1f radius_mm=%.1f\r\n",
              type, turns, cal_result_name(res), (double)turned, (double)chord, (double)r_mm);
     command_send(u);
+}
+
+/* ---------------------------------------------------------------- CAL_SEQ */
+
+/* The sequence, written exactly as the Pi sends it, at most SEQ_MAX_MOVES.
+   Turn, straight, turn would be { "FL030", "FW100", "FR030" }. */
+static const char *const SEQ_MOVES[] = { "FL030", "FR030", "FW100" };
+
+#define SEQ_MAX_MOVES  4u
+#define SEQ_N          ((uint8_t)(sizeof SEQ_MOVES / sizeof SEQ_MOVES[0]))
+#define SEQ_REPEATS    5u
+#define SEQ_GAP_MS     20u   /* between moves: the Pi sends the next command
+                                as soon as DONE arrives, so keep it short     */
+
+_Static_assert(sizeof SEQ_MOVES / sizeof SEQ_MOVES[0] <= SEQ_MAX_MOVES,
+               "SEQ_MOVES holds at most SEQ_MAX_MOVES moves");
+
+/* One move string, read the way dispatch() in command.c reads it. */
+typedef struct {
+    uint8_t is_turn;
+    int8_t  left;        /* turns: 1 = left, 0 = right                    */
+    int8_t  forward;     /* 1 = forward, 0 = back                         */
+    int32_t arg;         /* straights: cm, turns: deg                     */
+    float   plan_deg;    /* heading change the plan expects, + = left     */
+} seq_move_t;
+
+static uint8_t seq_parse(const char *cmd, seq_move_t *mv)
+{
+    mv->is_turn  = 1u;
+    mv->left     = 0;
+    mv->forward  = 1;
+    mv->arg      = (strlen(cmd) >= 5u) ? (int32_t)atoi(cmd + 2) : 0;
+    mv->plan_deg = 0.0f;
+
+    if      (!strncmp(cmd, "FW", 2)) { mv->is_turn = 0u; }
+    else if (!strncmp(cmd, "BW", 2)) { mv->is_turn = 0u; mv->forward = 0; }
+    else if (!strncmp(cmd, "FL", 2)) { mv->left = 1; }
+    else if (!strncmp(cmd, "FR", 2)) { /* the defaults */ }
+    else if (!strncmp(cmd, "BL", 2)) { mv->left = 1; mv->forward = 0; }
+    else if (!strncmp(cmd, "BR", 2)) { mv->forward = 0; }
+    else return 0u;
+
+    if (mv->is_turn) {
+        /* Forward-left and back-right both turn the car anticlockwise. */
+        mv->plan_deg = (mv->left == mv->forward) ? (float)mv->arg : -(float)mv->arg;
+    }
+    return 1u;
+}
+
+/* Run one move as dispatch() does: clear any old STOP, then the same call. */
+static move_result_t seq_run_move(const seq_move_t *mv)
+{
+    motion_abort_clear();
+    if (mv->is_turn) (void)move_turn_deg(mv->left, mv->forward, mv->arg);
+    else             (void)move_straight_mm((mv->forward ? 10 : -10) * mv->arg);
+    return motion_result();
+}
+
+typedef enum { SEQ_RUNNING = 0, SEQ_SUMMARY, SEQ_DONE } seq_phase_t;
+
+static seq_phase_t seq_phase = SEQ_RUNNING;
+static uint8_t     seq_run   = 0;                          /* counted runs so far */
+static float       seq_main[SEQ_MAX_MOVES][SEQ_REPEATS];   /* turn: angle, straight: tilt */
+static float       seq_side[SEQ_MAX_MOVES][SEQ_REPEATS];   /* straight: sideways, mm      */
+static float       seq_end[SEQ_REPEATS];                   /* heading off plan at the end */
+
+/* The OLED has room for one "side" line: the last straight's. */
+static int8_t seq_last_straight(void)
+{
+    int8_t last = -1;
+    for (uint8_t i = 0; i < SEQ_N; i++) {
+        seq_move_t mv;
+        if (seq_parse(SEQ_MOVES[i], &mv) && !mv.is_turn) last = (int8_t)i;
+    }
+    return last;
+}
+
+void cal_seq_show_idle(void)
+{
+    char names[2][17];
+    names[0][0] = '\0';
+    names[1][0] = '\0';
+    for (uint8_t i = 0; i < SEQ_N; i++) {
+        char  *line = names[i / 2u];
+        size_t used = strlen(line);
+        snprintf(line + used, sizeof names[0] - used, "%s%s", (i % 2u) ? " " : "", SEQ_MOVES[i]);
+    }
+
+    OLED_Clear();
+    if (seq_phase == SEQ_RUNNING) {
+        cal_line(0, "SEQ TEST  %u/%u", (unsigned)(seq_run + 1u), (unsigned)SEQ_REPEATS);
+    } else {
+        cal_line(0, "SEQ TEST");
+    }
+    cal_line(10, "%s", names[0]);
+    cal_line(20, "%s", names[1]);
+    cal_line(30, "%s", (seq_phase == SEQ_RUNNING) ? "SW1 = run"
+                     : (seq_phase == SEQ_SUMMARY) ? "SW1 = summary" : "SW1 = restart");
+    cal_line(40, "%s", calibrated ? "square to a line" : "(gyro cal 1st)");
+    if (seq_phase == SEQ_RUNNING) cal_line(50, "CAR WILL MOVE");
+    OLED_Refresh_Gram();
+}
+
+static void seq_show_summary(void)
+{
+    char    u[120];
+    float   mean, hr;
+    int8_t  ls = seq_last_straight();
+    uint8_t y  = 10u;
+
+    OLED_Clear();
+    cal_line(0, "SEQ  mean  +-");
+    for (uint8_t i = 0; i < SEQ_N; i++) {
+        seq_move_t mv;
+        if (!seq_parse(SEQ_MOVES[i], &mv)) continue;
+
+        cal_stats(seq_main[i], SEQ_REPEATS, &mean, &hr);
+        if (y <= 50u) {
+            if (mv.is_turn) {
+                cal_line(y, "%s%5.1f +-%3.1f", SEQ_MOVES[i],
+                         (double)cal_clamp(mean, 999.9f), (double)cal_clamp(hr, 9.9f));
+            } else {
+                cal_line(y, "%s%+5.1f +-%3.1f", SEQ_MOVES[i],
+                         (double)cal_clamp(mean, 99.9f), (double)cal_clamp(hr, 9.9f));
+            }
+            y += 10u;
+        }
+        snprintf(u, sizeof u, "[SEQ] SUMMARY %s %s mean=%.2f +-%.2f\r\n", SEQ_MOVES[i],
+                 mv.is_turn ? "angle_deg" : "tilt_deg", (double)mean, (double)hr);
+        command_send(u);
+
+        if (!mv.is_turn) {
+            cal_stats(seq_side[i], SEQ_REPEATS, &mean, &hr);
+            if ((int8_t)i == ls && y <= 50u) {
+                cal_line(y, "side %+.0f +-%.0f mm", (double)mean, (double)hr);
+                y += 10u;
+            }
+            snprintf(u, sizeof u, "[SEQ] SUMMARY %s side_mm mean=%.1f +-%.1f\r\n",
+                     SEQ_MOVES[i], (double)mean, (double)hr);
+            command_send(u);
+        }
+    }
+
+    cal_stats(seq_end, SEQ_REPEATS, &mean, &hr);
+    if (y <= 50u) cal_line(y, "end %+.1f +-%.1f", (double)mean, (double)hr);
+    snprintf(u, sizeof u, "[SEQ] SUMMARY end heading_err_deg mean=%.2f +-%.2f\r\n",
+             (double)mean, (double)hr);
+    command_send(u);
+    OLED_Refresh_Gram();
+}
+
+void cal_seq_step(void)
+{
+    char u[200];
+
+    /* --- summary, then back to the start --- */
+    if (seq_phase == SEQ_SUMMARY) { seq_show_summary(); seq_phase = SEQ_DONE; return; }
+    if (seq_phase == SEQ_DONE) {
+        seq_phase = SEQ_RUNNING;
+        seq_run   = 0;
+        command_send("[SEQ] restart\r\n");
+        cal_seq_show_idle();
+        return;
+    }
+
+    /* --- check the whole list before anything moves --- */
+    seq_move_t mv[SEQ_MAX_MOVES];
+    for (uint8_t i = 0; i < SEQ_N; i++) {
+        if (!seq_parse(SEQ_MOVES[i], &mv[i])) {
+            OLED_Clear();
+            cal_line(0,  "SEQ_MOVES typo");
+            cal_line(20, "!! bad %s", SEQ_MOVES[i]);
+            cal_line(40, "fix and reflash");
+            OLED_Refresh_Gram();
+            snprintf(u, sizeof u, "[SEQ] unknown move %s in SEQ_MOVES\r\n", SEQ_MOVES[i]);
+            command_send(u);
+            return;
+        }
+    }
+
+    /* --- one run of the whole sequence --- */
+    cal_gyro_if_needed();
+
+    OLED_Clear();
+    cal_line(0,  "SEQ run %u/%u", (unsigned)(seq_run + 1u), (unsigned)SEQ_REPEATS);
+    cal_line(20, "running...");
+    OLED_Refresh_Gram();
+    HAL_Delay(CAL_START_MS);
+
+    /* The car was squared up by hand, so it starts on the heading the plan
+       assumes; plan then follows the commanded turns. */
+    cal_mark_t before, after;
+    cal_mark(&before);
+    float plan = before.yaw0;
+
+    float         main_v[SEQ_MAX_MOVES] = { 0.0f };
+    float         side_v[SEQ_MAX_MOVES] = { 0.0f };
+    move_result_t res  = MOVE_DONE;
+    uint8_t       done = 0u;   /* moves that finished */
+
+    for (uint8_t i = 0; i < SEQ_N; i++) {
+        res = seq_run_move(&mv[i]);
+        if (res != MOVE_DONE) break;
+        /* The next move follows straight away, as from the Pi. After the
+           last one, wait out the coast before reading. */
+        HAL_Delay(((uint8_t)(i + 1u) < SEQ_N) ? SEQ_GAP_MS : CAL_SETTLE_MS);
+        cal_mark(&after);
+
+        float plan_after = plan + mv[i].plan_deg;
+        if (mv[i].is_turn) {
+            main_v[i] = fabsf(after.yaw0 - before.yaw0);
+            snprintf(u, sizeof u,
+                     "[SEQ] run=%u move=%s angle_deg=%.2f heading_err_deg=%.2f\r\n",
+                     (unsigned)(seq_run + 1u), SEQ_MOVES[i], (double)main_v[i],
+                     (double)(after.yaw0 - plan_after));
+        } else {
+            /* Against the planned direction: along it, and to its left. */
+            float h     = plan * CAL_DEG2RAD;
+            float dx    = after.x0 - before.x0;
+            float dy    = after.y0 - before.y0;
+            float along =  dx * cosf(h) + dy * sinf(h);
+            float side  = -dx * sinf(h) + dy * cosf(h);
+            float s     = mv[i].forward ? 1.0f : -1.0f;   /* reversing, it faces the other way */
+            float went  = s * 0.5f * (float)((after.l0 - before.l0) + (after.r0 - before.r0))
+                        * MM_PER_COUNT;
+            main_v[i] = atan2f(s * side, s * along) / CAL_DEG2RAD;
+            side_v[i] = side;
+            snprintf(u, sizeof u,
+                     "[SEQ] run=%u move=%s went_mm=%.1f tilt_deg=%.2f side_mm=%.1f"
+                     " start_heading_err_deg=%.2f heading_change_deg=%.2f\r\n",
+                     (unsigned)(seq_run + 1u), SEQ_MOVES[i], (double)went,
+                     (double)main_v[i], (double)side, (double)(before.yaw0 - plan),
+                     (double)(after.yaw0 - before.yaw0));
+        }
+        command_send(u);
+
+        plan   = plan_after;
+        before = after;
+        done++;
+    }
+    float end_err = before.yaw0 - plan;   /* after the last move that finished */
+
+    /* --- show it: one line per move, the last straight's side, the end --- */
+    OLED_Clear();
+    int8_t  ls = seq_last_straight();
+    uint8_t y  = 10u;
+    for (uint8_t i = 0; i < done && y <= 50u; i++) {
+        if (mv[i].is_turn) cal_line(y, "%s ang %.1f", SEQ_MOVES[i], (double)main_v[i]);
+        else               cal_line(y, "%s tilt %+.1f", SEQ_MOVES[i], (double)main_v[i]);
+        y += 10u;
+        if ((int8_t)i == ls && y <= 50u) {
+            cal_line(y, "side %+.0f mm", (double)side_v[i]);
+            y += 10u;
+        }
+    }
+
+    if (res != MOVE_DONE) {
+        /* Not counted; the next tap repeats this run. */
+        const char *what = (done < SEQ_N) ? SEQ_MOVES[done] : "?";
+        cal_line(0, "SEQ %u/%u SW1=redo", (unsigned)(seq_run + 1u), (unsigned)SEQ_REPEATS);
+        cal_line(50, "!! %s %s", cal_result_name(res), what);
+        OLED_Refresh_Gram();
+        snprintf(u, sizeof u, "[SEQ] run=%u not counted: %s at %s\r\n",
+                 (unsigned)(seq_run + 1u), cal_result_name(res), what);
+        command_send(u);
+        return;
+    }
+
+    if (y <= 50u) cal_line(y, "end head %+.1f", (double)end_err);
+    snprintf(u, sizeof u, "[SEQ] run=%u end heading_err_deg=%.2f\r\n",
+             (unsigned)(seq_run + 1u), (double)end_err);
+    command_send(u);
+
+    for (uint8_t i = 0; i < SEQ_N; i++) {
+        seq_main[i][seq_run] = main_v[i];
+        seq_side[i][seq_run] = side_v[i];
+    }
+    seq_end[seq_run] = end_err;
+    seq_run++;
+
+    if (seq_run >= SEQ_REPEATS) {
+        cal_line(0, "SEQ %u/%u SW1=sum", (unsigned)seq_run, (unsigned)SEQ_REPEATS);
+        seq_phase = SEQ_SUMMARY;
+    } else {
+        cal_line(0, "SEQ %u/%u SW1=next", (unsigned)seq_run, (unsigned)SEQ_REPEATS);
+    }
+    OLED_Refresh_Gram();
+}
+
+/* -------------------------------------------------------------- CAL_TRACE */
+
+#define TR_MM          1000   /* the move, mm (FW100). Long enough for every phase */
+#define TR_PRINT_TICKS 1      /* 1 = also print every tick on USART3 ("[TRS]")     */
+#define TR_KEEP        500u   /* ticks kept for that printout: the last 5 s        */
+
+/* Phases of a straight, told apart by what the commanded speed (the ramp)
+   is doing: rising, flat at cruise, falling while braking, flat at crawl. */
+enum { TR_ACC = 0, TR_CRU, TR_DEC, TR_CRL, TR_NPH };
+static const char *const TR_NAME[TR_NPH] = { "acc", "cru", "dec", "crl" };
+
+typedef struct {
+    uint16_t ticks;
+    int32_t  l, r;             /* wheel counts, summed (absolute)              */
+    float    target;           /* commanded speed, summed (absolute)           */
+    float    head_in, head_out;/* heading entering and leaving the phase       */
+    int32_t  steer;            /* servo minus centre, summed, us (+ = right)   */
+    int32_t  duty_l, duty_r;   /* motor duty, summed                           */
+    uint16_t l_stall, r_stall; /* ticks one wheel stood while the other turned */
+} tr_phase_t;
+
+typedef struct {
+    int8_t  l, r;
+    uint8_t ph;
+    int16_t ramp10, head100, steer, duty_l, duty_r;
+} tr_sample_t;
+
+static tr_phase_t        tr_ph[TR_NPH];
+static tr_sample_t       tr_buf[TR_KEEP];
+static volatile uint16_t tr_n;               /* ticks seen in this move          */
+static float             tr_prev_ramp, tr_prev_head;
+static float             tr_i_l, tr_i_r;     /* integral part of the duty, last tick */
+static uint8_t           tr_page = 0;        /* next tap: 0 drive, 1 page 2, 2 page 3 */
+static uint16_t          tr_run  = 0;
+static move_result_t     tr_res  = MOVE_NONE;
+static float             tr_total, tr_stop;  /* heading change: whole move, after the brake */
+
+static int32_t tr_abs(int32_t v) { return (v < 0) ? -v : v; }
+
+static int16_t tr_i16(float v)
+{
+    if (v >  32767.0f) return  32767;
+    if (v < -32767.0f) return -32767;
+    return (int16_t)v;
+}
+
+/* Runs in the 100 Hz interrupt on every tick of the traced straight. */
+static void tr_hook(const straight_tick_t *t)
+{
+    float   v  = fabsf(t->ramp);
+    float   pv = fabsf(tr_prev_ramp);
+    int32_t al = tr_abs(t->left), ar = tr_abs(t->right);
+    uint8_t ph;
+    if (t->braking) ph = (v < pv - 0.001f) ? TR_DEC : TR_CRL;
+    else            ph = (v > pv + 0.001f) ? TR_ACC : TR_CRU;
+
+    tr_phase_t *p = &tr_ph[ph];
+    if (p->ticks == 0u) p->head_in = tr_prev_head;
+    p->ticks++;
+    p->l       += al;
+    p->r       += ar;
+    p->target  += v;
+    p->head_out = t->head_deg;
+    p->steer   += t->steer_us;
+    p->duty_l  += t->duty_l;
+    p->duty_r  += t->duty_r;
+    if (al <= 1 && ar >= 3) p->l_stall++;
+    if (ar <= 1 && al >= 3) p->r_stall++;
+
+    tr_sample_t *s = &tr_buf[tr_n % TR_KEEP];
+    s->l       = (int8_t)((t->left  > 127) ? 127 : (t->left  < -127) ? -127 : t->left);
+    s->r       = (int8_t)((t->right > 127) ? 127 : (t->right < -127) ? -127 : t->right);
+    s->ph      = ph;
+    s->ramp10  = tr_i16(t->ramp * 10.0f);
+    s->head100 = tr_i16(t->head_deg * 100.0f);
+    s->steer   = t->steer_us;
+    s->duty_l  = tr_i16((float)t->duty_l);
+    s->duty_r  = tr_i16((float)t->duty_r);
+    if (tr_n < 65535u) tr_n++;
+
+    tr_prev_ramp = t->ramp;
+    tr_prev_head = t->head_deg;
+    tr_i_l = t->i_l;
+    tr_i_r = t->i_r;
+}
+
+static void tr_title(uint8_t page)
+{
+    if (tr_res == MOVE_DONE) {
+        cal_line(0, "TR %u FW%03ld %u/3", (unsigned)tr_run, (long)(TR_MM / 10), (unsigned)page);
+    } else {
+        cal_line(0, "TR%u !%s %u/3", (unsigned)tr_run, cal_result_name(tr_res), (unsigned)page);
+    }
+}
+
+/* Page 1: each wheel's speed as a % of the commanded speed, and how much the
+   heading changed, phase by phase. */
+static void tr_page1(void)
+{
+    OLED_Clear();
+    tr_title(1);
+    cal_line(10, "     L%%  R%%  hdg");
+    for (uint8_t i = 0; i < TR_NPH; i++) {
+        const tr_phase_t *p = &tr_ph[i];
+        uint8_t y = (uint8_t)(20u + 10u * i);
+        if (p->ticks == 0u || p->target < 0.5f) {
+            cal_line(y, "%s   -   -    -", TR_NAME[i]);
+            continue;
+        }
+        float lp = 100.0f * (float)p->l / p->target;
+        float rp = 100.0f * (float)p->r / p->target;
+        cal_line(y, "%s%4.0f%4.0f%+5.1f", TR_NAME[i], (double)cal_clamp(lp, 999.0f),
+                 (double)cal_clamp(rp, 999.0f), (double)cal_clamp(p->head_out - p->head_in, 99.9f));
+    }
+    OLED_Refresh_Gram();
+}
+
+/* Page 2: the crawl, what the steering did in it, stalls, and the heading. */
+static void tr_page2(void)
+{
+    const tr_phase_t *c = &tr_ph[TR_CRL];
+    float    crawl_mm = 0.5f * (float)(c->l + c->r) * MM_PER_COUNT;
+    float    steer    = c->ticks ? (float)c->steer / (float)c->ticks : 0.0f;
+    unsigned ls = 0u, rs = 0u;
+    for (uint8_t i = 0; i < TR_NPH; i++) { ls += tr_ph[i].l_stall; rs += tr_ph[i].r_stall; }
+
+    OLED_Clear();
+    tr_title(2);
+    cal_line(10, "crawl %.0fmm %.1fs", (double)crawl_mm, (double)((float)c->ticks * 0.01f));
+    cal_line(20, "crl steer %c %.0fus", (steer >= 0.0f) ? 'R' : 'L', (double)fabsf(steer));
+    cal_line(30, "stall L%3u R%3u", ls, rs);
+    cal_line(40, "stop hdg %+.1f", (double)tr_stop);
+    cal_line(50, "total hdg %+.1f", (double)tr_total);
+    OLED_Refresh_Gram();
+}
+
+/* Page 3: what the speed loop asked of each motor. */
+static void tr_page3(void)
+{
+    OLED_Clear();
+    tr_title(3);
+    cal_line(10, "duty     L     R");
+    const uint8_t which[2] = { TR_CRU, TR_CRL };
+    for (uint8_t k = 0; k < 2u; k++) {
+        const tr_phase_t *p = &tr_ph[which[k]];
+        uint8_t y = (uint8_t)(20u + 10u * k);
+        if (p->ticks == 0u) { cal_line(y, "%-4s     -     -", TR_NAME[which[k]]); continue; }
+        cal_line(y, "%-4s%6.0f%6.0f", TR_NAME[which[k]],
+                 (double)((float)p->duty_l / (float)p->ticks), (double)((float)p->duty_r / (float)p->ticks));
+    }
+    cal_line(40, "Iend%6.0f%6.0f", (double)tr_i_l, (double)tr_i_r);
+    cal_line(50, "full = %d", (int)PWM_MAX);
+    OLED_Refresh_Gram();
+}
+
+static void tr_print(void)
+{
+    char u[200];
+    snprintf(u, sizeof u,
+             "[TR] run=%u mm=%d result=%s ticks=%u total_hdg_deg=%.2f stop_hdg_deg=%.2f"
+             " i_end_l=%.0f i_end_r=%.0f\r\n",
+             (unsigned)tr_run, (int)TR_MM, cal_result_name(tr_res), (unsigned)tr_n,
+             (double)tr_total, (double)tr_stop, (double)tr_i_l, (double)tr_i_r);
+    command_send(u);
+    for (uint8_t i = 0; i < TR_NPH; i++) {
+        const tr_phase_t *p = &tr_ph[i];
+        if (p->ticks == 0u) continue;
+        float n = (float)p->ticks;
+        snprintf(u, sizeof u,
+                 "[TR] phase=%s ticks=%u mm=%.1f target=%.1f left=%.1f right=%.1f"
+                 " hdg_deg=%.2f steer_us=%.0f duty_l=%.0f duty_r=%.0f lstall=%u rstall=%u\r\n",
+                 TR_NAME[i], (unsigned)p->ticks, (double)(0.5f * (float)(p->l + p->r) * MM_PER_COUNT),
+                 (double)(p->target / n), (double)((float)p->l / n), (double)((float)p->r / n),
+                 (double)(p->head_out - p->head_in), (double)((float)p->steer / n),
+                 (double)((float)p->duty_l / n), (double)((float)p->duty_r / n),
+                 (unsigned)p->l_stall, (unsigned)p->r_stall);
+        command_send(u);
+    }
+#if TR_PRINT_TICKS
+    command_send("[TRS] tick,phase,ramp,left,right,hdg_deg,steer_us,duty_l,duty_r\r\n");
+    uint16_t n     = tr_n;
+    uint16_t first = (n > TR_KEEP) ? (uint16_t)(n - TR_KEEP) : 0u;
+    for (uint16_t i = first; i < n; i++) {
+        const tr_sample_t *s = &tr_buf[i % TR_KEEP];
+        snprintf(u, sizeof u, "[TRS] %u,%s,%.1f,%d,%d,%.2f,%d,%d,%d\r\n",
+                 (unsigned)i, TR_NAME[s->ph], (double)s->ramp10 / 10.0, (int)s->l, (int)s->r,
+                 (double)s->head100 / 100.0, (int)s->steer, (int)s->duty_l, (int)s->duty_r);
+        command_send(u);
+    }
+#endif
+}
+
+void cal_trace_show_idle(void)
+{
+    tr_page = 0u;
+    OLED_Clear();
+    cal_line(0,  "STRAIGHT TRACE");
+    cal_line(10, "FW%03ld, 3 pages", (long)(TR_MM / 10));
+    cal_line(20, "SW1 = drive");
+    cal_line(30, "then SW1 = pages");
+    cal_line(40, "%s", calibrated ? "needs 1.3 m" : "(gyro cal 1st)");
+    cal_line(50, "CAR WILL MOVE");
+    OLED_Refresh_Gram();
+}
+
+void cal_trace_step(void)
+{
+    if (tr_page == 1u) { tr_page2(); tr_page = 2u; return; }
+    if (tr_page == 2u) { tr_page3(); tr_page = 0u; return; }
+
+    cal_gyro_if_needed();
+
+    OLED_Clear();
+    cal_line(0,  "TR %u FW%03ld", (unsigned)(tr_run + 1u), (long)(TR_MM / 10));
+    cal_line(20, "running...");
+    OLED_Refresh_Gram();
+    HAL_Delay(CAL_START_MS);
+
+    memset(tr_ph, 0, sizeof tr_ph);
+    tr_n         = 0u;
+    tr_prev_ramp = 0.0f;
+    tr_prev_head = 0.0f;
+    tr_i_l = tr_i_r = 0.0f;
+
+    /* The same call a FW from the Pi makes, with the hook watching it. */
+    float yaw0 = motion_yaw_deg();
+    motion_abort_clear();
+    straight_tick_hook = tr_hook;
+    move_straight_mm(TR_MM);
+    straight_tick_hook = 0;
+    tr_res = motion_result();
+    HAL_Delay(CAL_SETTLE_MS);           /* brake on, as in a run; catch the coast */
+    tr_total = motion_yaw_deg() - yaw0;
+    tr_stop  = tr_total - tr_prev_head; /* what changed after the last driven tick */
+    tr_run++;
+
+    tr_page1();
+    tr_print();
+    tr_page = 1u;
 }

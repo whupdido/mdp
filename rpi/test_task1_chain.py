@@ -210,7 +210,8 @@ run_task1.wait_for(android, "ARM", "arm")
 preflight_board = Board()
 check("pre-flight passes when the board and the laptop answer",
       run_task1.arm_and_wait(preflight_board, android), True)
-check("pre-flight asks the board without moving it", preflight_board.written, ["FW000"])
+check("pre-flight asks the board without moving it, then zeroes the gyro",
+      preflight_board.written, ["FW000", "GC"])
 check("the tablet is told the robot is checked and ready",
       [w for w in android.written if w.startswith("STATUS,PLAN,")],
       ["STATUS,PLAN,CHECKING", "STATUS,PLAN,ARMED,0", "STATUS,PLAN,SET"])

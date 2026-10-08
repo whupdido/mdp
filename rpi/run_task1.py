@@ -178,7 +178,8 @@ def preflight(stm, android):
     that was never going to work.
 
     Nothing here moves the robot: a zero-length move asks the board whether
-    it is awake and idle without turning a wheel.
+    it is awake and idle without turning a wheel, and GC re-zeroes the gyro
+    while nobody is touching it.
     """
     a1_bridge.send_line(android, "STATUS,PLAN,CHECKING")
 
@@ -189,6 +190,29 @@ def preflight(stm, android):
         a1_bridge.send_line(android, f"STATUS,PLAN,FAILED,board answered {reply}")
         return False
     print("[TASK1] Pre-flight: board awake.")
+
+    # Kush: zero the gyro now, while nobody is touching the robot. A zero
+    # taken with a hand on SW1 can be off by a degree a second, and the first
+    # straight then tilts the whole run. GC takes about 2 s (up to 6 s if the
+    # robot gets bumped) and answers DONE, or ERR if the robot moved while it
+    # measured, in which case the board keeps its old zero. Firmware from
+    # before GC also answers ERR, so flash the STM before running this. Not
+    # relayed: the tablet would read that ERR as "did not recognise that
+    # command".
+    a1_bridge.send_line(stm, "GC")
+    reply = wait_for_stm_reply(
+        stm, android, relay_to_android=False, expected_command="GC"
+    )
+    if reply != "DONE":
+        if reply == "ERR":
+            why = ("the robot moved while the gyro was zeroing (or the STM has"
+                   " no GC yet). Hands off and try again")
+        else:
+            why = f"gyro zero answered {reply}"
+        print(f"[TASK1] Pre-flight: {why}.")
+        a1_bridge.send_line(android, f"STATUS,PLAN,FAILED,{why}")
+        return False
+    print("[TASK1] Pre-flight: gyro zeroed.")
 
     if not algo_client.server_reachable():
         print("[TASK1] Pre-flight: cannot reach the laptop's algo server.")
@@ -289,6 +313,9 @@ def wait_for_stm_reply(
                         return "BUSY"
                     if reported_command == expected_command:
                         command_accepted = True
+                    # Still running, so a final reply held back while this
+                    # probe was out belonged to an earlier command.
+                    deferred_terminal = None
                     probe_settle_deadline = None
                     continue
                 if reply.startswith("STATUS,IDLE,"):
