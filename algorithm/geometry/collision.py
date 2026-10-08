@@ -90,16 +90,11 @@ def footprint_within_arena(
     arena_size_cm: float,
 ) -> bool:
     """Return whether every footprint corner lies inside the square arena."""
-    
-    arena_buffer_cm = 5.0 
-    total_allowance = NUMERIC_TOLERANCE_CM + arena_buffer_cm
-
     if not math.isfinite(arena_size_cm) or arena_size_cm <= 0.0:
         raise ValueError("arena_size_cm must be positive and finite")
-    
-    arena_buffer = 2.0
-    
-    total_allowance = NUMERIC_TOLERANCE_CM + arena_buffer
+
+    arena_buffer_cm = 5.0
+    total_allowance = NUMERIC_TOLERANCE_CM + arena_buffer_cm
 
     return all(
         -total_allowance
