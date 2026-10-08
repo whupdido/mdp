@@ -218,6 +218,33 @@ class DirectedPairwiseGraph:
         if any(any(endpoint.obstacle_id != group[0].obstacle_id for endpoint in group) for group in groups):
             raise ValueError("graph groups cannot mix obstacle identities")
 
+        # =====================================================================
+        # EAGER PARALLEL GRAPH POPULATION
+        # Farm all start/target paths to the ProcessPoolExecutor upon initialization.
+        # =====================================================================
+        if self.provider is not None and hasattr(self.provider, "warmup"):
+            pairs = []
+            all_candidates = [endpoint for group in groups for endpoint in group]
+            
+            # Start -> All Candidates
+            for cand in all_candidates:
+                pairs.append((self.start, cand))
+                
+            # All Candidates -> All Other Candidates
+            for src in all_candidates:
+                for dst in all_candidates:
+                    if src.obstacle_id != dst.obstacle_id:
+                        pairs.append((src, dst))
+                        
+            self.provider.warmup(
+                pairs=pairs,
+                arena=self.arena,
+                config=self.config,
+                objective=self.objective,
+                minimum_expansion_budget=self.minimum_expansion_budget
+            )
+        # =====================================================================
+
     @property
     def target_ids(self) -> tuple[int, ...]:
         return tuple(group[0].obstacle_id for group in self.candidate_groups)  # type: ignore[misc]
@@ -316,6 +343,16 @@ class PairwisePathProvider(Protocol):
         deadline_monotonic: float | None = None,
     ) -> PairwiseCacheEntry:
         """Return an existing directed query or invoke the local planner once."""
+
+    def warmup(
+        self,
+        pairs: list[tuple[RouteEndpoint, RouteEndpoint]],
+        arena: ArenaInput,
+        config: PlanningConfig,
+        objective: CostMetric,
+        minimum_expansion_budget: int | None = None,
+    ) -> None:
+        """Optional hook to eagerly construct paths across multiple CPU cores."""
 
 
 __all__ = [

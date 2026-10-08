@@ -83,7 +83,7 @@ class MotionModel:
     capture_delay_s: float = 0.0
     direction_change_penalty_s: float = 0.0
     steering_change_penalty_s: float = 0.0
-    turn_penalty_s: float = 0.0
+    consecutive_reverse_penalty_s: float = 1.0
 
     def __post_init__(self) -> None:
         primitives = tuple(self.primitives)
@@ -99,7 +99,6 @@ class MotionModel:
             self.capture_delay_s,
             self.direction_change_penalty_s,
             self.steering_change_penalty_s,
-            self.turn_penalty_s,
         )
         if not all(math.isfinite(value) for value in timings) or any(value < 0.0 for value in timings):
             raise ValueError("motion timing values must be finite and non-negative")
@@ -119,6 +118,7 @@ class PlanningConfig:
     motion: MotionModel
     arena_size_cm: float = ARENA_SIZE_CM
     cell_size_cm: float = CELL_SIZE_CM
+    obstacle_buffer_cm: float = 5.0
     observation_lateral_offsets_cm: tuple[float, ...] = (0.0, -10.0, 10.0)
     observation_standoff_distances_cm: tuple[float, ...] = ()
     collision_translation_step_cm: float = 1.0
@@ -147,7 +147,7 @@ class PlanningConfig:
     adaptive_max_expansions: int = 100
     adaptive_growth_factor: float = 5.0
     local_planning_timeout_s: float = 2.0
-    overall_planning_timeout_s: float = 30.0
+    overall_planning_timeout_s: float = 150.0
 
     def __post_init__(self) -> None:
         offsets = tuple(self.observation_lateral_offsets_cm)
@@ -163,6 +163,7 @@ class PlanningConfig:
         positive_values = {
             "arena_size_cm": self.arena_size_cm,
             "cell_size_cm": self.cell_size_cm,
+            "obstacle_buffer_cm": self.obstacle_buffer_cm,
             "collision_translation_step_cm": self.collision_translation_step_cm,
             "collision_arc_step_rad": self.collision_arc_step_rad,
             "position_bin_cm": self.position_bin_cm,
@@ -264,6 +265,20 @@ UNCALIBRATED_SIMULATION_CONFIG = PlanningConfig(
 )
 
 
+# Where the camera and the body sit relative to the rear-axle midpoint, in cm
+# along the direction of travel. The planner's pose, and every turn radius in
+# calib.h, is the rear-axle midpoint, so these two numbers decide where the
+# planner thinks the front of the car and the camera are.
+#
+# Measured on the car 06-Oct-2026: body 23 cm long, rear-axle midpoint 3.3 cm
+# from the back, camera 11.5 cm ahead of the axle. So the body centre is
+# 11.5 - 3.3 = 8.2 cm ahead of the axle, and the front bumper 19.7 cm ahead.
+# These used to be 0.0 and 11.5, i.e. the axle in the middle of the body,
+# which put the real front 8.2 cm further forward than the planner knew.
+REAR_AXLE_TO_BODY_CENTRE_CM = 8.2
+REAR_AXLE_TO_CAMERA_CM = 11.5
+
+
 def task1_robot_config(
     calibration_path: Path | None = None,
     *,
@@ -271,24 +286,30 @@ def task1_robot_config(
 ) -> PlanningConfig:
     """Build one production Task 1 config snapshot from local STM32 calibration.
 
-    The bounded production control profile uses centered 20 cm observations,
-    60/90-degree search branching, and the live per-request STM radii.
+    The bounded values below are the settings currently used by the integrated
+    server's effective profile.  The partial-angle set and 15-degree heading
+    bin are explicit production behavior, while search remains limited to the
+    existing 30-degree editor/runtime branch.
     """
 
     base = UNCALIBRATED_SIMULATION_CONFIG
     production = replace(
         base,
-        robot=replace(base.robot, safety_margin_cm=3.0),
-        observation_lateral_offsets_cm=(0.0,),
-        observation_standoff_distances_cm=(20.0,),
-        guaranteed_max_candidates_per_target=1,
+        robot=replace(
+            base.robot,
+            safety_margin_cm=0.0,
+            rear_axle_to_body_center_forward_cm=REAR_AXLE_TO_BODY_CENTRE_CM,
+        ),
+        camera=replace(base.camera, forward_offset_cm=REAR_AXLE_TO_CAMERA_CM),
+        observation_lateral_offsets_cm=(0.0, 24.5, -24.5),
+        guaranteed_max_candidates_per_target=3,
         max_expanded_nodes=5000,
         adaptive_initial_expansions=200,
-        adaptive_max_expansions=5000,
-        local_planning_timeout_s=5.0,
-        overall_planning_timeout_s=60.0,
-        turn_angles_deg=(30.0, 45.0, 60.0, 90.0),
-        search_turn_angles_deg=(60.0, 90.0),
+        adaptive_max_expansions=30000,
+        local_planning_timeout_s=15.0,
+        overall_planning_timeout_s=150.0,
+        turn_angles_deg=(15.0, 30.0, 45.0, 60.0, 90.0),
+        search_turn_angles_deg=(30.0,),
         heading_bin_rad=math.radians(15.0),
     )
 

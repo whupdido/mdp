@@ -534,22 +534,18 @@ class PygameRenderer:
         has_route: bool,
         has_editor: bool,
     ) -> dict[str, PanelSection]:
-        """Budget the complete dashboard before drawing any row content.
+        """Budget the sidebar with diagnostics beside the movement queue."""
 
-        Header, playback, route summary, editor state, legend, controls, and
-        the footer receive predictable space first.  Diagnostics are the flex
-        section and are compressed when a planned route needs more rows.
-        """
         compact = panel.height < 700 or panel.width < 500
         padding = 12 if compact else 20
         gap = 5 if compact else 8
         footer_height = 18 if compact else 20
+
         if compact:
             preferred = {
                 "header": 40,
                 "live": 96,
-                "route": 125 if has_route else 75,
-                "diagnostics": 88,
+                "route": 210 if has_route else 150,
                 "editor": 48,
                 "legend": 30,
                 "controls": 115,
@@ -558,36 +554,60 @@ class PygameRenderer:
             preferred = {
                 "header": 60,
                 "live": 145,
-                "route": 175 if has_route else 90,
-                "diagnostics": 92,
+                "route": 300 if has_route else 180,
                 "editor": 76,
                 "legend": 30,
                 "controls": 95,
             }
-        names = ["header", "live", "route", "diagnostics"]
+
+        names = ["header", "live", "route"]
+
         if has_editor:
             names.append("editor")
-        names.extend(("legend", "controls"))
-        available = panel.height - 2 * padding - footer_height - gap * (len(names) - 1)
-        fixed_names = [name for name in names if name != "diagnostics"]
-        fixed_height = sum(preferred[name] for name in fixed_names)
-        diagnostics_min = 66 if compact else 78
-        heights = {name: preferred[name] for name in fixed_names}
-        heights["diagnostics"] = max(diagnostics_min, available - fixed_height)
 
-        # Supported windows have enough room for the minimum diagnostics area.
-        # If an even smaller surface is supplied, retain the priority order by
-        # compressing diagnostics only; the footer remains outside the section
-        # stack and controls are never pushed below it.
-        total = sum(heights.values())
-        if total > available:
-            heights["diagnostics"] = max(1, heights["diagnostics"] - (total - available))
+        names.extend(("legend", "controls"))
+
+        available = (
+            panel.height
+            - 2 * padding
+            - footer_height
+            - gap * (len(names) - 1)
+        )
+
+        fixed_height = sum(preferred[name] for name in names)
+
+        heights = {
+            name: preferred[name]
+            for name in names
+        }
+
+        # If the window is smaller than the preferred layout,
+        # compress the route section first.
+        if fixed_height > available:
+            heights["route"] = max(
+                1,
+                heights["route"] - (fixed_height - available),
+            )
+
         sections: dict[str, PanelSection] = {}
+
         y = panel.top + padding
+
         for name in names:
-            rect = pygame.Rect(panel.left + padding, y, panel.width - 2 * padding, heights[name])
-            sections[name] = PanelSection(name, rect)
+            rect = pygame.Rect(
+                panel.left + padding,
+                y,
+                panel.width - 2 * padding,
+                heights[name],
+            )
+
+            sections[name] = PanelSection(
+                name,
+                rect,
+            )
+
             y += heights[name] + gap
+
         return sections
 
     def _draw_sidebar(
@@ -598,31 +618,88 @@ class PygameRenderer:
         editor_data: EditorPanelData | None = None,
     ) -> None:
         assert self.screen is not None
+
         panel = self.panel_rect()
+
         sections = self._sidebar_sections(
             panel,
-            has_route=planning_result is not None
-            or editor_data is not None and editor_data.state_label == "PLANNING",
+            has_route=(
+                planning_result is not None
+                or (
+                    editor_data is not None
+                    and editor_data.state_label == "PLANNING"
+                )
+            ),
             has_editor=editor_data is not None,
         )
-        pygame.draw.rect(self.screen, self.PANEL, panel, border_radius=10)
-        pygame.draw.rect(self.screen, self.PANEL_BORDER, panel, 1, border_radius=10)
-        self._draw_header(sections["header"], editor_data is not None)
-        self._draw_live_section(sections["live"], state, playback_speed)
-        planning = editor_data is not None and editor_data.state_label == "PLANNING"
-        self._draw_route_section(sections["route"], state, planning_result, planning=planning)
-        self._draw_diagnostics_section(sections["diagnostics"], planning_result, planning=planning)
+
+        pygame.draw.rect(
+            self.screen,
+            self.PANEL,
+            panel,
+            border_radius=10,
+        )
+
+        pygame.draw.rect(
+            self.screen,
+            self.PANEL_BORDER,
+            panel,
+            1,
+            border_radius=10,
+        )
+
+        self._draw_header(
+            sections["header"],
+            editor_data is not None,
+        )
+
+        self._draw_live_section(
+            sections["live"],
+            state,
+            playback_speed,
+        )
+
+        planning = (
+            editor_data is not None
+            and editor_data.state_label == "PLANNING"
+        )
+
+        self._draw_route_section(
+            sections["route"],
+            state,
+            planning_result,
+            planning=planning,
+        )
+
         if editor_data is not None:
-            self._draw_editor_section(sections["editor"], editor_data)
-        self._draw_legend_section(sections["legend"], compact=sections["legend"].rect.height < 130)
+            self._draw_editor_section(
+                sections["editor"],
+                editor_data,
+            )
+
+        self._draw_legend_section(
+            sections["legend"],
+            compact=sections["legend"].rect.height < 130,
+        )
+
         self._draw_controls_section(
             sections["controls"],
             compact=sections["controls"].rect.height < 90,
             editor=editor_data is not None,
         )
-        footer = "World: 200 x 200 cm  |  Grid: 20 x 20"
-        self._blit_text(footer, (panel.left + 16, panel.bottom - 18), self.MUTED_TEXT, tiny=True)
 
+        footer = "World: 200 x 200 cm  |  Grid: 20 x 20"
+
+        self._blit_text(
+            footer,
+            (
+                panel.left + 16,
+                panel.bottom - 18,
+            ),
+            self.MUTED_TEXT,
+            tiny=True,
+        )
+        
     def _draw_header(self, section: PanelSection, editor: bool) -> None:
         rect = section.rect
         x, y = rect.left, rect.top
@@ -711,8 +788,18 @@ class PygameRenderer:
         planning: bool = False,
     ) -> None:
         rect = section.rect
-        self._draw_section_title("ROUTE SUMMARY", section)
-        route = planning_result.route if planning_result is not None else None
+
+        self._draw_section_title(
+            "ROUTE SUMMARY / COMMAND QUEUE",
+            section,
+        )
+
+        route = (
+            planning_result.route
+            if planning_result is not None
+            else None
+        )
+
         if planning:
             rows = (
                 ("Status", "PLANNING"),
@@ -723,29 +810,72 @@ class PygameRenderer:
                 ("Candidates", "-"),
                 ("Primitives", "-"),
             )
+
         elif route is not None:
             selected = ", ".join(
                 f"{target}:{kind.upper()}"
-                for target, kind in zip(route.target_order, route.selected_candidate_kinds)
+                for target, kind in zip(
+                    route.target_order,
+                    route.selected_candidate_kinds,
+                )
             ) or "-"
+
             rows = (
-                ("Status", planning_result.status.value.upper()),
-                ("Planning time", f"{planning_result.metrics.total_planning_time_s:.3f} s"),
-                ("Route time", f"{route.metrics.estimated_time_s:.2f} s"),
-                ("Distance", f"{route.metrics.geometric_distance_cm:.1f} cm"),
-                ("Order", " -> ".join(map(str, route.target_order)) or "-"),
-                ("Candidates", selected),
-                ("Primitives", _primitive_summary(route)),
+                (
+                    "Status",
+                    planning_result.status.value.upper(),
+                ),
+                (
+                    "Planning time",
+                    f"{planning_result.metrics.total_planning_time_s:.3f} s",
+                ),
+                (
+                    "Route time",
+                    f"{route.metrics.estimated_time_s:.2f} s",
+                ),
+                (
+                    "Distance",
+                    f"{route.metrics.geometric_distance_cm:.1f} cm",
+                ),
+                (
+                    "Order",
+                    " -> ".join(
+                        map(str, route.target_order)
+                    ) or "-",
+                ),
+                (
+                    "Candidates",
+                    selected,
+                ),
+                (
+                    "Primitives",
+                    _primitive_summary(route),
+                ),
             )
+
         else:
-            target_order = " -> ".join(map(str, state.target_order)) or "-"
+            target_order = (
+                " -> ".join(
+                    map(str, state.target_order)
+                )
+                or "-"
+            )
+
             selected = ", ".join(
-                f"{target}:{kind.upper()}" for target, kind in state.selected_candidates
+                f"{target}:{kind.upper()}"
+                for target, kind in state.selected_candidates
             ) or "-"
+
             if planning_result is not None:
                 rows = (
-                    ("Status", planning_result.status.value.upper()),
-                    ("Planning time", f"{planning_result.metrics.total_planning_time_s:.3f} s"),
+                    (
+                        "Status",
+                        planning_result.status.value.upper(),
+                    ),
+                    (
+                        "Planning time",
+                        f"{planning_result.metrics.total_planning_time_s:.3f} s",
+                    ),
                     ("Route time", "-"),
                     ("Distance", "-"),
                     ("Order", target_order),
@@ -753,8 +883,188 @@ class PygameRenderer:
                     ("Primitives", "-"),
                 )
             else:
-                rows = (("Status", "PLAYBACK ONLY"), ("Order", target_order), ("Candidates", selected))
-        self._draw_rows(section, rows, emphasize_labels={"Planning time", "Status"})
+                rows = (
+                    ("Status", "PLAYBACK ONLY"),
+                    ("Order", target_order),
+                    ("Candidates", selected),
+                )
+
+        # ---------------------------------------------------------
+        # TOP: route summary
+        # ---------------------------------------------------------
+
+        summary_height = min(
+            145,
+            max(
+                80,
+                int(rect.height * 0.48),
+            ),
+        )
+
+        summary_section = PanelSection(
+            "route_summary",
+            pygame.Rect(
+                rect.left,
+                rect.top + 23,
+                rect.width,
+                summary_height,
+            ),
+        )
+
+        self._draw_rows(
+            summary_section,
+            rows,
+            emphasize_labels={
+                "Planning time",
+                "Status",
+            },
+        )
+
+        # ---------------------------------------------------------
+        # BOTTOM: movement queue + planner diagnostics
+        # ---------------------------------------------------------
+
+        bottom_top = summary_section.rect.bottom + 8
+
+        bottom_height = max(
+            1,
+            rect.bottom - bottom_top,
+        )
+
+        # Diagnostics gets roughly 42% of the available width.
+        diagnostics_width = max(
+            180,
+            int(rect.width * 0.42),
+        )
+
+        column_gap = 14
+
+        queue_width = max(
+            1,
+            rect.width - diagnostics_width - column_gap,
+        )
+
+        queue_section = pygame.Rect(
+            rect.left,
+            bottom_top,
+            queue_width,
+            bottom_height,
+        )
+
+        diagnostics_section = pygame.Rect(
+            queue_section.right + column_gap,
+            bottom_top,
+            diagnostics_width,
+            bottom_height,
+        )
+
+        self._draw_command_queue(
+            queue_section,
+            state,
+        )
+
+        self._draw_diagnostics_section(
+            PanelSection(
+                "diagnostics",
+                diagnostics_section,
+            ),
+            planning_result,
+            planning=planning,
+        )
+
+    def _draw_command_queue(
+        self,
+        rect: pygame.Rect,
+        state: SimulationState,
+    ) -> None:
+        """Draw the grouped movement-command queue for playback."""
+
+        self._blit_text(
+            "MOVEMENT QUEUE",
+            (rect.left, rect.top),
+            self.MUTED_TEXT,
+            tiny=True,
+        )
+
+        queue = state.command_queue
+
+        if not queue:
+            self._blit_text(
+                "No movement commands",
+                (rect.left, rect.top + 17),
+                self.MUTED_TEXT,
+                tiny=True,
+            )
+            return
+
+        visible_rows = max(
+            1,
+            min(3, (rect.height - 22) // 20),
+        )
+
+        current = state.current_command_queue_index
+
+        if current is None:
+            start = max(0, len(queue) - visible_rows)
+        else:
+            start = max(
+                0,
+                min(current - 1, len(queue) - visible_rows),
+            )
+
+        end = min(
+            len(queue),
+            start + visible_rows,
+        )
+
+        for row, index in enumerate(range(start, end)):
+            command, count = queue[index]
+            y = rect.top + 18 + row * 20
+
+            if index < (current if current is not None else len(queue)):
+                marker = "✓"
+                color = self.MUTED_TEXT
+            elif index == current:
+                marker = "→"
+                color = (255, 237, 151)
+            else:
+                marker = " "
+                color = self.TEXT
+
+            suffix = f" × {count}" if count > 1 else ""
+
+            self._blit_text(
+                marker,
+                (rect.left, y),
+                color,
+                tiny=True,
+            )
+            self._blit_text(
+                self._fit_text(
+                    f"{command}{suffix}",
+                    self._small_font,
+                    rect.width - 24,
+                ),
+                (rect.left + 18, y - 1),
+                color,
+                small=True,
+            )
+
+        if start > 0:
+            self._blit_text(
+                "...",
+                (rect.right - 20, rect.top + 18),
+                self.MUTED_TEXT,
+                tiny=True,
+            )
+        if end < len(queue):
+            self._blit_text(
+                "...",
+                (rect.right - 20, rect.bottom - 13),
+                self.MUTED_TEXT,
+                tiny=True,
+            )
+
 
     def _draw_diagnostics_section(
         self,

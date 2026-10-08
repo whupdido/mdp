@@ -5,8 +5,6 @@ from __future__ import annotations
 import math
 import queue
 import threading
-from datetime import datetime, timezone
-from pathlib import Path
 
 import pygame
 
@@ -14,7 +12,7 @@ from algorithm.enums import Direction, PlanningStatus
 from algorithm.models import ArenaInput, GridCell, PlanningResult
 
 from .renderer import EditorPanelData, PygameRenderer, RenderOptions
-from .task1_editor_model import EditorState, Task1EditorController
+from .task1_editor_model import EditorState, Task1EditorController, REQUIRED_TASK1_TARGETS
 
 
 class Task1EditorApp:
@@ -26,8 +24,7 @@ class Task1EditorApp:
             controller.config,
             width_px=PygameRenderer.DEFAULT_WINDOW_SIZE[0],
             height_px=PygameRenderer.DEFAULT_WINDOW_SIZE[1],
-            title=("MDP Task 1 Production Simulator" if getattr(controller, "production_mode", False)
-                   else "MDP Task 1 Scenario Editor"),
+            title="MDP Task 1 Scenario Editor",
         )
         self.options = RenderOptions()
         self.selected_obstacle_id: int | None = None
@@ -105,29 +102,62 @@ class Task1EditorApp:
             selected_obstacle=selected_text,
         )
 
-    def _handle_mouse(self, button: int, position: tuple[int, int]) -> None:
+    def _handle_mouse(
+        self,
+        button: int,
+        position: tuple[int, int],
+    ) -> None:
         cell = self._grid_cell_at(position)
+
         if cell is None:
             return
-        obstacle = next((item for item in self.controller.obstacles if item.cell == cell), None)
+
+        obstacle = next(
+            (item for item in self.controller.obstacles if item.cell == cell),
+            None,
+        )
+
         try:
             if button == 1:
                 if obstacle is not None:
-                    self.selected_obstacle_id = obstacle.obstacle_id
+                    # Clicking the selected obstacle again = deselect
+                    if self.selected_obstacle_id == obstacle.obstacle_id:
+                        self.selected_obstacle_id = None
+                    else:
+                        self.selected_obstacle_id = obstacle.obstacle_id
+
                 elif self.selected_obstacle_id is not None:
-                    self.controller.move_obstacle(self.selected_obstacle_id, cell)
-                else:
-                    obstacle_id = next(
-                        value
-                        for value in range(1, self.controller.target_count_range[1] + 1)
-                        if all(item.obstacle_id != value for item in self.controller.obstacles)
+                    # Click empty cell = move selected obstacle
+                    self.controller.move_obstacle(
+                        self.selected_obstacle_id,
+                        cell,
                     )
-                    self.controller.add_obstacle(obstacle_id, cell, Direction.NORTH)
+
+                else:
+                    # Nothing selected = add new obstacle
+                    obstacle_id = (
+                        max(
+                            (
+                                item.obstacle_id
+                                for item in self.controller.obstacles
+                            ),
+                            default=0,
+                        )
+                        + 1
+                    )
+                    self.controller.add_obstacle(
+                        obstacle_id,
+                        cell,
+                        Direction.NORTH,
+                    )
                     self.selected_obstacle_id = obstacle_id
+
             elif button == 3 and obstacle is not None:
                 self.controller.remove_obstacle(obstacle.obstacle_id)
+
                 if self.selected_obstacle_id == obstacle.obstacle_id:
                     self.selected_obstacle_id = None
+
         except (KeyError, RuntimeError, ValueError, StopIteration) as exc:
             self.controller.status_message = str(exc)
 
@@ -139,10 +169,6 @@ class Task1EditorApp:
             if self.controller.state is EditorState.PLANNING:
                 self.render()
                 pygame.display.flip()
-        elif event.key == pygame.K_s and event.mod & pygame.KMOD_CTRL:
-            self._save_physical_run()
-        elif event.key == pygame.K_m and event.mod & pygame.KMOD_CTRL:
-            self._enter_actual_capture_pose()
         elif event.key == pygame.K_SPACE:
             self.controller.play_pause()
         elif event.key == pygame.K_RIGHT:
@@ -186,58 +212,6 @@ class Task1EditorApp:
         elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
             self.playback_speed = max(0.25, self.playback_speed / 2.0)
 
-    def _save_physical_run(self) -> None:
-        result = self.controller.planning_result
-        try:
-            from copy import deepcopy
-            from .scenarios import build_run_record, build_scenario_record, save_run
-            config = self.controller.config
-            calibration = getattr(self.controller, "calibration_metadata", None)
-            if result is not None and result.route is not None:
-                record = build_run_record(self.controller.arena, config, result, calibration=calibration,
-                                          actual_capture_poses=getattr(self.controller, "actual_capture_poses", None),
-                                          routing_mode=self.controller.routing_mode)
-            elif getattr(self.controller, "loaded_scenario_record", None) is not None:
-                record = deepcopy(self.controller.loaded_scenario_record)
-            else:
-                record = build_scenario_record(self.controller.arena, config, calibration=calibration,
-                                               routing_mode=self.controller.routing_mode)
-            output = Path("task1_runs") / f"task1_run_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.json"
-            save_run(output, record)
-            self.controller.status_message = f"Saved scenario/run to {output}"
-            print(f"Saved scenario/run: {output}")
-        except (OSError, ValueError, KeyError) as exc:
-            self.controller.status_message = f"Save failed: {exc}"
-
-    def _enter_actual_capture_pose(self) -> None:
-        result = self.controller.planning_result
-        loaded_record = getattr(self.controller, "loaded_scenario_record", None)
-        if (result is None or result.route is None) and not loaded_record:
-            self.controller.status_message = "Load or plan a route before entering measured capture poses"
-            return
-        try:
-            target = int(input("Capture target ID: "))
-            x_cm = float(input("Actual rear-axle x (cm): "))
-            y_cm = float(input("Actual rear-axle y (cm): "))
-            heading_deg = float(input("Actual heading (degrees): "))
-            from algorithm.models import Pose
-            from .scenarios import attach_measured_capture_pose, compare_capture_poses, pose_from_record
-            if result is not None and result.route is not None:
-                planned = next(item.pose for item in result.route.observation_poses if item.obstacle_id == target)
-            else:
-                planned = pose_from_record(loaded_record["planned_capture_poses"][str(target)])
-            measured = Pose(x_cm, y_cm, math.radians(heading_deg))
-            measured_poses = getattr(self.controller, "actual_capture_poses", {})
-            measured_poses[target] = measured
-            self.controller.actual_capture_poses = measured_poses
-            if loaded_record:
-                attach_measured_capture_pose(loaded_record, target, measured)
-            error = compare_capture_poses(planned, measured)
-            self.controller.status_message = f"Target {target}: physical position error {error['position_error_cm']:.1f} cm"
-            print(f"Capture {target} physical-vs-planned: {error}")
-        except (ValueError, StopIteration, EOFError) as exc:
-            self.controller.status_message = f"Measured pose not recorded: {exc}"
-
     def _start_planning(self) -> None:
         """Start exactly one background planner for an immutable arena copy."""
         if self.planning_in_progress or self.controller.state is EditorState.PLANNING:
@@ -279,8 +253,6 @@ class Task1EditorApp:
         else:
             assert result is not None
             self.controller.apply_planning_result(arena, result)
-            if getattr(self.controller, "production_mode", False):
-                _print_production_route_diagnostics(self.controller, result)
 
     def _grid_cell_at(self, position: tuple[int, int]) -> GridCell | None:
         x_cm, y_cm = self.renderer.viewport.screen_to_world(*position)
@@ -330,8 +302,7 @@ class Task1EditorApp:
         x = panel.left + 15
         y = panel.top + 12
         state_label = self.controller.state.value.replace("_", " ").upper()
-        self._text("PRODUCTION SIMULATOR" if getattr(self.controller, "production_mode", False)
-                   else "TASK 1 EDITOR", x, y)
+        self._text("TASK 1 EDITOR", x, y)
         self._small(f"STATE  {state_label}", x + 185, y + 4, (121, 202, 239))
         y += 27
         status = self.controller.status_message
@@ -445,16 +416,13 @@ class Task1EditorApp:
         else:
             self._small("Planning metrics appear after Enter", right_x, diag_y, (180, 190, 207))
 
-        controls_y = panel.bottom - 112
+        controls_y = panel.bottom - 91
         self._section("CONTROLS", x, controls_y, panel.width - 30)
         controls = (
             "Left click select/add/move   Right click/Delete remove",
             "W/A/S/D image face North/West/South/East   N candidates",
             "Enter plan   Space play/pause   Left/Right navigate   R reset",
-            ("Ctrl+S save run   Ctrl+M measured capture pose" if getattr(self.controller, "production_mode", False)
-             else "F5 random   Shift+F5 verified solvable random"),
-            ("rear axle marker = planned robot reference" if getattr(self.controller, "production_mode", False)
-             else "marker = rear axle; arrows never send STM commands"),
+            "F5 raw random   Shift+F5 verified random   marker = rear axle",
         )
         for index, line in enumerate(controls):
             self._small(line, x, controls_y + 23 + index * 17, (180, 190, 207))
@@ -497,52 +465,6 @@ def _primitive_summary(route) -> str:
         if primitive.command in counts:
             counts[primitive.command] += 1
     return " ".join(f"{command}={counts[command]}" for command in counts)
-
-
-def _print_production_route_diagnostics(controller, result) -> None:
-    from .scenarios import build_run_record
-    if result.route is None:
-        print(f"Production plan: {result.status.value}: " + "; ".join(issue.message for issue in result.issues))
-        return
-    record = build_run_record(controller.arena, controller.config, result,
-                              calibration=getattr(controller, "calibration_metadata", None),
-                              routing_mode=controller.routing_mode)
-    route = record["planned_route"]
-    movements = route["movements"]
-    obstacles = [item["minimum_obstacle_clearance_cm"] for item in movements]
-    boundaries = [item["minimum_arena_clearance_cm"] for item in movements]
-    print("PRODUCTION ROUTE DIAGNOSTICS")
-    print(f"  target order={result.route.target_order} candidates={result.route.selected_candidate_kinds}")
-    print(f"  movement commands={len(movements)} distance={route['geometric_distance_cm']:.1f} cm "
-          f"estimated={route['estimated_execution_time_s']:.2f}s planning={result.metrics.total_planning_time_s:.3f}s")
-    primitives = result.route.primitives
-    print(f"  straight={sum(p.steering.value == 'straight' for p in primitives)} "
-          f"turns={sum(p.steering.value != 'straight' for p in primitives)} "
-          f"reverse={sum(p.gear.value == 'reverse' for p in primitives)} "
-          f"reverse_turns={sum(p.gear.value == 'reverse' and p.steering.value != 'straight' for p in primitives)} "
-          f"steering_changes={result.route.metrics.steering_changes} "
-          f"direction_changes={result.route.metrics.direction_changes}")
-    print(f"  minimum obstacle clearance={min(obstacles, default=float('inf')):.2f} cm "
-          f"minimum arena clearance={min(boundaries, default=float('inf')):.2f} cm "
-          f"expanded={result.metrics.total_nodes_expanded}")
-    for move in movements:
-        clearance = move["minimum_obstacle_clearance_cm"]
-        boundary = move["minimum_arena_clearance_cm"]
-        warning_tags = [f"OBSTACLE<{threshold}cm" for threshold in (8, 5, 3) if clearance < threshold]
-        if boundary < 5.0:
-            warning_tags.append("ARENA<5cm")
-        warning = " WARNING " + ",".join(warning_tags) if warning_tags else ""
-        print(f"  {move['sequence']:03d} {move['command']} {move['start_pose']} -> {move['end_pose']} "
-              f"target={move['target_obstacle']} candidate={move['candidate']} gear={move['gear']} "
-              f"obstacle_clear={clearance:.2f}cm arena_clear={boundary:.2f}cm "
-              f"closest={move['closest_obstacle_id']} cumulative={move['cumulative_distance_cm']:.1f}cm{warning}")
-    for capture in route["captures"]:
-        print(f"  CAPTURE target={capture['target_obstacle']} face={capture['image_face']} "
-              f"rear_axle={capture['rear_axle_pose']} camera={capture['planned_camera_pose']} "
-              f"face_gap={capture['camera_to_image_face_distance_cm']:.2f}cm "
-              f"lateral_error={capture['lateral_alignment_error_cm']:.2f}cm "
-              f"candidate={capture['selected_candidate']} standoff={capture['standoff_cm']} "
-              f"motion_before={capture['motion_before_capture']}")
 
 
 __all__ = ["Task1EditorApp", "run_task1_editor"]

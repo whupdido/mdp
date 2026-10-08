@@ -17,19 +17,19 @@
 #include "oled.h"
 #include "obstacle_nav.h"
 
-#define LINE_MAX 24
+#define LINE_MAX 16
 #define COMMAND_QUEUE_SIZE 8u
 
 static uint8_t rx_byte;
 static char    line[LINE_MAX];
 static uint8_t idx = 0;
-static char command_queue[COMMAND_QUEUE_SIZE][LINE_MAX];
+static char    command_queue[COMMAND_QUEUE_SIZE][LINE_MAX];
 static volatile uint8_t queue_head = 0u;
 static volatile uint8_t queue_tail = 0u;
 static volatile uint8_t queue_overflow = 0u;
 static volatile uint8_t stop_pending = 0u;
 static uint8_t awaiting_ack = 0;
-static char last_motion_cmd[LINE_MAX] = "";
+static char    last_motion_cmd[LINE_MAX] = "";
 
 void oled_countdown(){
 	OLED_ShowString(10,0,(const uint8_t* )"Get Ready...");
@@ -69,8 +69,16 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
                 uint8_t next_head = (uint8_t)((queue_head + 1u) % COMMAND_QUEUE_SIZE);
                 line[idx] = '\0';
                 if (strcmp(line, "STOP") == 0) {
+                    /* Stop PWM immediately from the UART ISR.  The motor and
+                       servo helpers only write timer registers, so this does
+                       not wait for the main loop or a blocking motion delay. */
+                    motion_stop();
                     stop_pending = 1u;
                 } else if (!stop_pending && next_head != queue_tail) {
+                    /* Publish queue_head only after the complete line has
+                       been copied.  The main loop owns queue_tail, making
+                       this a lock-free single-producer/single-consumer
+                       queue between the UART ISR and command_poll(). */
                     memcpy(command_queue[queue_head], line, (size_t)idx + 1u);
                     queue_head = next_head;
                 } else {
@@ -115,6 +123,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
  *   STALL     aborted: both wheels stopped turning for 1 s
  *   TIMEOUT   aborted: exceeded 20 s
  *   BLOCKED   aborted: IR saw an obstacle, stopped short (Zhenxi)
+ *   ACK,<cmd> movement accepted and starting
  *   ACK       STOP acknowledged, or START2 accepted
  *   BUSY      a move was already running; this command was DISCARDED
  *   ERR       unrecognised command
@@ -163,52 +172,73 @@ static void report_result(void)
     }
 }
 
+/* A status probe is deliberately separate from the normal BUSY reply.
+ * BUSY means a newly submitted movement command was rejected; STATUS,BUSY
+ * means the already accepted movement is still running.  When idle, retain
+ * and report the last movement verdict so the Pi can recover if the original
+ * terminal line was lost on the UART. */
 static void report_status(void)
 {
     char response[48];
-    const char *result;
+
     if (motion_busy()) {
         snprintf(response, sizeof(response), "STATUS,BUSY,%s\r\n",
                  last_motion_cmd[0] ? last_motion_cmd : "NONE");
-    } else {
-        switch (motion_result()) {
-            case MOVE_DONE: result = "DONE"; break;
-            case MOVE_STALL: result = "STALL"; break;
-            case MOVE_TIMEOUT: result = "TIMEOUT"; break;
-            case MOVE_BLOCKED: result = "BLOCKED"; break;
-            case MOVE_ABORT: result = "STOPPED"; break;
-            default: result = "NONE"; break;
-        }
-        snprintf(response, sizeof(response), "STATUS,IDLE,%s,%s\r\n",
-                 result, last_motion_cmd[0] ? last_motion_cmd : "NONE");
+        command_send(response);
+        return;
     }
+
+    const char *result;
+    switch (motion_result()) {
+        case MOVE_DONE:    result = "DONE";    break;
+        case MOVE_STALL:   result = "STALL";   break;
+        case MOVE_TIMEOUT: result = "TIMEOUT"; break;
+        case MOVE_BLOCKED: result = "BLOCKED"; break;
+        case MOVE_ABORT:   result = "STOPPED"; break;
+        default:           result = "NONE";    break;
+    }
+
+    snprintf(response, sizeof(response), "STATUS,IDLE,%s,%s\r\n",
+             result, last_motion_cmd[0] ? last_motion_cmd : "NONE");
     command_send(response);
+}
+
+static void remember_motion_command(const char *cmd)
+{
+    strncpy(last_motion_cmd, cmd, LINE_MAX - 1u);
+    last_motion_cmd[LINE_MAX - 1u] = '\0';
 }
 
 static void begin_motion(const char *cmd)
 {
     char response[LINE_MAX + 8u];
-    strncpy(last_motion_cmd, cmd, LINE_MAX - 1u);
-    last_motion_cmd[LINE_MAX - 1u] = '\0';
+
+    motion_abort_clear();
+    remember_motion_command(cmd);
     snprintf(response, sizeof(response), "ACK,%s\r\n", cmd);
     command_send(response);
 }
 
 static void handle_stop(void)
 {
+    /* STOP invalidates every command accepted before its acknowledgement.
+       Flushing here also discards commands which arrived just behind STOP
+       before the main loop observed stop_pending. */
     queue_tail = queue_head;
     queue_overflow = 0u;
+    awaiting_ack = 0u;
+    stop_pending = 0u;
     motion_stop();
     command_send("ACK\r\n");
-    /* Keep the ISR from publishing another command until the STOP barrier
-       has been acknowledged. */
-    stop_pending = 0u;
 }
 
 static void dispatch(const char *cmd)
 {
+    /* Handle probes before the busy guard.  A probe observes the outstanding
+       move; it is not a second movement command and must never be rejected as
+       BUSY. */
     if (strcmp(cmd, "?") == 0) { report_status(); return; }
-    if (strcmp(cmd, "STOP") == 0) { handle_stop(); return; }
+    if (strncmp(cmd, "STOP", 4) == 0) { handle_stop(); return; }
     if (motion_busy()) { command_send("BUSY\r\n"); return; }
     if (strlen(cmd) < 2u) { command_send("ERR\r\n"); return; }
 
@@ -234,11 +264,12 @@ static void dispatch(const char *cmd)
        fact running Task 2 perfectly well. */
     else if (!strncmp(cmd, "START2", 6)) {
         if (task2_running) { command_send("BUSY\r\n"); return; }
+        motion_abort_clear();
         task2_running = 1u;
         command_send("ACK\r\n");
         task_2();
         task2_running = 0u;
-        command_send("DONE\r\n");
+        if (!motion_abort_requested()) command_send("DONE\r\n");
         return;
     }
     else { command_send("ERR\r\n"); return; }
@@ -258,13 +289,18 @@ void command_poll(void)
         handle_stop();
         return;
     }
+
     if (queue_tail != queue_head) {
         char local[LINE_MAX];
         uint8_t tail = queue_tail;
         memcpy(local, command_queue[tail], LINE_MAX);
+        /* Release the queue slot before dispatch.  dispatch() may block in a
+           move and recursively call command_poll(), so advancing first lets
+           a queued probe, STOP, and following movement drain in order. */
         queue_tail = (uint8_t)((tail + 1u) % COMMAND_QUEUE_SIZE);
         dispatch(local);
     }
+
     if (queue_overflow) {
         queue_overflow = 0u;
         command_send("ERR\r\n");

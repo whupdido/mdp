@@ -65,6 +65,48 @@ object Outbound {
      */
     const val START2 = "START2"
 
+    /**
+     * Where the robot is starting from, sent before [COMPUTE] so the planner
+     * routes from the real pose instead of assuming `(1,1,N)`.
+     *
+     * The robot starts in the carpark, but which cell of it and facing which
+     * way is the supervisor's call on the day. Same shape as the inbound
+     * `ROBOT` line on purpose: it means the same thing in both directions,
+     * "the robot is here".
+     */
+    fun robotAt(x: Int, y: Int, facing: Facing) = "ROBOT,$x,$y,${facing.letter}"
+
+    /**
+     * Plan a route over the obstacles already sent, and report back when
+     * there is one.
+     *
+     * Separate from [START] because planning is slow and the six minutes are
+     * precious: this happens during the two-minute preparation, and START
+     * only becomes pressable once the Pi answers. `rpi/run_task1.py` waits
+     * for this string.
+     */
+    const val COMPUTE = "COMPUTE"
+
+    /**
+     * Forget every obstacle on the Pi.
+     *
+     * Sent first in every full-map publish, so the map the Pi plans over is
+     * exactly the one on screen. Without it the Pi only ever forgot an
+     * obstacle on [sub], and Undo, Clear and Demo never send one -- so
+     * obstacles removed that way lived on as ghosts the planner routed to.
+     */
+    const val CLEAR = "CLEAR"
+
+    /**
+     * Second press: check the robot is actually fit to run, then hold.
+     *
+     * Worth its own press because it happens in the preparation window,
+     * where time is free. It is the last chance to find out that the board
+     * is not answering or the laptop's detection server was never started --
+     * finding that out after the clock has begun costs images.
+     */
+    const val ARM = "ARM"
+
     fun start(task: Task) = if (task == Task.TASK2) START2 else START
 
     private fun Int.pad3(): String = coerceIn(0, 999).toString().padStart(3, '0')

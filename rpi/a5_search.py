@@ -40,14 +40,33 @@ TURN_DEGREES = 30         # how much to turn each step -- FL preferred, needs le
 
 def send_stm_command(stm: serial.Serial, command: str, timeout: float = 25):
     """Send one command, wait for the STM's reply. Returns the reply string,
-    or None if nothing came back in time."""
+    or None if nothing came back in time.
+
+    Zhenxi: skip the board's chatter instead of returning it.
+
+    This returned the first non-empty line, which stopped being the reply
+    once the board started emitting free-text diagnostics. A move that hits
+    something now says
+
+        [WARN] COLLISION AVOIDED! Stopping early.
+        BLOCKED
+
+    so the old version returned the [WARN] line and left BLOCKED sitting in
+    the buffer -- where the *next* command would read it as its own reply,
+    and every read after that is one behind. Only real replies are returned;
+    anything else is printed and dropped, which is the rule
+    STM32_motion_spec.md now states for everyone parsing this port.
+    """
     stm.write((command + "\n").encode("ascii"))
     stm.flush()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         line = stm.readline().decode("ascii", errors="replace").strip()
-        if line:
+        if not line:
+            continue
+        if line in a1_bridge.FINAL_REPLIES or line == "ACK":
             return line
+        print(f"[SEARCH] board says: {line}")
     return None
 
 

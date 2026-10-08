@@ -9,8 +9,11 @@
 #define CALIB_H
 
 /* Encoder counts per full revolution of the WHEEL, x4 mode.
-   MEASURED: 1 m hand-push gave 7318 counts, corroborated by two driven runs
-   (200 mm -> 210 mm, 500 mm -> 485 mm). The nameplate 1560 was wrong.      */
+   07-Oct-2026, with the front weights on: 1515.3, from CAL_ODOMETER hand
+   pushes (about 7420 counts per metre).
+   Before the weights: a 1 m hand-push gave 7318 counts (1494.0), corroborated
+   by two driven runs (200 mm -> 210 mm, 500 mm -> 485 mm). The nameplate 1560
+   was wrong.                                                               */
 #define COUNTS_PER_REV      1494.0f
 
 /* Wheel diameter in mm, measured under load                                */
@@ -33,8 +36,43 @@
 #define SERVO_LEFT          1000
 #define SERVO_RIGHT         2100
 
-/* --- Turn geometry, MEASURED on hardware, 5 runs per case ---
-   Tape measured 25-Sep-2026. Each 90 degree turn was run from SW1 with
+/* How long a turn waits after commanding full lock before it drives, so the
+   wheels are at the angle the radius was measured at. Weight on the front
+   wheels can make the servo slower to get there. To check: run CAL_TURN with
+   250 and again with 400. If the radii differ by more than their spread, the
+   servo was not reaching lock in time, so keep the longer value.            */
+#define SERVO_SETTLE_MS     250u
+
+/* Steering trim while reversing straight (FW is untouched), in microseconds
+   added to SERVO_CENTRE. Negative steers left. Reversing, caster pushes the
+   front wheels off centre instead of centring them, and the car drifted to
+   its right; this holds the wheels the other way for the whole move. Replaces
+   the old reverse_bias of -20 in control.c, which faded out at low speed.
+   Scale: full left lock is 500 us for roughly 27 deg at the wheels (the
+   282 mm FL radius with a wheelbase of about 15 cm), so about 18 us per
+   degree; -55 is about 3 deg.
+   Tune with CAL_STRAIGHT: BW100's "side" should read about 0 (+ = left).
+   Still drifting right: more negative. Now drifting left: less negative.    */
+#define SERVO_REVERSE_TRIM_US   (-55)
+
+/* --- Turn geometry, MEASURED on hardware ---
+   Current values: tape measured 07-Oct-2026 with the front weights on, on
+   the 30 degree turns the planner drives (CAL_TURN_* in main.c). The
+   rear-axle midpoint was marked on the floor before and after a turn and the
+   straight-line chord c measured (average of the runs), then
+       R = c / (2 sin(theta/2)) = c / 0.5176   for theta = 30 deg.
+                    chord mean     radius
+        FR           182.0 mm      352
+        FL           146.0 mm      282
+        BR           184.6 mm      357
+        BL           131.6 mm      254
+   A 30 degree turn moves the car R/2 along its old heading and 0.134 R
+   sideways. The radius is taken at 30 deg, the angle the planner assumes,
+   so the planner's step matches the measured chord. If a turn's braking lead
+   changes, re-measure that turn: the coast is part of the chord.
+
+   Earlier, 25-Sep-2026, before the weights, 5 runs per case: each 90 degree
+   turn was run from SW1 with
    TURN_TEST in main.c; the rear-axle midpoint was marked on the floor at start
    and finish and the straight-line chord c measured. Then
        R = c / (2 sin(theta/2)) = c / sqrt(2)   for theta = 90 deg.
@@ -56,10 +94,10 @@
    The left-turn scatter seen on 05-Sep (+-13/14 mm) did not show up here: the
    left turns now repeat as well as the right ones. BR is the only case whose
    value moved by more than the spread (-13 mm).                           */
-#define TURN_RADIUS_FL_MM   272     /* +-2 mm (4 runs recorded)             */
-#define TURN_RADIUS_FR_MM   366     /* +-4 mm                               */
-#define TURN_RADIUS_BL_MM   279     /* +-4 mm                               */
-#define TURN_RADIUS_BR_MM   370     /* +-2 mm                               */
+#define TURN_RADIUS_FL_MM   282     /* 07-Oct, 30 deg chord 146.0 mm (was 262) */
+#define TURN_RADIUS_FR_MM   352     /* 07-Oct, 30 deg chord 182.0 mm (was 360) */
+#define TURN_RADIUS_BL_MM   254     /* 07-Oct, 30 deg chord 131.6 mm (was 260) */
+#define TURN_RADIUS_BR_MM   357     /* 07-Oct, 30 deg chord 184.6 mm (was 361) */
 
 /* Target speeds in ENCODER COUNTS PER 10 ms CONTROL TICK.
    A physical quantity, independent of PWM_MAX -- do NOT rescale these

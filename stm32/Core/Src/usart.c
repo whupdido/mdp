@@ -81,8 +81,9 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
     /* USART3 interrupt Init */
-    /* Keep RX ahead of the 100 Hz control ISR so long IMU reads cannot
-       starve 115200-baud command reception. */
+    /* UART bytes arrive every ~87 us at 115200 baud.  Keep RX above the
+       100 Hz control ISR (priority 5), whose blocking IMU read can otherwise
+       starve USART3 long enough to overrun and silently lose a command. */
     HAL_NVIC_SetPriority(USART3_IRQn, 4, 0);
     HAL_NVIC_EnableIRQ(USART3_IRQn);
   /* USER CODE BEGIN USART3_MspInit 1 */

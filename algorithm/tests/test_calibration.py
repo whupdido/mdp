@@ -128,7 +128,7 @@ def test_production_profile_preserves_integrated_bounds_and_runtime_search():
     assert config.adaptive_initial_expansions == 200
     assert config.adaptive_max_expansions == 5000
     assert config.local_planning_timeout_s == 5.0
-    assert config.overall_planning_timeout_s == 60.0
+    assert config.overall_planning_timeout_s == 120.0
     assert config.turn_angles_deg == (30.0, 45.0, 60.0, 90.0)
     assert config.search_turn_angles_deg == (60.0, 90.0)
     assert config.heading_bin_rad == pytest.approx(math.radians(15.0))

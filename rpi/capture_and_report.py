@@ -74,7 +74,7 @@ def _recv_pickle(sock: socket.socket):
 
 
 def capture_frame():
-    """Grab one frame from the RPi camera."""
+    """Grab one frame from the RPi camera and correct its orientation."""
     cap = cv2.VideoCapture(CAMERA_INDEX)
     if not cap.isOpened():
         raise RuntimeError(
@@ -87,10 +87,18 @@ def capture_frame():
         cap.release()
     if not ok:
         raise RuntimeError("Camera opened but failed to capture a frame")
-    return frame
+    return cv2.rotate(frame, cv2.ROTATE_180)
 
 
-def detect(frame, conf: float = 0.25):
+def detect(
+    frame,
+    conf: float = 0.25,
+    *,
+    run_id: str | None = None,
+    expected_images: int | None = None,
+    obstacle_number: int | None = None,
+    capture_index: int | None = None,
+):
     """Send one frame to the detection server. Returns the official Image ID
     (11-40), or None if nothing was confidently detected."""
     height, width = frame.shape[:2]
@@ -99,12 +107,20 @@ def detect(frame, conf: float = 0.25):
     sock.connect((DETECTION_SERVER_IP, DETECTION_SERVER_PORT))
     try:
         _recv_json(sock)  # class-name metadata, sent on connect -- not needed here
-        _send_pickle(sock, {
+        request = {
             "frame": frame,
             "height": height,
             "width": width,
             "conf": conf,
-        })
+        }
+        if run_id is not None:
+            request.update({
+                "run_id": run_id,
+                "expected_images": expected_images,
+                "obstacle_id": obstacle_number,
+                "capture_index": capture_index,
+            })
+        _send_pickle(sock, request)
         response = _recv_pickle(sock)
         return response["class_id"]
     finally:
@@ -146,7 +162,16 @@ def signal_search_result(class_id, stm_serial):
     return message
 
 
-def report_obstacle(obstacle_number: int, android_serial, stm_serial=None, face: str | None = None):
+def report_obstacle(
+    obstacle_number: int,
+    android_serial,
+    stm_serial=None,
+    face: str | None = None,
+    *,
+    run_id: str | None = None,
+    expected_images: int | None = None,
+    capture_index: int | None = None,
+):
     """Capture a frame, detect it, and:
       - send TARGET,<obstacle>,<id> (optionally ,<face>) to Android
       - if stm_serial is given, also send IMxxx to the STM
@@ -157,7 +182,13 @@ def report_obstacle(obstacle_number: int, android_serial, stm_serial=None, face:
     relying on Android to drop an out-of-range ID: the marker means "facing
     the obstacle," not "found the face," so it isn't a real result yet."""
     frame = capture_frame()
-    class_id = detect(frame)
+    class_id = detect(
+        frame,
+        run_id=run_id,
+        expected_images=expected_images,
+        obstacle_number=obstacle_number,
+        capture_index=capture_index,
+    )
 
     if class_id is None:
         print(f"[CAPTURE] No confident detection for obstacle {obstacle_number}")

@@ -75,6 +75,8 @@ class SimulationState:
     current_step_index: int
     total_steps: int
     current_motion_command: str | None
+    command_queue: tuple[tuple[str, int], ...]
+    current_command_queue_index: int | None
     visited_target_ids: tuple[int, ...]
     simulation_time_s: float
     playback_state: PlaybackState
@@ -160,6 +162,61 @@ def _path_from_steps(initial_pose: Pose, steps: tuple[SimulationStep, ...]) -> t
             path.append(step.pose)
     return tuple(path)
 
+def _command_queue_from_steps(
+    steps: tuple[SimulationStep, ...],
+) -> tuple[tuple[str, int], ...]:
+    """Return grouped movement primitives for compact UI playback display."""
+    primitives: list[str] = []
+
+    for step in steps:
+        if step.pose is None or not step.ends_primitive:
+            continue
+
+        if step.motion_command is not None:
+            primitives.append(step.motion_command)
+
+    grouped: list[tuple[str, int]] = []
+
+    for command in primitives:
+        if grouped and grouped[-1][0] == command:
+            previous_command, count = grouped[-1]
+            grouped[-1] = (previous_command, count + 1)
+        else:
+            grouped.append((command, 1))
+
+    return tuple(grouped)
+
+
+def _queue_index_by_step(
+    steps: tuple[SimulationStep, ...],
+) -> tuple[int | None, ...]:
+    """Map each pending playback position to the next grouped command row."""
+    indices: list[int | None] = [None] * (len(steps) + 1)
+
+    group_index = -1
+    last_command: str | None = None
+    step_group: list[int | None] = [None] * len(steps)
+
+    for index, step in enumerate(steps):
+        if step.pose is not None and step.motion_command is not None:
+            if step.motion_command != last_command:
+                group_index += 1
+                last_command = step.motion_command
+
+            step_group[index] = group_index
+
+    next_group: int | None = None
+
+    for index in range(len(steps) - 1, -1, -1):
+        if step_group[index] is not None:
+            next_group = step_group[index]
+
+        indices[index] = next_group
+
+    indices[len(steps)] = None
+
+    return tuple(indices)
+
 
 class HeadlessSimulator:
     """Mutable controller exposing immutable deterministic state snapshots."""
@@ -200,6 +257,9 @@ class HeadlessSimulator:
             if planned_path is not None
             else _path_from_steps(arena.start_pose, self._steps)
         )
+        self._command_queue = _command_queue_from_steps(self._steps)
+        self._queue_index_by_step = _queue_index_by_step(self._steps)
+
         if not self._planned_path:
             raise ValueError("planned_path cannot be empty")
         self._elapsed_in_step_s = 0.0
@@ -216,6 +276,10 @@ class HeadlessSimulator:
             current_step_index=0,
             total_steps=len(self._steps),
             current_motion_command=None,
+            command_queue=self._command_queue,
+            current_command_queue_index=(
+                self._queue_index_by_step[0] if self._steps else None
+            ),
             visited_target_ids=(),
             simulation_time_s=0.0,
             playback_state=PlaybackState.READY,
@@ -238,6 +302,8 @@ class HeadlessSimulator:
             self._state,
             playback_state=PlaybackState.PLAYING,
             current_motion_command=self._pending_motion_command(),
+            current_command_queue_index=self._pending_command_queue_index(),
+            
         )
 
     def pause(self) -> None:
@@ -266,6 +332,8 @@ class HeadlessSimulator:
                 self._state,
                 playback_state=PlaybackState.PAUSED,
                 current_motion_command=self._pending_motion_command(),
+                current_command_queue_index=self._pending_command_queue_index(),
+
             )
         return True
 
@@ -318,6 +386,8 @@ class HeadlessSimulator:
                 self._state,
                 playback_state=PlaybackState.PAUSED,
                 current_motion_command=self._pending_motion_command(),
+                current_command_queue_index=self._pending_command_queue_index(),
+
             )
 
     def advance(self, delta_s: float) -> None:
@@ -371,6 +441,7 @@ class HeadlessSimulator:
             visited_target_ids=visited,
             current_step_index=next_index,
             current_motion_command=self._pending_motion_command(next_index),
+            current_command_queue_index=self._pending_command_queue_index(next_index),
         )
         if next_index >= len(self._steps):
             self._mark_complete()
@@ -381,9 +452,20 @@ class HeadlessSimulator:
             return None
         return self._steps[pending_index].motion_command
 
+    def _pending_command_queue_index(
+        self,
+        index: int | None = None,
+    ) -> int | None:
+        pending_index = self._state.current_step_index if index is None else index
+
+        if pending_index >= len(self._queue_index_by_step):
+            return None
+        return self._queue_index_by_step[pending_index]
+
     def _mark_complete(self) -> None:
         self._state = replace(
             self._state,
             playback_state=PlaybackState.COMPLETE,
             current_motion_command=None,
+            current_command_queue_index=None,
         )

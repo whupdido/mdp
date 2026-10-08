@@ -32,6 +32,13 @@ from .models import (
 
 
 _COST_EPSILON = 1e-12
+TURN_DURATION_BY_ANGLE = {
+    15.0: 1.6,
+    30.0: 2.4,
+    45.0: 2.4,   # temporary estimate; calibrate this
+    60.0: 2.4,
+    90.0: 2.4,
+}
 
 
 def angular_distance(first_rad: float, second_rad: float) -> float:
@@ -306,10 +313,26 @@ class HybridAStarPlanner:
         )
 
     def _successor_primitives(self) -> tuple[MotionPrimitive, ...]:
+        """Return the expanded successor set, built once per configuration.
+
+        This runs for every expansion and, through the heuristic, for every
+        generated node; rebuilding (and re-validating) the same primitives each
+        time was a large share of the search's running time.
+        """
+        cached = getattr(self, "_successor_cache", None)
+        if cached is not None and cached[0] is self.config:
+            return cached[1]
+        primitives = self._build_successor_primitives()
+        self._successor_cache = (self.config, primitives)
+        return primitives
+
+    def _build_successor_primitives(self) -> tuple[MotionPrimitive, ...]:
         """Expand configured turn-angle data while retaining legacy 90-degree verbs."""
         expanded: list[MotionPrimitive] = []
         angles = self.config.search_turn_angles_deg or self.config.turn_angles_deg
         for primitive in self.config.motion.primitives:
+            if primitive.steering is Steering.STRAIGHT and primitive.gear is Gear.REVERSE:
+                continue
             if primitive.steering is Steering.STRAIGHT or primitive.radius_cm is None:
                 expanded.append(primitive)
                 continue
@@ -322,7 +345,7 @@ class HybridAStarPlanner:
                         primitive.steering,
                         turn_angle_rad=sign * math.radians(angle),
                         radius_cm=primitive.radius_cm,
-                        estimated_duration_s=primitive.estimated_duration_s * angle / 90.0,
+                        estimated_duration_s=TURN_DURATION_BY_ANGLE[angle],
                         physically_calibrated=primitive.physically_calibrated,
                     )
                 )
@@ -347,16 +370,49 @@ class HybridAStarPlanner:
         distance = math.hypot(current.x_cm - goal.x_cm, current.y_cm - goal.y_cm)
         if objective is CostMetric.DISTANCE:
             return distance
-        # The configured straight speed is the documented v1 upper bound. If a
-        # future provisional primitive duration implies a still higher speed,
-        # include it so this remains a lower bound under that configuration.
-        effective_speeds: list[float] = [self.config.motion.straight_speed_cm_s]
+        best_speed, min_turn_s, max_turn_rad = self._time_heuristic_bounds()
+        if best_speed <= 0.0:
+            return 0.0
+        estimate = distance / best_speed
+        if max_turn_rad > 0.0:
+            # Heading only changes through turn commands and the goal heading
+            # is exact, so at least this many turns are still to come.
+            heading_gap = angular_distance(current.heading_rad, goal.heading_rad)
+            turns_left = math.ceil(heading_gap / max_turn_rad - 1e-9)
+            estimate = max(estimate, turns_left * min_turn_s)
+        return estimate
+
+    def _time_heuristic_bounds(self) -> tuple[float, float, float]:
+        """Fastest ground speed of any command, cheapest turn, largest turn.
+
+        Both bounds come from the commands the search can actually issue, so
+        the estimate stays a lower bound on the remaining cost. The configured
+        cruise speed (27.3 cm/s) is deliberately not used: once a command's
+        fixed overhead is counted, a 10 cm FW averages 10.9 cm/s. An estimate
+        that optimistic, which also ignored the turns still needed to reach
+        the goal heading, made long legs expand thousands of extra states and
+        run into the node and time limits.
+        """
+        cached = getattr(self, "_bounds_cache", None)
+        if cached is not None and cached[0] is self.config:
+            return cached[1]
+        best_speed = 0.0
+        min_turn_s = math.inf
+        max_turn_rad = 0.0
+        bounds = None
         for primitive in self._successor_primitives():
             duration = primitive_execution_time_s(primitive, self.config.motion)
             if duration <= 0.0:
-                return 0.0
-            effective_speeds.append(primitive.geometric_length_cm / duration)
-        return distance / max(effective_speeds)
+                bounds = (0.0, 0.0, 0.0)
+                break
+            best_speed = max(best_speed, primitive.geometric_length_cm / duration)
+            if primitive.steering is not Steering.STRAIGHT:
+                min_turn_s = min(min_turn_s, duration)
+                max_turn_rad = max(max_turn_rad, abs(primitive.turn_angle_rad))
+        if bounds is None:
+            bounds = (best_speed, min_turn_s if max_turn_rad > 0.0 else 0.0, max_turn_rad)
+        self._bounds_cache = (self.config, bounds)
+        return bounds
 
     def _success(
         self,

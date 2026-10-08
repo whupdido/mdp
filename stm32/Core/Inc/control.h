@@ -30,8 +30,17 @@ void    control_init(void);
 void    control_tick(void);        /* called from TIM6 ISR */
 uint8_t motion_busy(void);
 void    motion_stop(void);
+uint8_t motion_abort_requested(void);
+void    motion_abort_clear(void);
 move_result_t motion_result(void); /* valid once motion_busy() is false */
 float   motion_yaw_deg(void);        /* ISR-integrated heading, deg, CCW + */
+
+/* Where the rear-axle centre has moved, in mm, integrated by the 100 Hz ISR
+   in every mode (idle too, so it catches the coast after a move): distance
+   from the mean of the two rear-wheel encoders, heading from the gyro. The
+   origin is arbitrary and x points along yaw 0, so take differences. Read
+   only by the turn test; nothing in the motion control uses it. */
+void    motion_odometry_mm(float *x_mm, float *y_mm);
 
 
 uint8_t move_straight_mm(int32_t mm);

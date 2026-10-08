@@ -34,7 +34,8 @@ TASK2_TIMEOUT_SECONDS = 200
 # tablet got ERR,INVALID_COMMAND every time an obstacle was placed, moved or
 # annotated.
 MOVE_PATTERN = re.compile(r"^(?:F[WLR]|B[WLR])\d{3}$|^STOP$")
-MAP_PATTERN = re.compile(r"^(?:ADD|SUB|FACE),")
+# Zhenxi: CLEAR is a map message too -- see handle_map_message.
+MAP_PATTERN = re.compile(r"^(?:(?:ADD|SUB|FACE),|CLEAR$)")
 
 # Real parsers for the three map message shapes Android actually sends
 # (see Android/PROTOCOL.md -- these are Android's fixed outbound formats,
@@ -42,6 +43,12 @@ MAP_PATTERN = re.compile(r"^(?:ADD|SUB|FACE),")
 ADD_PATTERN = re.compile(r"^ADD,B(\d+),\((\d+),(\d+)\)$")
 SUB_PATTERN = re.compile(r"^SUB,B(\d+)$")
 FACE_PATTERN = re.compile(r"^FACE,B(\d+),([NESW])$")
+
+# Zhenxi: the tablet's start pose, ROBOT,<x>,<y>,<D>. Same shape as the line
+# we send the other way, because it means the same thing in both directions.
+# run_task1.py consumes it; here it only needs recognising so it is not
+# rejected as an invalid command.
+TASK1_START_POSE = re.compile(r"^ROBOT,\d+,\d+,[NESW]$")
 
 # Zhenxi: BLOCKED added. The board now stops short when its IR sees an
 # obstacle (stm32/Core/Src/control.c) and, since command.c reports how a
@@ -57,8 +64,8 @@ FINAL_REPLIES = {"DONE", "STALL", "TIMEOUT", "BLOCKED", "BUSY", "ERR"}
 
 # Zhenxi: how long one stm.readline() blocks inside the wait loop below.
 # It was 1 s (the port's open timeout), which is also how long a STOP from
-# the tablet could sit unread. 0.1 s keeps a STOP under 100 ms and is still
-# 25x longer than the longest line the board sends takes at 115200 baud.
+# the tablet could sit unread. 0.02 s keeps a STOP under 20 ms and is still
+# several times longer than the longest line the board sends at 115200 baud.
 STM_POLL_SECONDS = 0.02
 
 # Zhenxi: commands that arrived from the tablet while a move was running,
@@ -143,6 +150,20 @@ def handle_map_message(command: str) -> str:
     """Parse one ADD/SUB/FACE message and update `obstacles`. Returns the
     status text to echo back to Android (mirrors the old unconditional ack,
     but now actually does something with the data first)."""
+    # Zhenxi: forget the whole map.
+    #
+    # The Pi only ever forgot an obstacle on SUB, and the tablet's Undo, Clear
+    # and Demo buttons never sent one. So anything removed that way lived on
+    # here as a ghost: key in five, press Clear, key in three, and the planner
+    # still routed to all five. The tablet now sends CLEAR before every full
+    # map it publishes, which makes that publish authoritative -- whatever the
+    # buttons did in between, the Pi ends up holding exactly what is on screen.
+    if command == "CLEAR":
+        forgotten = len(obstacles)
+        obstacles.clear()
+        print(f"[MAP] cleared ({forgotten} obstacle(s) forgotten)")
+        return command
+
     m = ADD_PATTERN.match(command)
     if m:
         n, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -208,7 +229,7 @@ def discard_pending_android(android):
 
 
 def clear_command_queues(android):
-    """Drop both Python-buffered and serial-buffered commands at STOP."""
+    """Clear commands held by both Python and the RFCOMM serial driver."""
     discarded = len(inbox)
     inbox.clear()
     return discarded + discard_pending_android(android)
@@ -239,7 +260,6 @@ def next_command(android):
             inbox.append(command)
 
     if stop_seen:
-        inbox.clear()
         return "STOP"
     return inbox.pop(0)
 
@@ -341,8 +361,13 @@ def main(on_face_known=None):
 
                 print(f"Android -> RPi: {command}")
 
+                # STOP is a queue barrier.  Even when it is the first command
+                # read by the main loop (rather than arriving mid-move), drop
+                # every older buffered command before it reaches the STM.
                 if command == "STOP":
-                    clear_command_queues(android)
+                    cleared = clear_command_queues(android)
+                    if cleared:
+                        print(f"[QUEUE] cleared {cleared} pending command(s)")
 
                 # Map edits are acknowledged (never rejected -- the tablet
                 # shows the user a warning for every ERR it receives) AND
@@ -379,8 +404,25 @@ def main(on_face_known=None):
                 # the plan-and-drive loop, and this plain bridge cannot do it.
                 # Say so rather than answering ERR, which the tablet paints as
                 # a red warning for a button that did nothing wrong.
-                if command == "START":
-                    print("[RUN] START ignored -- this is a1_bridge, run run_task1.py for Task 1")
+                # Zhenxi: Task 1's triggers and its start pose are not ours --
+                # run_task1.py owns the plan-and-drive loop, and this plain
+                # bridge cannot do it. Say so rather than answering ERR, which
+                # the tablet paints as a red warning for a button that did
+                # nothing wrong. The tablet sends these whenever it is running,
+                # including during checklist demos when this is what listens.
+                # Zhenxi: SETUP and PLAN get a plan failure, not a chat line.
+                #
+                # The tablet sits on "PLANNING..." / "CHECKING..." until it
+                # hears a STATUS,PLAN reply. A plain MSG told the operator what
+                # was wrong but left the buttons dead, so the wrong program --
+                # the likeliest mistake on the day -- froze the tablet. FAILED
+                # puts it straight back to SETUP with the reason on screen.
+                if command in ("COMPUTE", "ARM"):
+                    print(f"[RUN] {command} refused -- this is a1_bridge, run run_task1.py for Task 1")
+                    send_line(android, "STATUS,PLAN,FAILED,wrong program on the Pi - run run_task1.py")
+                    continue
+                if command == "START" or TASK1_START_POSE.match(command):
+                    print(f"[RUN] {command} ignored -- this is a1_bridge, run run_task1.py for Task 1")
                     send_line(android, "MSG,Bridge only. Start Task 1 from run_task1.py.")
                     continue
 

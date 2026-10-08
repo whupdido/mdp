@@ -566,6 +566,10 @@ def test_five_target_demo_uses_real_cached_paths_and_complete_capture_sequence(t
     assert result.status is PlanningStatus.SUCCESS
     assert route is not None
     assert len(route.target_order) == 5
+    # (1, 4, 3, 2, 5) was what the planner returned when some legs ran out of
+    # their 5 s budget. With the tighter heuristic every leg finishes well
+    # inside it, and this is the order the old code also picks given
+    # unlimited time (same 59.6 s route cost).
     assert route.target_order == (1, 3, 5, 4, 2)
     assert route.selected_candidate_kinds == ("20C",) * 5
     assert result.metrics.local_paths_requested >= result.metrics.local_paths_succeeded > 0

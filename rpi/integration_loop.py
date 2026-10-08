@@ -17,6 +17,12 @@ Flow:
   3. Everything else (motion command relay, STM replies) behaves exactly
      as a1_bridge.py normally does.
 
+WARNING (Zhenxi): do NOT run this during a Task 1 attempt. It starts a
+physical search the moment a face is set on the tablet, so keying in the
+layout during the preparation window would drive the robot out of the
+carpark -- which is an automatic disqualification (rules, FAQ 9). Task 1
+uses run_task1.py. This is the A.5 demo.
+
 Run on the RPi:
     python3 integration_loop.py
 """
