@@ -16,7 +16,7 @@ import socket
 
 from algorithm.config import task1_robot_config
 from algorithm.coordinates import android_cell_to_planner_pose
-from algorithm.enums import Direction, PlanningStatus, Steering
+from algorithm.enums import Direction, PlanningStatus, RoutingMode, Steering
 from algorithm.models.arena import ArenaInput
 from algorithm.models.motion import CaptureStep, MoveStep
 from algorithm.models.obstacle import Obstacle
@@ -136,7 +136,9 @@ def _plan_payload(payload: dict):
     config = task1_robot_config()
     start_pose, lead_in = _start_pose(*_start_cell(payload), config)
     arena = _build_arena(payload, start_pose)
-    return Task1Planner(config).plan(arena), lead_in
+    # Match the editor's staged candidate search and adaptive expansion budget.
+    # The default optimization mode can stop before trying fallback camera poses.
+    return Task1Planner(config).plan(arena, routing_mode=RoutingMode.FEASIBILITY), lead_in
 
 
 def handle_client(conn: socket.socket) -> None:
