@@ -50,7 +50,13 @@ void icm20948_calib_gyro_bias(void)
         sum += icm20948_read_gyro_z();
         HAL_Delay(2);
     }
-    gyro_z_bias = sum / (float)samples;
+    /* Kush (08-Oct): +=, not =. The readings above already have the current
+       zero taken off, so their average is how far that zero is off, not the
+       zero itself. With = a second long press (no reset in between) set the
+       zero back to about 0, so every other calibration left the gyro
+       reporting its whole offset as a turn. The first calibration after a
+       reset is unchanged, because the zero starts at 0. */
+    gyro_z_bias += sum / (float)samples;
 }
 
 float icm20948_read_gyro_z(void)

@@ -222,7 +222,10 @@ def test_server_creates_a_fresh_planner_for_each_request(tmp_path, monkeypatch):
         def __init__(self, config):
             planners.append(config)
 
-        def plan(self, _arena):
+        def plan(self, _arena, *, routing_mode):
+            from algorithm.enums import RoutingMode
+
+            assert routing_mode is RoutingMode.FEASIBILITY
             return object()
 
     monkeypatch.setattr(algo_server, "Task1Planner", FakePlanner)

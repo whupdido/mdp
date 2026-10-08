@@ -31,6 +31,7 @@ import a1_bridge
 import run_task1
 
 REAL_WAIT_FOR_STM_REPLY = run_task1.wait_for_stm_reply
+REAL_PREFLIGHT = run_task1.preflight
 
 FAILURES = []
 
@@ -351,6 +352,44 @@ run_task1.run_route(
 )
 check("no command is sent after a requested STOP", stm.written, ["BW010"])
 check("a requested STOP does not become NO_REPLY", android.written[-1:], ["MSG,Task 1 stopped"])
+
+# --- pre-flight zeroes the gyro with nobody touching the robot -----------
+# Kush: GC re-measures the gyro zero on the board. DONE means the robot was
+# still and the new zero is in; ERR means it moved (the old zero is kept) or
+# the firmware predates GC. Either way a failed GC must not arm the run.
+run_task1.wait_for_stm_reply = REAL_WAIT_FOR_STM_REPLY
+run_task1.algo_client.server_reachable = lambda *a, **k: True
+
+android = FakeAndroid([])
+stm = FakeStm([
+    "ACK,FW000", "DONE",
+    "ACK,GC",
+    "[GC] ok try=1 shift_dps=+0.031 noise_dps=0.240 span_dps=1.50 turn_deg=0.010 wheels=0",
+    "DONE",
+])
+ok = REAL_PREFLIGHT(stm, android)
+check("pre-flight sends FW000 then GC", stm.written, ["FW000", "GC"])
+check("a clean gyro zero passes pre-flight", ok, True)
+check("the GC exchange is not relayed to the tablet",
+      [w for w in android.written if "GC" in w], [])
+
+android = FakeAndroid([])
+stm = FakeStm([
+    "ACK,FW000", "DONE",
+    "ACK,GC",
+    "[GC] FAILED try=3 shift_dps=+0.544 noise_dps=1.787 span_dps=9.23 turn_deg=0.467 wheels=0",
+    "[GC] car was bumped, old zero kept",
+    "ERR",
+])
+ok = REAL_PREFLIGHT(stm, android)
+check("a gyro zero spoiled by a bump fails pre-flight", ok, False)
+check("and the tablet is told why",
+      android.written[-1].startswith("STATUS,PLAN,FAILED,the robot moved"), True)
+
+android = FakeAndroid([])
+stm = FakeStm(["ACK,FW000", "DONE", "ERR"])
+ok = REAL_PREFLIGHT(stm, android)
+check("firmware without GC (bare ERR) fails pre-flight too", ok, False)
 
 print()
 if FAILURES:

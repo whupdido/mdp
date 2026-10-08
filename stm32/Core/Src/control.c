@@ -65,10 +65,46 @@ static float right_pid_integral = 0.0f;
 #define SPEED_KP    120.0f
 #define SPEED_KI    15.0f
 
+/* Kush (08-Oct): straight-line steering.
+ *   1 = damping from the gyro's yaw rate, and both gains scaled by
+ *       STEER_REF_SPEED / measured wheel speed, so the steering corrects
+ *       equally hard at any speed.
+ *   0 = the code before 08-Oct: P on heading, D on the rear wheel speed
+ *       difference (which the speed loops hold at zero, so it damped almost
+ *       nothing: two swings after a push), all scaled down with the
+ *       commanded speed (a quarter in the crawl, so any heading error left
+ *       when the car started slowing was still there when it stopped).
+ * The damping uses a smoothed gyro rate (STEER_V2_RATE_SMOOTH): the gyro's
+ * own filter is at its ~200 Hz reset default, so each reading carries motor
+ * and gear vibration, and fed straight in it kept the servo twitching. Only
+ * the steering's copy is smoothed; the heading and the turns read the gyro
+ * exactly as before. KP is eased from 130 to win back the smoothing's delay.
+ * Tune on the floor: push the car sideways mid-move.
+ *   Swings back past the line more than once: raise STEER_V2_KD a little or
+ *   lower STEER_V2_KP.  Servo still twitchy on a plain straight: lower
+ *   STEER_V2_RATE_SMOOTH a little (more smoothing) and STEER_V2_KP with it.
+ * Check with CAL_TRACE (hdg per phase) and CAL_STRAIGHT. */
+#define STRAIGHT_STEER_V2   1
+#define STEER_V2_KP         110.0f  /* us per deg of heading error (was 130)         */
+#define STEER_V2_KD         10.0f   /* us per deg/s of yaw rate, from the gyro       */
+#define STEER_V2_RATE_SMOOTH 0.35f  /* share of each new gyro reading in that rate   */
+#define STEER_REF_SPEED     27.0f   /* counts/tick the gains hold at: the cruise
+                                       speed CAL_TRACE measured on 08-Oct            */
+#define STEER_SCALE_MIN     0.4f    /* gains never cut below this (above ~67/tick)  */
+#define STEER_SCALE_MAX     2.0f    /* or KP boosted above this (below ~13/tick);
+                                       the damping is never boosted, only cut       */
+static float steer_speed_f = 0.0f;  /* smoothed wheel speed for that, counts/tick   */
+#if STRAIGHT_STEER_V2
+static float gz_smooth     = 0.0f;  /* smoothed gyro rate for the damping, deg/s    */
+#endif
+
 /* Encoder counts of crawl kept before a straight move's target, so the
    wheels have settled at crawl speed when the brake goes on (~14 mm). */
 #define BRAKE_MARGIN_COUNTS 100
 float steer_integral = 0.0f;
+
+/* Kush: see control.h. Only CAL_TRACE sets it, and only for one move. */
+void (*volatile straight_tick_hook)(const straight_tick_t *t) = 0;
 
 /* ------------------------------------------------------------------------- */
 /* Helper Functions                                                          */
@@ -175,6 +211,7 @@ uint8_t move_straight_mm(int32_t mm)
     enc_left_straight_accum   = 0;
     enc_right_straight_accum  = 0;
     steer_integral            = 0.0f;
+    steer_speed_f             = 0.0f;
     left_pid_integral         = 0.0f;
 	right_pid_integral        = 0.0f;
 	current_speed_ramp        = 0.0f;
@@ -439,6 +476,11 @@ void control_tick(void)
 
     /* 1. Sample IMU Gyro Z */
     float gz = icm20948_read_gyro_z(); /* in deg/sec */
+#if STRAIGHT_STEER_V2
+    /* Kush: smoothed copy for the straight-line damping only, taken before
+       the deadband so it has no steps. global_yaw_deg is unaffected. */
+    gz_smooth += STEER_V2_RATE_SMOOTH * (gz - gz_smooth);
+#endif
     if (fabsf(gz) < 0.25f) {  /* Ignore noise below 0.25 deg/sec */
         gz = 0.0f;
     }
@@ -562,10 +604,12 @@ void control_tick(void)
 			 * right. Unlike the old reverse_bias it is not faded with speed: the
 			 * push is there in the slow start and stop too. */
 			int16_t reverse_trim = (dir_forward == -1) ? (int16_t)SERVO_REVERSE_TRIM_US : 0;
+			uint16_t servo_cmd = SERVO_CENTRE;   /* for straight_tick_hook only */
 
 			if (is_small_distance) {
 				/* Lock wheels dead center for tiny movements */
-				servo_us((uint16_t)(SERVO_CENTRE + reverse_trim));
+				servo_cmd = (uint16_t)(SERVO_CENTRE + reverse_trim);
+				servo_us(servo_cmd);
 			} else {
 				/* --- SENSOR FUSION: IMU + Encoders (NORMAL PID LOGIC) --- */
 
@@ -575,6 +619,31 @@ void control_tick(void)
 					heading_error = -heading_error;
 				}
 
+#if STRAIGHT_STEER_V2
+				/* Kush (08-Oct), see STRAIGHT_STEER_V2 at the top. The car turns
+				 * at a rate proportional to speed x steering angle, so scaling
+				 * the gains by REF/speed keeps the correction the same at every
+				 * speed: twice the steering in the crawl, less if the straights
+				 * get faster. Measured wheel speed, lightly smoothed. */
+				float v_now = 0.5f * (float)(abs(left_delta) + abs(right_delta));
+				steer_speed_f += 0.2f * (v_now - steer_speed_f);
+				float scale = STEER_REF_SPEED / ((steer_speed_f > 1.0f) ? steer_speed_f : 1.0f);
+				if (scale > STEER_SCALE_MAX) scale = STEER_SCALE_MAX;
+				if (scale < STEER_SCALE_MIN) scale = STEER_SCALE_MIN;
+
+				/* Damping: how fast the heading error is changing, from the
+				 * smoothed gyro rate (gz_smooth, top of control_tick). Cut with
+				 * the gains at speed, but never boosted when slow: that only
+				 * amplified the vibration in the crawl. */
+				float heading_rate = (float)dir_forward * gz_smooth;
+				float d_scale = (scale < 1.0f) ? scale : 1.0f;
+
+				float steer_f = heading_error * STEER_V2_KP * scale
+				              + heading_rate  * STEER_V2_KD * d_scale;
+				if (steer_f >  220.0f) steer_f =  220.0f;   /* MAX_STEER_TRIM, as before */
+				if (steer_f < -220.0f) steer_f = -220.0f;
+				int16_t steer_correction = (int16_t)steer_f;
+#else
 				/* 2. Position Error (Ticks) */
 				int32_t pos_error = (enc_right_straight_accum - enc_left_straight_accum);
 				if (pos_error > 20)  pos_error = 20;
@@ -610,10 +679,12 @@ void control_tick(void)
 				/* Clamp maximum steering authority */
 				if (steer_correction > MAX_STEER_TRIM)  steer_correction = MAX_STEER_TRIM;
 				if (steer_correction < -MAX_STEER_TRIM) steer_correction = -MAX_STEER_TRIM;
+#endif
 
 				/* Apply to servo */
 				uint16_t commanded_servo = (uint16_t)(SERVO_CENTRE + reverse_trim + steer_correction);
 				servo_us(commanded_servo);
+				servo_cmd = commanded_servo;
 			}
 
 			/* 3. Velocity PI Controller */
@@ -648,6 +719,23 @@ void control_tick(void)
 
 			motor_left(duty_l);
 			motor_right(duty_r);
+
+			/* Kush: CAL_TRACE only (control.h). Reads, never writes. */
+			if (straight_tick_hook) {
+				straight_tick_t t = {
+					.ramp     = current_speed_ramp,
+					.left     = left_delta,
+					.right    = right_delta,
+					.duty_l   = duty_l,
+					.duty_r   = duty_r,
+					.i_l      = SPEED_KI * left_pid_integral,
+					.i_r      = SPEED_KI * right_pid_integral,
+					.head_deg = global_yaw_deg - locked_heading_deg,
+					.steer_us = (int16_t)((int32_t)servo_cmd - SERVO_CENTRE),
+					.braking  = straight_braking,
+				};
+				straight_tick_hook(&t);
+			}
 			break;
 		}
 

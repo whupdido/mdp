@@ -5,6 +5,8 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass
 
+from algorithm.targets.models import ObservationLateralClass
+
 from .models import (
     DirectedPairwiseGraph,
     PairwiseCacheEntry,
@@ -24,6 +26,13 @@ class _PartialRoute:
     entries: tuple[PairwiseCacheEntry, ...]
 
     @property
+    def angled_captures(self) -> int:
+        return sum(
+            endpoint.lateral_class is not ObservationLateralClass.CENTER
+            for endpoint in self.endpoints
+        )
+
+    @property
     def tie_key(self) -> tuple[int, tuple[tuple[int, int, int], ...]]:
         return (
             sum(endpoint.preference_rank for endpoint in self.endpoints),
@@ -34,6 +43,9 @@ class _PartialRoute:
 def _is_better(candidate: _PartialRoute, current: _PartialRoute | None) -> bool:
     if current is None:
         return True
+    # An angled photo is a fallback, never a shortcut to save driving time.
+    if candidate.angled_captures != current.angled_captures:
+        return candidate.angled_captures < current.angled_captures
     if candidate.cost < current.cost - _COST_EPSILON:
         return True
     if candidate.cost > current.cost + _COST_EPSILON:
@@ -57,7 +69,7 @@ def _extend(
 
 
 class ExhaustiveRouteOptimizer:
-    """Enumerate target orders and solve each candidate chain exactly by DP."""
+    """Minimize angled captures first, then route cost, using exact chain DP."""
 
     def optimize(self, graph: DirectedPairwiseGraph) -> RouteOptimizationResult:
         target_ids = graph.target_ids

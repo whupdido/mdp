@@ -23,6 +23,8 @@
 #define CAL_SIX_FL     9
 #define CAL_SIX_BR    10
 #define CAL_SIX_BL    11
+#define CAL_SEQ       12   /* turns then a straight, as in a run: tilt check */
+#define CAL_TRACE     13   /* one straight traced tick by tick: why it turns */
 
 /* Usable in #if. The kind is 0 FR, 1 FL, 2 BR, 3 BL: the order turn_test.c
    runs them in, and TT_FR..TT_BL in turn_test.h. */
@@ -42,5 +44,13 @@ void cal_odometer_poll(void);    /* call every main-loop pass; redraws every 200
 /* CAL_SIX_*: kind 0 FR, 1 FL, 2 BR, 3 BL */
 void cal_six_show_idle(uint8_t kind);
 void cal_six_step(uint8_t kind);
+
+/* CAL_SEQ: FL030, FR030, FW100 (SEQ_MOVES in cal_programs.c), 5 runs */
+void cal_seq_show_idle(void);
+void cal_seq_step(void);
+
+/* CAL_TRACE: FW100 watched from the control loop, 3 pages per run */
+void cal_trace_show_idle(void);
+void cal_trace_step(void);
 
 #endif /* CAL_PROGRAMS_H */

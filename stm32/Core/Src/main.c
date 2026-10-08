@@ -76,6 +76,12 @@
      CAL_SIX_FL     in a row, which should leave the car facing exactly back.
      CAL_SIX_BR     Half the gap between floor marks at the start and end is
      CAL_SIX_BL     the radius.
+     CAL_SEQ        FL030, FR030, FW100 back to back, as the Pi sends them,
+                    5 runs: each turn's angle, and how tilted the straight
+                    after them comes out. Square the car to a line first.
+     CAL_TRACE      one FW100 watched from inside the control loop: each
+                    wheel's speed against its target, heading change and
+                    steering phase by phase, the crawl. Tap for 3 pages.
 
    A tap drives the car in every program except CAL_OFF and CAL_ODOMETER
    (which free-wheels the motors instead), so set CAL_PROGRAM back to CAL_OFF
@@ -184,6 +190,10 @@ static void cal_ready_screen(void)
     cal_straight_show_idle();
 #elif CAL_PROGRAM == CAL_ODOMETER
     cal_odometer_start();
+#elif CAL_PROGRAM == CAL_SEQ
+    cal_seq_show_idle();
+#elif CAL_PROGRAM == CAL_TRACE
+    cal_trace_show_idle();
 #endif
 }
 /* USER CODE END 0 */
@@ -323,6 +333,10 @@ int main(void)
                   cal_straight_step();
 #elif CAL_PROGRAM == CAL_ODOMETER
                   cal_odometer_zero();
+#elif CAL_PROGRAM == CAL_SEQ
+                  cal_seq_step();
+#elif CAL_PROGRAM == CAL_TRACE
+                  cal_trace_step();
 #else
                   display_both_sensors_oled();
 #endif

@@ -42,6 +42,24 @@ float   motion_yaw_deg(void);        /* ISR-integrated heading, deg, CCW + */
    only by the turn test; nothing in the motion control uses it. */
 void    motion_odometry_mm(float *x_mm, float *y_mm);
 
+/* One 10 ms tick of a straight move, as the controller saw it. */
+typedef struct {
+    float   ramp;           /* commanded speed, counts per tick, signed       */
+    int32_t left, right;    /* encoder counts this tick, signed               */
+    int32_t duty_l, duty_r; /* motor duty sent (PWM_MAX = full), before clamp */
+    float   i_l, i_r;       /* the integral part of those duties              */
+    float   head_deg;       /* heading minus the one locked at the start,
+                               + = turned left (CCW)                          */
+    int16_t steer_us;       /* servo command minus SERVO_CENTRE, + = right    */
+    uint8_t braking;        /* slowing down for the target                    */
+} straight_tick_t;
+
+/* Kush: test hook for CAL_TRACE (cal_programs.c). When set, the 100 Hz
+   interrupt calls it on every tick of a straight move, after the motors and
+   servo are set. Read-only: nothing it does goes back into the control.
+   NULL in normal runs, which costs one pointer check per tick. */
+extern void (*volatile straight_tick_hook)(const straight_tick_t *t);
+
 
 uint8_t move_straight_mm(int32_t mm);
 

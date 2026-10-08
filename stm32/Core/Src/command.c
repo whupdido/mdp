@@ -16,6 +16,9 @@
 #include <stdlib.h>
 #include "oled.h"
 #include "obstacle_nav.h"
+#include "icm20948.h"
+#include "encoders.h"
+#include <math.h>
 
 #define LINE_MAX 16
 #define COMMAND_QUEUE_SIZE 8u
@@ -114,6 +117,12 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
  *   BLxxx   reverse-left  xxx deg   BRxxx   reverse-right  xxx deg
  *   STOP    abort the current move
  *   START2  run the whole Task 2 routine (blocks until it finishes)
+ *   GC      re-measure the gyro zero with nobody touching the car (Kush,
+ *           08-Oct). For the Pi's pre-flight. ACK,GC, then a "[GC] ..." line,
+ *           then DONE, or ERR if the car moved while it measured (the old
+ *           zero is kept). Takes about 2 s, up to 6 s if it has to retry.
+ *           Meanwhile '?' gets STATUS,BUSY,GC, as during a move, and STOP
+ *           abandons it (old zero kept; the STOP's ACK is the only reply).
  *
  * Turn angle is 1..360 degrees; xxx = 000 means 90 for backwards
  * compatibility, so FL000 still turns 90 degrees.
@@ -177,11 +186,17 @@ static void report_result(void)
  * means the already accepted movement is still running.  When idle, retain
  * and report the last movement verdict so the Pi can recover if the original
  * terminal line was lost on the UART. */
+/* Kush: GC is not a move, so motion_busy() and motion_result() know nothing
+   about it. These stand in for them while it runs and once it has ended
+   ("DONE", "ERR" or "STOPPED"); see report_status() and dispatch(). */
+static volatile uint8_t gc_running = 0u;
+static const char *gc_status = "NONE";
+
 static void report_status(void)
 {
     char response[48];
 
-    if (motion_busy()) {
+    if (motion_busy() || gc_running) {
         snprintf(response, sizeof(response), "STATUS,BUSY,%s\r\n",
                  last_motion_cmd[0] ? last_motion_cmd : "NONE");
         command_send(response);
@@ -189,7 +204,13 @@ static void report_status(void)
     }
 
     const char *result;
-    switch (motion_result()) {
+    if (strcmp(last_motion_cmd, "GC") == 0) {
+        /* Kush: a probe answered after a GC must give GC's own verdict. The
+           Pi ignores a bare ERR while its probe is outstanding (it reads it
+           as old firmware rejecting '?'), so if this said the last move's
+           DONE instead, a failed GC would pass the pre-flight. */
+        result = gc_status;
+    } else switch (motion_result()) {
         case MOVE_DONE:    result = "DONE";    break;
         case MOVE_STALL:   result = "STALL";   break;
         case MOVE_TIMEOUT: result = "TIMEOUT"; break;
@@ -232,6 +253,182 @@ static void handle_stop(void)
     command_send("ACK\r\n");
 }
 
+/* ------------------------------------------------------------------ GC ---
+ * Kush (08-Oct): hands-off gyro zero. Holding SW1 to set the zero means a
+ * hand is on or near the car while it measures, and a nudge in that window
+ * leaves the zero off by the angle turned over the time taken: 1.5 deg of
+ * nudge during the 1.5 s it measures is a 1 deg/s turn that is not
+ * happening. The straights then steer the car to cancel it, and the run is
+ * visibly tilted by the first obstacle. The Pi sends GC in its pre-flight
+ * instead, when nobody is touching the car.
+ *
+ * Each try reads the gyro for 1.5 s and keeps the new zero only if the car
+ * was still. The test that matters is the turn: the readings integrated
+ * against their own mean. For a still car that stays within a few
+ * hundredths of a degree all the way through; a nudge shows up as a step of
+ * the angle it turned. Refusing any turn over GC_MAX_TURN_DEG keeps the new
+ * zero within about 2 * 0.05 deg / 1.5 s = 0.07 deg/s of right after any
+ * nudge shorter than half the window. A push slow and smooth enough to last
+ * the whole window would look like an offset and get through, but nothing
+ * turns a parked car like that. The other three tests mostly give the OLED
+ * a clearer reason. Simulated against all of this before it went in.
+ *
+ * While it measures, GC keeps reading the UART as a move does, so the Pi's
+ * '?' is answered at once (STATUS,BUSY,GC) instead of queueing up behind it
+ * and being answered late, where the Pi could take the answer for its next
+ * command's. */
+#define GC_SETTLE_MS        500u   /* before each try, so a bump can die away       */
+#define GC_SAMPLES          500    /* 3 ms apart (read + HAL_Delay(2)): 1.5 s a try */
+#define GC_TRIES            3
+#define GC_MAX_TURN_DEG     0.05f  /* net turn at any point. Still car: ~0.015      */
+#define GC_MAX_NOISE_DPS    0.8f   /* standard deviation. Still car: ~0.25          */
+#define GC_MAX_SPAN_DPS     6.0f   /* highest minus lowest reading. Still car: ~2   */
+#define GC_MAX_WHEEL_COUNTS 2      /* both encoders together                         */
+
+extern int calibrated;             /* main.c: a gyro zero has been set */
+
+typedef struct {
+    float       shift;   /* mean reading: how far the old zero was off, deg/s */
+    float       noise;   /* standard deviation of the readings, deg/s         */
+    float       span;    /* highest minus lowest reading, deg/s               */
+    float       turn;    /* largest net turn during the window, deg           */
+    int32_t     wheels;  /* encoder counts moved, both wheels together        */
+    const char *why;     /* NULL if the car was still, else what gave it away */
+} gc_window_t;
+
+static float gc_buf[GC_SAMPLES];   /* 2 KB, kept off the stack */
+
+/* HAL_Delay that keeps the UART answered. Ends early on STOP. */
+static void gc_wait_ms(uint32_t ms)
+{
+    const uint32_t t0 = HAL_GetTick();
+    while (HAL_GetTick() - t0 < ms && !motion_abort_requested()) {
+        command_poll();
+        HAL_Delay(1);
+    }
+}
+
+/* One window. Readings come back already minus the current zero, so their
+   mean is how far that zero is off. Moves the zero only if the car was
+   still. Returns early, changing nothing, on STOP. */
+static uint8_t gc_try(gc_window_t *w)
+{
+    const int32_t  l0 = enc_left_total, r0 = enc_right_total;
+    const uint32_t t0 = HAL_GetTick();
+    float sum = 0.0f, lo = 1e9f, hi = -1e9f;
+
+    for (int i = 0; i < GC_SAMPLES; i++) {
+        float g = icm20948_read_gyro_z();
+        gc_buf[i] = g;
+        sum += g;
+        if (g < lo) lo = g;
+        if (g > hi) hi = g;
+        command_poll();
+        if (motion_abort_requested()) return 0u;
+        HAL_Delay(2);
+    }
+    const float n    = (float)GC_SAMPLES;
+    const float mean = sum / n;
+    const float dt_s = (float)(HAL_GetTick() - t0) * 0.001f / n;
+
+    float sq = 0.0f, angle = 0.0f, turn = 0.0f;
+    for (int i = 0; i < GC_SAMPLES; i++) {
+        float d = gc_buf[i] - mean;
+        sq    += d * d;
+        angle += d * dt_s;
+        if (fabsf(angle) > turn) turn = fabsf(angle);
+    }
+    w->shift  = mean;
+    w->noise  = sqrtf(sq / n);
+    w->span   = hi - lo;
+    w->turn   = turn;
+    w->wheels = (int32_t)(labs((long)(enc_left_total - l0)) +
+                          labs((long)(enc_right_total - r0)));
+
+    if      (w->wheels > GC_MAX_WHEEL_COUNTS) w->why = "wheels turned";
+    else if (w->span   > GC_MAX_SPAN_DPS)     w->why = "car was bumped";
+    else if (w->noise  > GC_MAX_NOISE_DPS)    w->why = "car was shaking";
+    else if (w->turn   > GC_MAX_TURN_DEG)     w->why = "car turned";
+    else                                      w->why = NULL;
+
+    if (w->why != NULL) return 0u;
+    gyro_z_bias += mean;           /* the ISR only reads it; one 32-bit store */
+    return 1u;
+}
+
+static void gyro_zero_command(void)
+{
+    char u[128];
+    char row[24];
+    gc_window_t w = { 0 };
+    uint8_t ok = 0u;
+    int tries = 0;
+
+    OLED_Clear();
+    OLED_ShowString(0, 0,  (const uint8_t *)"GYRO ZERO");
+    OLED_ShowString(0, 20, (const uint8_t *)"HANDS OFF...");
+    OLED_Refresh_Gram();
+
+    gc_running = 1u;
+    while (!ok && tries < GC_TRIES && !motion_abort_requested()) {
+        gc_wait_ms(GC_SETTLE_MS);
+        if (motion_abort_requested()) break;
+        ok = gc_try(&w);
+        tries++;
+    }
+    gc_running = 0u;
+
+    if (!ok && motion_abort_requested()) {
+        /* STOP. handle_stop() answers it with ACK, now or on the next poll,
+           and that is the only reply: like a stopped move, no DONE or ERR
+           follows, so nothing is left over for the Pi's next wait to take
+           as its own. */
+        gc_status = "STOPPED";
+        command_send("[GC] stopped, old zero kept\r\n");
+        OLED_Clear();
+        OLED_ShowString(0, 0,  (const uint8_t *)"GYRO ZERO STOPPED");
+        OLED_ShowString(0, 20, (const uint8_t *)"old zero kept");
+        OLED_Refresh_Gram();
+        return;
+    }
+
+    snprintf(u, sizeof u,
+             "[GC] %s try=%d shift_dps=%+.3f noise_dps=%.3f span_dps=%.2f"
+             " turn_deg=%.3f wheels=%ld\r\n",
+             ok ? "ok" : "FAILED", tries, (double)w.shift, (double)w.noise,
+             (double)w.span, (double)w.turn, (long)w.wheels);
+    command_send(u);
+    if (!ok) {
+        snprintf(u, sizeof u, "[GC] %s, old zero kept\r\n", w.why);
+        command_send(u);
+    }
+
+    OLED_Clear();
+    if (ok) {
+        OLED_ShowString(0, 0, (const uint8_t *)"GYRO ZERO OK");
+        snprintf(row, sizeof row, "shift %+.2f dps", (double)w.shift);
+        OLED_ShowString(0, 20, (const uint8_t *)row);
+        snprintf(row, sizeof row, "noise %.2f dps", (double)w.noise);
+        OLED_ShowString(0, 30, (const uint8_t *)row);
+        OLED_ShowString(0, 40, (const uint8_t *)"ready for START");
+    } else {
+        OLED_ShowString(0, 0,  (const uint8_t *)"GYRO ZERO FAILED");
+        OLED_ShowString(0, 20, (const uint8_t *)w.why);
+        OLED_ShowString(0, 30, (const uint8_t *)"hands off the car");
+        OLED_ShowString(0, 40, (const uint8_t *)"and try again");
+    }
+    OLED_Refresh_Gram();
+
+    if (ok) {
+        calibrated = 1;
+        gc_status  = "DONE";
+        command_send("DONE\r\n");
+    } else {
+        gc_status  = "ERR";
+        command_send("ERR\r\n");
+    }
+}
+
 static void dispatch(const char *cmd)
 {
     /* Handle probes before the busy guard.  A probe observes the outstanding
@@ -239,7 +436,7 @@ static void dispatch(const char *cmd)
        BUSY. */
     if (strcmp(cmd, "?") == 0) { report_status(); return; }
     if (strncmp(cmd, "STOP", 4) == 0) { handle_stop(); return; }
-    if (motion_busy()) { command_send("BUSY\r\n"); return; }
+    if (motion_busy() || gc_running) { command_send("BUSY\r\n"); return; }
     if (strlen(cmd) < 2u) { command_send("ERR\r\n"); return; }
 
     int32_t arg = (strlen(cmd) >= 5u) ? atoi(cmd + 2) : 0;
@@ -254,6 +451,9 @@ static void dispatch(const char *cmd)
        -- that would echo whatever the *previous* move's verdict was. It
        replied DONE before (by falling through) and still does.          */
     else if (!strncmp(cmd, "IM", 2)) { image_found = (uint8_t)arg; command_send("DONE\r\n"); return; }
+    /* Kush: GC replies DONE or ERR itself (see gyro_zero_command). Exact
+       match, so report_status() can tell a GC from a move by name. */
+    else if (!strcmp(cmd, "GC")) { begin_motion(cmd); gyro_zero_command(); return; }
     /* Zhenxi: Task 2. Answers on the same contract as everything else, so
        the Pi and the tablet are not left guessing for three minutes.
          ACK   accepted, the routine has begun

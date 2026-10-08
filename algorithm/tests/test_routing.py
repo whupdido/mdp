@@ -343,7 +343,7 @@ def test_three_target_exact_order_is_deterministic():
     assert first.metrics.permutations_evaluated == math.factorial(3)
 
 
-def test_candidate_layer_dp_chooses_cheaper_reachable_fallback_over_nominal():
+def test_candidate_layer_dp_keeps_head_on_even_when_angle_is_cheaper():
     config = routing_config(candidates=3)
     arena = arena_for(1)
     start, groups = endpoints(arena, config)
@@ -359,9 +359,67 @@ def test_candidate_layer_dp_chooses_cheaper_reachable_fallback_over_nominal():
     result = Task1Planner(config, path_planner=fake).plan(arena, objective=CostMetric.DISTANCE)
 
     assert result.status is PlanningStatus.SUCCESS
-    assert result.route.observation_poses[0].candidate_index == left.candidate_index
-    assert result.route.selected_candidate_kinds == ("10L",)
-    assert result.route.objective_cost == 2.0
+    assert result.route.observation_poses[0].candidate_index == nominal.candidate_index
+    assert result.route.selected_candidate_kinds == ("10C",)
+    assert result.route.objective_cost == 10.0
+
+
+@pytest.mark.parametrize("mode", tuple(RoutingMode))
+def test_complete_route_uses_fewest_angled_captures_before_cost(mode):
+    config = routing_config(candidates=2)
+    arena = arena_for(2)
+    start, groups = endpoints(arena, config)
+    a_center, a_side = groups[0]
+    b_center, b_side = groups[1]
+    costs = {
+        (start.pose, a_center.pose): (10.0, 10.0),
+        (start.pose, b_center.pose): (10.0, 10.0),
+        (start.pose, a_side.pose): (1.0, 1.0),
+        (a_center.pose, b_side.pose): (10.0, 10.0),
+        (a_side.pose, b_side.pose): (1.0, 1.0),
+    }
+    candidates = tuple(endpoint for group in groups for endpoint in group)
+    failures = {
+        (source.pose, goal.pose): LocalPlanningStatus.NO_PATH
+        for source in (start,) + candidates
+        for goal in candidates
+        if source.obstacle_id != goal.obstacle_id
+        and (source.pose, goal.pose) not in costs
+    }
+    result = Task1Planner(
+        config,
+        path_planner=FakePathPlanner(costs, failures),
+        routing_mode=mode,
+    ).plan(arena)
+
+    assert result.status is PlanningStatus.SUCCESS
+    assert result.route.target_order == (1, 2)
+    assert result.route.selected_candidate_kinds == ("10C", "10L")
+    assert result.route.objective_cost == 20.0
+
+
+@pytest.mark.parametrize("mode", tuple(RoutingMode))
+def test_alternative_head_on_standoff_is_preferred_over_cheaper_angle(mode):
+    config = replace(
+        routing_config(candidates=3),
+        observation_standoff_distances_cm=(10.0, 20.0),
+        guaranteed_max_candidates_per_target=4,
+    )
+    arena = arena_for(1)
+    start, groups = endpoints(arena, config)
+    nominal, left, right, alternate_center = groups[0]
+    fake = FakePathPlanner(
+        costs={
+            (start.pose, left.pose): (1.0, 1.0),
+            (start.pose, right.pose): (1.0, 1.0),
+            (start.pose, alternate_center.pose): (20.0, 20.0),
+        },
+        failures={(start.pose, nominal.pose): LocalPlanningStatus.NO_PATH},
+    )
+    result = Task1Planner(config, path_planner=fake, routing_mode=mode).plan(arena)
+
+    assert result.status is PlanningStatus.SUCCESS
+    assert result.route.selected_candidate_kinds == ("20C",)
 
 
 def test_one_reachable_fallback_keeps_target_routable_and_geometric_validity_unchanged():

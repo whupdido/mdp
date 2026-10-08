@@ -327,8 +327,11 @@ for every route permutation.
 
 Visiting five targets is Hamiltonian-like: there are `5! = 120` target orders
 before candidate choices. The exact optimizer evaluates those orders and uses
-layered candidate-chain optimization. Its precise claim is optimal ordering
-and observation-pose chain with respect to the available candidate set and
+layered candidate-chain optimization. Routes first minimize the number of
+angled captures, then minimize the selected travel cost. A head-on capture is
+retained even when an angled capture would save travel time. Its precise claim
+is optimal ordering and observation-pose chain under this preference, with
+respect to the available candidate set and
 cached local path costs, not globally optimal physical execution beyond the
 configured model.
 
@@ -617,21 +620,24 @@ candidate Cartesian product:
 
 ```text
 best(next candidate)
-    = min over reachable previous candidates:
-        best(previous candidate) + cached directed edge cost
+    = lexicographic min over reachable previous candidates:
+        (angled captures so far, accumulated directed edge cost)
 ```
 
 The start layer uses cached `start -> candidate` costs. The lowest complete
 layer across every permutation selects both target order and one observation
-candidate per target. Cost ties prefer fewer fallback candidates, then stable
-target and candidate identity. This gives the precise guarantee: **optimal
-target order and observation-pose chain with respect to the canonical cached
-directed Hybrid A\* pairwise costs**. Continuous route materialization described
+candidate per target. Fewer angled captures take priority over cost; cost ties
+prefer lower candidate ranks, then stable target and candidate identity.
+Alternative centre standoffs count as head-on captures. This gives the precise
+guarantee: **fewest angled captures, then optimal target order and observation-pose
+chain with respect to the canonical cached directed Hybrid A\* pairwise costs**.
+Continuous route materialization described
 below may change the realized execution cost, so this is not a guarantee of a
 globally optimal physical trajectory or calibrated shortest execution time.
 
 Both `DISTANCE` and `ESTIMATED_TIME` minimize the sum of their corresponding
-pairwise objective values without mixing units. Route metrics continue to
+pairwise objective values after minimizing angled captures, without mixing
+units. Route metrics continue to
 report total geometric distance and provisional execution time separately.
 The estimated-time objective retains the Phase 5 timing and BL/BR calibration
 warnings.
@@ -888,8 +894,9 @@ production limit therefore remains unchanged.
 
 Phase 6.4 lets the live editor generate all nine candidates without eagerly
 planning all 1,665 possible directed edges. B.2 feasibility mode activates
-`20C`, then `20L/20R`, then `10C/30C`, and finally the remaining lateral
-fallbacks. Each exact target-permutation/candidate-layer DP attempt asks the
+all geometrically valid centre candidates first, then adds lateral fallbacks
+only if the active candidates cannot form a complete route. Each exact
+target-permutation/candidate-layer DP attempt asks the
 directed cache for an edge only when it needs that edge, and all prior tier
 results remain cached. It stops at the first tier yielding a complete route.
 That is a feasibility result, not a claim of optimality across inactive
