@@ -13,6 +13,7 @@ import com.example.androidapp.arena.withStartPose
 import com.example.androidapp.arena.withObstacleAdded
 import com.example.androidapp.arena.withTargetFace
 import com.example.androidapp.arena.withTargetReported
+import com.example.androidapp.arena.withTargetsCleared
 import com.example.androidapp.protocol.Outbound
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -272,6 +273,48 @@ class RunStateTest {
             ArenaState().withStartPose(3, 3, Facing.N)!!.startsInCarpark(),
         )
         assertFalse(ArenaState().withStartPose(9, 9, Facing.N)!!.startsInCarpark())
+    }
+
+    // --- a re-run starts from a clean slate ------------------------------
+    //
+    // Reported by Peter: after a few runs, scanning one face ended the run.
+    // The previous run's image IDs were still on the obstacles, so the first
+    // ID of the new run completed the set.
+
+    private fun finishedRun(): ArenaState =
+        mapOf(5 to 13, 5 to 7, 12 to 9)
+            .withTargetFace(1, Facing.W)
+            .withTargetFace(2, Facing.S)
+            .withTargetFace(3, Facing.E)
+            .withTargetReported(1, 35, Facing.W)!!
+            .withTargetReported(2, 17, Facing.S)!!
+            .withTargetReported(3, 31, Facing.E)!!
+
+    @Test fun `the bug - last run's ids make one new id look like a full set`() {
+        // What the map looked like at the start of a re-run, before the fix.
+        val rerun = finishedRun().withTargetReported(1, 35, Facing.W)!!
+        assertTrue("one scan on a stale map already counts as all found", rerun.allIdentified())
+    }
+
+    @Test fun `a new attempt clears every image id`() {
+        val fresh = finishedRun().withTargetsCleared()
+        assertTrue(fresh.obstacles.all { it.targetId == null })
+        assertFalse(fresh.allIdentified())
+    }
+
+    @Test fun `so one scanned face no longer ends the run`() {
+        val afterOneScan = finishedRun().withTargetsCleared().withTargetReported(1, 35, Facing.W)!!
+        assertFalse(afterOneScan.allIdentified())
+    }
+
+    @Test fun `clearing keeps the layout that was keyed in`() {
+        // Obstacles and their image sides are the layout, not results.
+        val before = finishedRun()
+        val after = before.withTargetsCleared()
+        assertEquals(before.obstacles.map { Triple(it.id, it.x, it.y) },
+            after.obstacles.map { Triple(it.id, it.x, it.y) })
+        assertEquals(before.obstacles.map { it.targetFace }, after.obstacles.map { it.targetFace })
+        assertEquals(before.robot, after.robot)
     }
 
     @Test fun `task 2 starts from an empty map, because that is correct`() {
