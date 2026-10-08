@@ -34,6 +34,7 @@ from algorithm.targets import (
     ObservationCandidateGroup,
     generate_arena_observation_candidates,
 )
+from algorithm.targets.models import ObservationLateralClass
 
 from .cache import DirectedPairwisePathCache
 from .models import (
@@ -203,12 +204,17 @@ class Task1Planner:
 
         planning_budget_exhausted = False
 
-        # Track the highest activated preference rank for each target.
-        # Every target starts with its best geometrically-valid candidate.
-        # Later tiers are added only for targets that still have no reachable
-        # candidate.
+        # Feasibility starts with all valid head-on poses (including alternative
+        # standoffs). An angled pose starts active only when none are valid.
+        # Full optimization considers every pose; its optimizer minimizes the
+        # number of angled captures before comparing travel costs.
         activated_ranks = [
-            {min(candidate.preference_rank for candidate in group)}
+            {
+                candidate.preference_rank
+                for candidate in group
+                if mode is RoutingMode.FULL_OPTIMIZATION
+                or candidate.lateral_class is ObservationLateralClass.CENTER
+            } or {min(candidate.preference_rank for candidate in group)}
             for group in valid_by_target
         ]
 
