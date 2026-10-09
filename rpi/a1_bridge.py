@@ -370,12 +370,18 @@ def task2_scan(stm, android):
     """
     from capture_and_report import read_arrow
 
+    windows_before = len(task2_frames)
     try:
         class_id = read_arrow(stm, seen=task2_frames)
     except Exception as exc:  # camera or detection server down
         print(f"[TASK2] Arrow read failed: {exc}")
         send_line(android, "MSG,Arrow read failed - board will use its default")
         return None
+    finally:
+        # Zhenxi: every window counts, with a frame or without, so that
+        # pick_task2_frames() can tell where one obstacle's windows end.
+        if len(task2_frames) == windows_before:
+            task2_frames.append((None, None))
     if class_id is None:
         send_line(android, "MSG,No arrow seen - board will use its default")
     else:
@@ -384,25 +390,40 @@ def task2_scan(stm, android):
     return class_id
 
 
-def pick_task2_frames(seen, obstacles=2):
-    """Zhenxi: one frame per obstacle, out of one frame per scan window.
+# Zhenxi: Task 2 has two obstacles, and task_2() scans each one at most four
+# times -- straight on, 10 cm closer, tilted left, tilted right -- before it
+# takes its default side and drives on (obstacle_nav.c). Keep these in step
+# with it: they are how the Pi tells the first obstacle's scans from the
+# second's.
+TASK2_OBSTACLES = 2
+TASK2_SCANS_PER_OBSTACLE = 4
 
-    task_2() can scan the same obstacle up to three times (straight on, then
-    tilted each way) before it takes its default and drives on, so windows
-    do not map one-to-one onto obstacles. A window that read an arrow closes
-    its obstacle; one that did not is a retry, replaced by the next window.
-    An obstacle that never shows an arrow keeps its last frame, so the sheet
-    still shows what the camera saw there. (If the FIRST obstacle never
-    reads, the second's windows look like more retries -- the Pi cannot tell
-    them apart -- and that run's sheet comes out one tile short.)
+
+def pick_task2_frames(seen, obstacles=TASK2_OBSTACLES, scans=TASK2_SCANS_PER_OBSTACLE):
+    """Zhenxi: one frame per obstacle, out of one entry per scan window.
+
+    An obstacle's windows end at the first one that reads an arrow, or
+    after `scans` misses -- the board gives up and drives on then, so the
+    next window is the next obstacle's. Within an obstacle the arrow's frame
+    wins, else the last frame taken, so the sheet still shows what the
+    camera saw there. A window with no frame at all (camera fault) still
+    counts towards the `scans`.
+
+    Returns one entry per obstacle reached, None where an obstacle has no
+    frame, so the second obstacle keeps its number when the first has
+    nothing to show.
     """
-    picks = []
+    picks = []  # [arrow ID or None, frame or None, windows so far]
     for class_id, frame in seen:
-        if not picks or (picks[-1][0] is not None and len(picks) < obstacles):
-            picks.append((class_id, frame))
-        elif picks[-1][0] is None:
-            picks[-1] = (class_id, frame)
-    return [frame for _, frame in picks]
+        last = picks[-1] if picks else None
+        if last is not None and last[0] is None and last[2] < scans:
+            last[0] = class_id
+            if frame is not None:
+                last[1] = frame
+            last[2] += 1
+        elif len(picks) < obstacles:
+            picks.append([class_id, frame, 1])
+    return [frame for _, frame, _ in picks]
 
 
 def show_task2_images(android):
@@ -414,19 +435,22 @@ def show_task2_images(android):
     """
     picks = pick_task2_frames(task2_frames)
     task2_frames.clear()
-    if not picks:
+    numbered = [(n, frame) for n, frame in enumerate(picks, start=1) if frame is not None]
+    if not numbered:
         return
     from capture_and_report import report_task2_images
 
     run_id = time.strftime("task2-%Y%m%d-%H%M%S")
     try:
-        report_task2_images(picks, run_id)
+        report_task2_images(numbered, run_id)
     except Exception as exc:  # laptop down or detection server not running
         print(f"[TASK2] Could not send the images for the collage: {exc}")
         send_line(android, "MSG,Task 2 images not shown - laptop unreachable")
         return
-    print(f"[TASK2] {len(picks)} image(s) sent for the collage, run {run_id}")
-    send_line(android, f"MSG,Task 2 images on the laptop ({len(picks)})")
+    # Out of TASK2_OBSTACLES, not out of what was found: one short of two is
+    # a missing image the supervisor will count, and should not read as done.
+    print(f"[TASK2] {len(numbered)} image(s) sent for the collage, run {run_id}")
+    send_line(android, f"MSG,Task 2 images on the laptop ({len(numbered)} of {TASK2_OBSTACLES})")
 
 
 def main(on_face_known=None, on_scan=task2_scan):

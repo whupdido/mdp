@@ -279,16 +279,56 @@ check(
 # Zhenxi: one frame per obstacle out of one per scan window. Strings stand in
 # for the frames.
 bridge, _, _ = load_bridge([], [])
-pick = bridge.pick_task2_frames
+
+
+def pick(windows):
+    return [str(frame) for frame in bridge.pick_task2_frames(windows)]
+
+
+MISS = (None, None)  # a window that never got a frame
 check("an arrow per window is a frame per obstacle",
       pick([(38, "a"), (39, "b")]), ["a", "b"])
 check("a miss is a retry, replaced by the read that follows",
       pick([(None, "a1"), (None, "a2"), (38, "a3"), (39, "b")]), ["a3", "b"])
 check("an obstacle never read keeps its last frame",
       pick([(38, "a"), (None, "b1"), (None, "b2")]), ["a", "b2"])
+# Codex on PR #40: after four misses the board drives on, so the fifth
+# window is obstacle 2's -- it used to be taken for a fifth retry, losing
+# obstacle 1's tile and calling obstacle 2's arrow obstacle 1.
+check("four misses close obstacle 1; the next window is obstacle 2's",
+      pick([(None, "a1"), (None, "a2"), (None, "a3"), (None, "a4"), (39, "b")]),
+      ["a4", "b"])
+check("a window with no frame still counts towards the four",
+      pick([MISS, (None, "a2"), (None, "a3"), MISS, (38, "b")]), ["a3", "b"])
+check("an obstacle with no frame at all keeps its place",
+      pick([MISS, MISS, MISS, MISS, (38, "b")]), ["None", "b"])
 check("a read after both obstacles is ignored",
       pick([(38, "a"), (39, "b"), (38, "c")]), ["a", "b"])
 check("no windows, no frames", pick([]), [])
+
+# The four-scan boundary only holds if every window is counted, including
+# one where the camera never gave a frame.
+fake_reader = types.ModuleType("capture_and_report")
+sys.modules["capture_and_report"] = fake_reader
+
+
+def camera_fault(stm, seen=None):
+    raise RuntimeError("camera would not open")
+
+
+def framed(stm, seen=None):
+    seen.append((38, "f"))
+    return 38
+
+
+tablet = FakePort("android", [])
+fake_reader.read_arrow = camera_fault
+bridge.task2_scan(None, tablet)
+fake_reader.read_arrow = framed
+bridge.task2_scan(None, tablet)
+sys.modules.pop("capture_and_report", None)
+check("every scan window is counted once, with a frame or without",
+      [str(entry) for entry in bridge.task2_frames], ["(None, None)", "(38, 'f')"])
 
 
 def collage_run(report):
@@ -322,11 +362,12 @@ def collage_run(report):
 sent = []
 to_android = collage_run(lambda frames, run_id: sent.append((list(frames), run_id)))
 check("after the run, one frame per obstacle goes for the collage, none stale",
-      [",".join(frames) for frames, _ in sent], ["frame1,frame2"])
+      [",".join(f"{n}:{frame}" for n, frame in frames) for frames, _ in sent],
+      ["1:frame1,2:frame2"])
 check("the collage gets a Task 2 run id",
       [run_id[:6] for _, run_id in sent], ["task2-"])
 check("the tablet hears the images are up, after PARKED and DONE",
-      to_android[-3:], ["STM,PARKED", "STM,DONE", "MSG,Task 2 images on the laptop (2)"])
+      to_android[-3:], ["STM,PARKED", "STM,DONE", "MSG,Task 2 images on the laptop (2 of 2)"])
 
 
 def laptop_down(frames, run_id):
