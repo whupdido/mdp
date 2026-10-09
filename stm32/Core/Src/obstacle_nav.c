@@ -246,6 +246,14 @@ int task_2_image_rec(void){
 	/* Reset the flag before we start waiting */
 	image_found = 0;
 
+	/* Denzel: tell the Pi the window is open. Without this nothing on the
+	 * Pi knows the car has stopped in front of an arrow, so no IM038/IM039
+	 * ever arrives and the dodge always falls back to the guess -- which the
+	 * briefing counts as an invalid run whenever the guess is wrong. The Pi
+	 * answers IM038 (right) or IM039 (left), picked up by the command_poll()
+	 * in the loop below. */
+	command_send("SCAN\r\n");
+
 	uint32_t start_time = HAL_GetTick();
 	const uint32_t TIMEOUT_MS = 3000; /* Wait up to 3 seconds */
 	while ((HAL_GetTick() - start_time) < TIMEOUT_MS)

@@ -26,6 +26,7 @@ from __future__ import annotations
 import pickle
 import socket
 import struct
+import time
 
 import cv2
 
@@ -160,6 +161,47 @@ def signal_search_result(class_id, stm_serial):
     stm_serial.flush()
     print(f"[CAPTURE] Sent to STM: {message}")
     return message
+
+
+# Denzel: Task 2 (fastest car). The obstacles carry only a left or right
+# arrow, and a misread one makes the run invalid, so nothing else counts.
+RIGHT_ARROW_ID = 38
+LEFT_ARROW_ID = 39
+TASK2_ARROW_IDS = (RIGHT_ARROW_ID, LEFT_ARROW_ID)
+
+# The board waits 3 s after SCAN (task_2_image_rec in obstacle_nav.c). Stop
+# a little short so the IM line lands inside that window, not after it.
+TASK2_SCAN_BUDGET_SECONDS = 2.5
+
+
+def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS):
+    """Keep capturing and detecting until a left/right arrow is seen or the
+    budget runs out. Sends IM038/IM039 to the STM on success and returns the
+    Image ID; returns None (sending nothing) if no arrow was seen, so the
+    board falls back to its own default.
+
+    Opens the camera once for the whole window instead of per frame like
+    capture_frame() -- reopening costs a good part of the 3 s on the Pi."""
+    deadline = time.monotonic() + budget_s
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    if not cap.isOpened():
+        raise RuntimeError("Could not open camera for the Task 2 arrow read")
+    try:
+        attempt = 0
+        while time.monotonic() < deadline:
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            attempt += 1
+            class_id = detect(cv2.rotate(frame, cv2.ROTATE_180))
+            print(f"[TASK2] Attempt {attempt}: detected {class_id}")
+            if class_id in TASK2_ARROW_IDS:
+                send_to_stm(class_id, stm_serial)
+                return class_id
+    finally:
+        cap.release()
+    print("[TASK2] No arrow seen within the scan window")
+    return None
 
 
 def report_obstacle(
