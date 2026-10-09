@@ -387,7 +387,12 @@ void task_2(void) {
 
 	int success = task_2_image_rec();
 
-	int dodge_left;
+	/* Zhenxi: was `int dodge_left;` with nothing assigned when all four scans
+	 * miss (laptop down, camera fault, a bad angle) -- the car then dodged
+	 * whichever way the stack happened to say. Left is the default the
+	 * commented-out line below already pointed at; change it here (and
+	 * dodge_left_2's) if you would rather guess right. A read overrides it. */
+	int dodge_left = 1;
 	if (success) {
 		if (image_found == 39)
 			dodge_left = 1;
@@ -552,7 +557,8 @@ void task_2(void) {
 	 * ====================================================================== */
 	success = task_2_image_rec();
 
-	int dodge_left_2;
+	/* Zhenxi: same as dodge_left -- unset after four misses before. */
+	int dodge_left_2 = 1;
 	if (success) {
 		if (image_found == 39)
 			dodge_left_2 = 1;

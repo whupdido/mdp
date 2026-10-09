@@ -245,9 +245,10 @@ def report_task2_images(frames, run_id: str):
     This sends one frame per obstacle again, with a run_id, so the server's
     collage collector builds the sheet exactly as it does for Task 1.
 
-    `frames` is one frame per obstacle, in the order they were passed.
+    `frames` is (obstacle number, frame) pairs, one per obstacle with a frame.
+    The number titles the tile and orders the sheet.
     """
-    for n, frame in enumerate(frames, start=1):
+    for n, frame in frames:
         detect(
             frame,
             run_id=run_id,
