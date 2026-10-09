@@ -12,6 +12,7 @@
 
 #define STANDOFF_DIST_MM    150
 #define PILLAR_HALF_WIDTH   50
+#define TILT_CORR_1 0
 
 
 /* ------------------------------------------------------------------------- */
@@ -402,10 +403,10 @@ void task_2(void) {
 	else {
 		//dodge_left = 1; // IMPLEMENT
 		/* =========================================================
-		 * RETRY 1: Move 10cm forward
+		 * RETRY 1: Move 10cm backward
 		 * ========================================================= */
-		move_straight_mm(100);
-		accum_forward += 100;
+		move_straight_mm(-100);
+		accum_forward -= 100;
 		success = task_2_image_rec();
 
 		if (success) {
@@ -448,6 +449,8 @@ void task_2(void) {
 				task_2_straighten(0, 15, &accum_forward, &accum_left);
 			}
 		}
+		move_straight_mm(100);
+		accum_forward += 100;
 	}
 
 	OLED_Clear();
@@ -755,7 +758,7 @@ void task_2(void) {
 		move_straight_mm(200);
 		creep_driven += 200;
 	}
-
+#if TILT_CORR_1
 	/* TILT MATH: If distance driven is long enough, calculate and correct chassis tilt */
 	if (creep_driven >= 200) {
 		float diff_mm = (ir_end - ir_start) * 10.0f;
@@ -792,7 +795,7 @@ void task_2(void) {
 		/* Failsafe update */
 		if (dodge_left_2) accum_left -= creep_driven; else accum_left += creep_driven;
 	}
-
+#endif
 
 	/* ---------------------------------------------------------
 	 * TURN 4: 90 Degrees Inward (East/West -> South)
