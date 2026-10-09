@@ -85,10 +85,10 @@ def load_bridge(android_script, stm_script):
     return module, android, stm
 
 
-def run(android_script, stm_script=None):
+def run(android_script, stm_script=None, **main_kwargs):
     module, android, stm = load_bridge(android_script, stm_script)
     try:
-        module.main()
+        module.main(**main_kwargs)
     except StopTest:
         pass
     return android.written, stm.written
@@ -216,6 +216,46 @@ check(
 # BUSY is terminal, so the bridge must not sit waiting after it.
 to_android, to_stm = run(["START2"], ["BUSY"])
 check("a refused START2 ends the wait", to_android[-1:], ["STM,BUSY"])
+
+# --- START2: arrow read on SCAN -----------------------------------------
+# Denzel: task_2() says SCAN when it stops in front of an arrow, then waits
+# ~3 s for IM038/IM039. The board answers that IM with its own DONE while the
+# routine is still running, which must not end the START2 wait -- the second
+# obstacle's SCAN comes after it.
+def fake_scan(arrow_ids):
+    calls = []
+
+    def on_scan(stm, android):
+        class_id = arrow_ids[len(calls)]
+        calls.append(class_id)
+        if class_id is not None:
+            stm.write(f"IM{class_id:03d}\n".encode("ascii"))
+        return class_id
+
+    return on_scan, calls
+
+
+on_scan, calls = fake_scan([39, 38])
+to_android, to_stm = run(
+    ["START2"],
+    ["ACK", "SCAN", "DONE", "SCAN", "DONE", None, "DONE"],
+    on_scan=on_scan,
+)
+check("SCAN asks for an arrow once per obstacle", [str(c) for c in calls], ["39", "38"])
+check("the arrows reach the board after START2", to_stm, ["START2", "IM039", "IM038"])
+check(
+    "an IM's DONE does not end START2; the routine's DONE does",
+    to_android,
+    ["STATUS,RPi bridge ready", "STATUS,SENT,START2", "STM,ACK", "STM,SCAN",
+     "STM,SCAN", "STM,DONE"],
+)
+
+# Nothing seen: nothing is sent, so there is no IM DONE to swallow, and the
+# board's next DONE really is the end of the routine.
+on_scan, calls = fake_scan([None])
+to_android, to_stm = run(["START2"], ["ACK", "SCAN", "DONE"], on_scan=on_scan)
+check("no arrow seen sends nothing to the board", to_stm, ["START2"])
+check("no arrow seen still finishes on DONE", to_android[-1:], ["STM,DONE"])
 
 # --- things that should still be refused --------------------------------
 # ROBOT,7,2,W used to be in this list. It is not any more: the tablet now

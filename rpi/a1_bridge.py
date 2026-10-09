@@ -298,7 +298,7 @@ def forward_stop_if_pending(android, stm):
     return stop_forwarded
 
 
-def relay_stm_replies(stm, android, timeout_s, command, pose=None):
+def relay_stm_replies(stm, android, timeout_s, command, pose=None, on_scan=None):
     """
     Zhenxi: wait for the board to finish `command`, relaying everything it
     says on the way, and keep watching the tablet for a STOP while we wait.
@@ -307,8 +307,17 @@ def relay_stm_replies(stm, android, timeout_s, command, pose=None):
     budget instead of the per-move one. `pose` is the dead-reckoner, and is
     left None for anything that is not a single move primitive -- START2 runs
     a whole routine, so there is nothing sensible to add to the estimate.
+
+    Denzel: `on_scan(stm, android)` is called when the board says SCAN, i.e.
+    task_2() has stopped in front of an arrow and is waiting ~3 s for
+    IM038/IM039. It returns the Image ID it sent, or None if it sent nothing.
     """
     stop_requested = command == "STOP"
+    # Denzel: the board answers each IMxxx with its own DONE, while task_2()
+    # is still running. Count them so that DONE is not mistaken for the
+    # routine's final DONE -- which would end the wait mid-run and leave the
+    # second SCAN with nobody listening.
+    im_dones_pending = 0
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         stop_requested = forward_stop_if_pending(android, stm) or stop_requested
@@ -321,6 +330,11 @@ def relay_stm_replies(stm, android, timeout_s, command, pose=None):
             continue
 
         print(f"STM32 -> RPi: {reply}")
+        if reply == "DONE" and im_dones_pending:
+            # The IM's own reply, not the routine's -- keep it off the
+            # tablet, which would read STM,DONE as Task 2 finished.
+            im_dones_pending -= 1
+            continue
         send_line(android, f"STM,{reply}")
         if reply == "ACK":
             if stop_requested:
@@ -328,6 +342,10 @@ def relay_stm_replies(stm, android, timeout_s, command, pose=None):
             # ACK belongs to a STOP, or to START2 saying it accepted the
             # run -- neither is the result we are waiting for. Relay it for
             # diagnostics and keep waiting for the real one.
+            continue
+        if reply == "SCAN" and on_scan is not None:
+            if on_scan(stm, android) is not None:
+                im_dones_pending += 1
             continue
         if reply in FINAL_REPLIES:
             if reply == "DONE" and pose is not None and command != "STOP":
@@ -338,7 +356,30 @@ def relay_stm_replies(stm, android, timeout_s, command, pose=None):
         send_line(android, "STM,NO_REPLY")
 
 
-def main(on_face_known=None):
+def task2_scan(stm, android):
+    """Denzel: answer the board's SCAN with the arrow it is looking at.
+
+    Imported here rather than at the top because capture_and_report imports
+    this module, and because it pulls in cv2 -- which the offline tests and
+    a Pi with no camera should not need just to run the bridge.
+    """
+    from capture_and_report import read_arrow
+
+    try:
+        class_id = read_arrow(stm)
+    except Exception as exc:  # camera or detection server down
+        print(f"[TASK2] Arrow read failed: {exc}")
+        send_line(android, "MSG,Arrow read failed - board will use its default")
+        return None
+    if class_id is None:
+        send_line(android, "MSG,No arrow seen - board will use its default")
+    else:
+        side = "RIGHT" if class_id == 38 else "LEFT"
+        send_line(android, f"MSG,Arrow {side} ({class_id})")
+    return class_id
+
+
+def main(on_face_known=None, on_scan=task2_scan):
     """Run the bridge. `on_face_known(stm, android, obstacle_number)`, if
     given, is called once -- not on every resend -- the moment an obstacle
     goes from "no face known yet" to "face known", with the same open stm
@@ -436,7 +477,9 @@ def main(on_face_known=None):
                     send_line(stm, command)
                     send_line(android, f"STATUS,SENT,{command}")
                     print(f"RPi -> STM32: {command} (Task 2, up to {TASK2_TIMEOUT_SECONDS}s)")
-                    relay_stm_replies(stm, android, TASK2_TIMEOUT_SECONDS, command)
+                    relay_stm_replies(
+                        stm, android, TASK2_TIMEOUT_SECONDS, command, on_scan=on_scan
+                    )
                     continue
 
                 if not MOVE_PATTERN.fullmatch(command):

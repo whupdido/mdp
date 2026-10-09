@@ -23,9 +23,11 @@ Example, once wired into the real loop:
 # on the Pi's older Python (that union syntax needs 3.10+ without this).
 from __future__ import annotations
 
+import os
 import pickle
 import socket
 import struct
+import time
 
 import cv2
 
@@ -33,8 +35,9 @@ import cv2
 import a1_bridge
 
 # Laptop's IP on the shared WiFi, running `python -m server.yolo_task1`.
-# TODO: set this before running -- find it with `ipconfig getifaddr en0` on the Mac.
-DETECTION_SERVER_IP = "SET_ME_TO_YOUR_LAPTOP_IP"
+# Find it with `ipconfig getifaddr en0` on the Mac. MDP_LAPTOP_IP overrides
+# the default (the boot service sets it), so a new network needs no edit here.
+DETECTION_SERVER_IP = os.environ.get("MDP_LAPTOP_IP", "192.168.4.40")
 DETECTION_SERVER_PORT = 5001
 CAMERA_INDEX = 0  # matches /dev/video0, same as rpi_camera_server.py
 
@@ -98,12 +101,17 @@ def detect(
     expected_images: int | None = None,
     obstacle_number: int | None = None,
     capture_index: int | None = None,
+    timeout: float | None = None,
 ):
     """Send one frame to the detection server. Returns the official Image ID
     (11-40), or None if nothing was confidently detected."""
     height, width = frame.shape[:2]
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Denzel: None blocks forever (Task 1's behaviour). Task 2 passes what is
+    # left of its scan window, so an unreachable laptop costs that window,
+    # not the ~75 s a blocking connect takes to give up.
+    sock.settimeout(timeout)
     sock.connect((DETECTION_SERVER_IP, DETECTION_SERVER_PORT))
     try:
         _recv_json(sock)  # class-name metadata, sent on connect -- not needed here
@@ -160,6 +168,57 @@ def signal_search_result(class_id, stm_serial):
     stm_serial.flush()
     print(f"[CAPTURE] Sent to STM: {message}")
     return message
+
+
+# Denzel: Task 2 (fastest car). The obstacles carry only a left or right
+# arrow, and a misread one makes the run invalid, so nothing else counts.
+RIGHT_ARROW_ID = 38
+LEFT_ARROW_ID = 39
+TASK2_ARROW_IDS = (RIGHT_ARROW_ID, LEFT_ARROW_ID)
+
+# The board waits 3 s after SCAN (task_2_image_rec in obstacle_nav.c). Stop
+# a little short so the IM line lands inside that window, not after it.
+TASK2_SCAN_BUDGET_SECONDS = 2.5
+
+
+def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS):
+    """Keep capturing and detecting until a left/right arrow is seen or the
+    budget runs out. Sends IM038/IM039 to the STM on success and returns the
+    Image ID; returns None (sending nothing) if no arrow was seen, so the
+    board falls back to its own default.
+
+    Opens the camera once for the whole window instead of per frame like
+    capture_frame() -- reopening costs a good part of the 3 s on the Pi."""
+    deadline = time.monotonic() + budget_s
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    if not cap.isOpened():
+        raise RuntimeError("Could not open camera for the Task 2 arrow read")
+    try:
+        attempt = 0
+        while time.monotonic() < deadline:
+            ok, frame = cap.read()
+            if not ok:
+                continue
+            attempt += 1
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                class_id = detect(cv2.rotate(frame, cv2.ROTATE_180), timeout=remaining)
+            except socket.timeout:
+                print(f"[TASK2] Attempt {attempt}: no answer before the scan window closed")
+                break
+            except OSError as exc:
+                print(f"[TASK2] Attempt {attempt}: detection server unreachable ({exc})")
+                break
+            print(f"[TASK2] Attempt {attempt}: detected {class_id}")
+            if class_id in TASK2_ARROW_IDS:
+                send_to_stm(class_id, stm_serial)
+                return class_id
+    finally:
+        cap.release()
+    print("[TASK2] No arrow seen within the scan window")
+    return None
 
 
 def report_obstacle(
