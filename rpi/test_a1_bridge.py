@@ -257,6 +257,86 @@ to_android, to_stm = run(["START2"], ["ACK", "SCAN", "DONE"], on_scan=on_scan)
 check("no arrow seen sends nothing to the board", to_stm, ["START2"])
 check("no arrow seen still finishes on DONE", to_android[-1:], ["STM,DONE"])
 
+# --- START2: PARKED, Task 2's finish line --------------------------------
+# Zhenxi: task_2() says PARKED the moment the car stops in the carpark, then
+# DONE once it returns. PARKED has to reach the tablet -- its clock stops on
+# it -- and must not end the wait, or the routine's DONE would be taken for
+# the reply to whatever the tablet sends next.
+on_scan, calls = fake_scan([38, 39])
+to_android, to_stm = run(
+    ["START2"],
+    ["ACK", "SCAN", "DONE", "SCAN", "DONE", "PARKED", None, "DONE"],
+    on_scan=on_scan,
+)
+check(
+    "PARKED is relayed, and START2 still waits for the routine's DONE",
+    to_android,
+    ["STATUS,RPi bridge ready", "STATUS,SENT,START2", "STM,ACK", "STM,SCAN",
+     "STM,SCAN", "STM,PARKED", "STM,DONE"],
+)
+
+# --- START2: the end-of-run collage --------------------------------------
+# Zhenxi: one frame per obstacle out of one per scan window. Strings stand in
+# for the frames.
+bridge, _, _ = load_bridge([], [])
+pick = bridge.pick_task2_frames
+check("an arrow per window is a frame per obstacle",
+      pick([(38, "a"), (39, "b")]), ["a", "b"])
+check("a miss is a retry, replaced by the read that follows",
+      pick([(None, "a1"), (None, "a2"), (38, "a3"), (39, "b")]), ["a3", "b"])
+check("an obstacle never read keeps its last frame",
+      pick([(38, "a"), (None, "b1"), (None, "b2")]), ["a", "b2"])
+check("a read after both obstacles is ignored",
+      pick([(38, "a"), (39, "b"), (38, "c")]), ["a", "b"])
+check("no windows, no frames", pick([]), [])
+
+
+def collage_run(report):
+    """START2 with a scan that records frames the way task2_scan does, and
+    `report` standing in for capture_and_report.report_task2_images."""
+    fake = types.ModuleType("capture_and_report")
+    fake.report_task2_images = report
+    sys.modules["capture_and_report"] = fake
+    module, android, stm = load_bridge(
+        ["START2"], ["ACK", "SCAN", "DONE", "SCAN", "PARKED", "DONE"]
+    )
+    reads = iter([38, None])
+
+    def scanning(stm_port, android_port):
+        class_id = next(reads)
+        module.task2_frames.append((class_id, f"frame{len(module.task2_frames) + 1}"))
+        if class_id is not None:
+            stm_port.write(f"IM{class_id:03d}\n".encode("ascii"))
+        return class_id
+
+    module.task2_frames.append((39, "stale"))  # left over from an earlier run
+    try:
+        module.main(on_scan=scanning)
+    except StopTest:
+        pass
+    finally:
+        sys.modules.pop("capture_and_report", None)
+    return android.written
+
+
+sent = []
+to_android = collage_run(lambda frames, run_id: sent.append((list(frames), run_id)))
+check("after the run, one frame per obstacle goes for the collage, none stale",
+      [",".join(frames) for frames, _ in sent], ["frame1,frame2"])
+check("the collage gets a Task 2 run id",
+      [run_id[:6] for _, run_id in sent], ["task2-"])
+check("the tablet hears the images are up, after PARKED and DONE",
+      to_android[-3:], ["STM,PARKED", "STM,DONE", "MSG,Task 2 images on the laptop (2)"])
+
+
+def laptop_down(frames, run_id):
+    raise OSError("connection refused")
+
+
+to_android = collage_run(laptop_down)
+check("a laptop that is down costs the sheet, not the bridge",
+      to_android[-1:], ["MSG,Task 2 images not shown - laptop unreachable"])
+
 # --- things that should still be refused --------------------------------
 # ROBOT,7,2,W used to be in this list. It is not any more: the tablet now
 # sends that shape to say where the robot is parked, so the planner can route

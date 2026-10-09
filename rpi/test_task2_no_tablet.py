@@ -69,10 +69,14 @@ def full_run(stm):
     a1_bridge.relay_stm_replies(stm, tablet, a1_bridge.STM_TIMEOUT_SECONDS, "GC")
     a1_bridge.send_line(stm, "START2")
     print("RPi -> STM32: START2 -- the robot will drive now")
+    a1_bridge.task2_frames.clear()
     a1_bridge.relay_stm_replies(
         stm, tablet, a1_bridge.TASK2_TIMEOUT_SECONDS, "START2",
         on_scan=a1_bridge.task2_scan,
     )
+    # Zhenxi: and the end-of-run sheet, as a1_bridge does after START2 --
+    # look for task1_collage_task2-*.jpg in the server's yolo_logs/.
+    a1_bridge.show_task2_images(tablet)
 
 
 def main():

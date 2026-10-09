@@ -72,10 +72,19 @@ It does not behave like a move, so it does not answer like one:
 | | |
 |---|---|
 | `ACK` | accepted, the routine has started |
-| `DONE` | the routine returned |
+| `SCAN` | stopped in front of an arrow; the Pi has 3 s to answer `IM038` (right) or `IM039` (left). Each `IM` gets its own `DONE`, which is not the routine's |
+| `PARKED` | in the carpark and stopped. The tablet stops its clock here |
+| `DONE` | the routine returned (just after `PARKED`) |
 | `BUSY` | one is already running |
 
-Both replies matter. The routine blocks for up to three minutes, so without
+**`PARKED` is the finish line, not `DONE`.** The rules stop the timing when the
+robot is in the carpark and stopped, and `DONE` is too busy to trust for that,
+because every arrow answer gets one too. The bridge relays it as `STM,PARKED`
+and the tablet ends the run on it. `DONE` still ends the run on firmware that
+predates `PARKED`. Neither is sent after a `STOP`: the car is wherever it
+stopped, not parked.
+
+Both `ACK` and `DONE` matter. The routine blocks for up to three minutes, so without
 the `ACK` the bridge would give up after `STM_TIMEOUT_SECONDS` and report
 `NO_REPLY` while the robot was running Task 2 perfectly well. The bridge waits
 on `TASK2_TIMEOUT_SECONDS` for this command instead of the per-move timeout.

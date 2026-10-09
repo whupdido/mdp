@@ -193,6 +193,30 @@ class ProtocolTest {
         assertEquals(Inbound.Rejected("INVALID_COMMAND"), parseInbound("ERR,INVALID_COMMAND"))
     }
 
+    // --- PARKED, Task 2's finish line ---------------------------------------
+
+    @Test fun `parked arrives relayed from the board`() {
+        assertEquals(Inbound.Parked, parseInbound("STM,PARKED"))
+        assertEquals(Inbound.Parked, parseInbound(" stm , parked "))
+    }
+
+    @Test fun `parked is accepted bare or as a status line`() {
+        assertEquals(Inbound.Parked, parseInbound("PARKED"))
+        assertEquals(Inbound.Parked, parseInbound("parked,"))
+        assertEquals(Inbound.Parked, parseInbound("STATUS,PARKED"))
+    }
+
+    @Test fun `parked is not confused with the routine's DONE`() {
+        assertEquals(Inbound.StmReply("DONE"), parseInbound("STM,DONE"))
+    }
+
+    @Test fun `text that merely mentions parking does not stop the clock`() {
+        assertEquals(Inbound.Message("Parked"), parseInbound("MSG,Parked"))
+        assertEquals(Inbound.Message("PARKED, at last"), parseInbound("STATUS,PARKED, at last"))
+        assertTrue(parseInbound("PARKED,B1") is Inbound.Unknown)
+        assertEquals(Inbound.StmReply("PARKED!"), parseInbound("STM,PARKED!"))
+    }
+
     @Test fun `bare STM with no reply is not mistaken for a reply`() {
         assertTrue(parseInbound("STM,") is Inbound.Unknown)
     }
