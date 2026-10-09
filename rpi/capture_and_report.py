@@ -205,7 +205,10 @@ def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS):
                 break
             try:
                 class_id = detect(cv2.rotate(frame, cv2.ROTATE_180), timeout=remaining)
-            except (socket.timeout, OSError) as exc:
+            except socket.timeout:
+                print(f"[TASK2] Attempt {attempt}: no answer before the scan window closed")
+                break
+            except OSError as exc:
                 print(f"[TASK2] Attempt {attempt}: detection server unreachable ({exc})")
                 break
             print(f"[TASK2] Attempt {attempt}: detected {class_id}")
