@@ -136,6 +136,12 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
  *   ACK       STOP acknowledged, or START2 accepted
  *   BUSY      a move was already running; this command was DISCARDED
  *   ERR       unrecognised command
+ *
+ * Task 2 also says, unprompted, while START2 runs
+ *   SCAN      stopped in front of an arrow; answer IM038/IM039 within 3 s
+ *             (each IM gets its own DONE, which is not the routine's)
+ *   PARKED    in the carpark and stopped -- the tablet stops its clock here
+ *             (Zhenxi). The routine's DONE follows when task_2() returns.
  */
 
 /* Zhenxi: guards task_2() against re-entering itself.
@@ -457,7 +463,8 @@ static void dispatch(const char *cmd)
     /* Zhenxi: Task 2. Answers on the same contract as everything else, so
        the Pi and the tablet are not left guessing for three minutes.
          ACK   accepted, the routine has begun
-         DONE  the routine returned
+         DONE  the routine returned (after PARKED, which task_2() sends
+               itself the moment the car stops in the carpark)
          BUSY  one is already running (see task2_running above)
        Without the ACK the bridge waits STM_TIMEOUT_SECONDS and reports
        NO_REPLY, which the tablet shows as a warning while the robot is in

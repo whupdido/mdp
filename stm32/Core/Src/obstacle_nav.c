@@ -245,7 +245,12 @@ int task_2_image_rec(void){
 	OLED_Refresh_Gram();
 	/* Reset the flag before we start waiting */
 	image_found = 0;
-	command_send("SCAN\r\n");
+	/* Zhenxi: there were two command_send("SCAN") here -- Wen Rong's
+	 * 0c37bfe and Denzel's PR #39 both added one, and the merge kept both.
+	 * Each SCAN makes the Pi run a full 2.5 s arrow read, so the second one
+	 * was still reading while the car drove on, and could land its
+	 * IM038/IM039 in the next obstacle's window. One is enough: Denzel's,
+	 * below. */
 
 	/* Denzel: tell the Pi the window is open. Without this nothing on the
 	 * Pi knows the car has stopped in front of an arrow, so no IM038/IM039
@@ -969,21 +974,37 @@ void task_2(void) {
 
 	/* Precision Ultrasonic loop to stop exactly at the back wall */
 	while (1) {
+		/* Zhenxi: a STOP from the tablet latches the abort flag, and after that
+		 * move_straight_mm() returns at once without moving. The distance then
+		 * never shrank and this loop spun forever, leaving the board stuck in
+		 * task_2() -- every later START2 answered BUSY -- until it was reset. */
+		if (motion_abort_requested()) break;
+
 		trigger_ultrasonic();
 		HAL_Delay(60);
 
+		/* Zhenxi: was motion_stop() alone, in two branches. motion_stop() also
+		 * latches the abort flag that a STOP sets, so START2 in command.c took
+		 * every successful park for a stopped run and never sent DONE -- the
+		 * tablet's clock ran on to 3:00. The move before this has already
+		 * stopped the motors (moves block until they finish), so the stop
+		 * stays as a safety net but the flag is cleared again. The old
+		 * <= 8 cm branch could never run, since <= 10 cm catches it first. */
 		if (ultrasonic_distance_cm <= 10.0f) {
 			motion_stop();
-			break;
-		}
-
-		if (ultrasonic_distance_cm <= 8.0f) {
-			motion_stop();
+			motion_abort_clear();
 			break;
 		}
 
 		move_straight_mm(30);
 	}
+
+	/* Zhenxi: the rules stop the timing when the car is in the carpark and
+	 * stopped, which is now. Say so before the OLED redraw, and before the
+	 * DONE that only comes once task_2() returns. The Pi relays it as
+	 * STM,PARKED and the tablet stops its clock on it. Not sent after a STOP:
+	 * the car is wherever it was stopped, not parked. */
+	if (!motion_abort_requested()) command_send("PARKED\r\n");
 
 	OLED_Clear();
 	OLED_ShowString(0, 0, (const uint8_t *)"PARKED!");

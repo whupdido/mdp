@@ -225,6 +225,13 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Set when PARKED ends a Task 2 run, so the routine's own DONE (or the
+     * bridge's NO_REPLY, if that DONE never comes) is not mistaken for a
+     * manual move finishing.
+     */
+    private var task2DonePending = false
+
     // -----------------------------------------------------------------
     // Inbound — C.9 and C.10
     // -----------------------------------------------------------------
@@ -282,6 +289,8 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
             is Inbound.StmReply -> onStmReply(msg)
 
+            Inbound.Parked -> onParked()
+
             is Inbound.Unknown -> Unit // logged above, never surfaced, never thrown
         }
     }
@@ -305,8 +314,18 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         // Without this a clean 2:30 run would keep counting down, go red at
         // 3:00 and tell the operator the time was up.
         "DONE" -> when {
+            // Older firmware has no PARKED, so the routine's DONE still ends
+            // the run. Only the routine's: the bridge keeps the arrows' DONEs
+            // off the link (a1_bridge.relay_stm_replies).
             _run.value.running && _run.value.task == Task.TASK2 ->
                 finishRun("Task 2 complete")
+
+            // The DONE that follows PARKED. The clock has already stopped on
+            // the PARKED, so this is the routine returning, not another move.
+            task2DonePending -> {
+                task2DonePending = false
+                say("Robot has finished Task 2.")
+            }
 
             moveCutShort -> {
                 moveCutShort = false
@@ -315,7 +334,14 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
 
             else -> say("Move complete.")
         }
-        "ACK" -> say("Stop acknowledged.")
+        // START2 is acknowledged too, as the board accepting the run. A STOP
+        // drops the run to IDLE before its own ACK can come back, so while a
+        // Task 2 run is live the only ACK it can be is the start.
+        "ACK" -> if (_run.value.running && _run.value.task == Task.TASK2) {
+            say("Robot accepted Task 2.")
+        } else {
+            say("Stop acknowledged.")
+        }
         "BUSY" -> warn("Robot was still moving — that command was discarded.")
         "STALL" -> warn("Robot stalled. Its position on the map is no longer trustworthy.")
         "TIMEOUT" -> warn("Move timed out. Its position on the map is no longer trustworthy.")
@@ -329,8 +355,23 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             warn("Robot stopped short of an obstacle. Its position on the map is no longer trustworthy.")
         }
+        // Task 2: the board has stopped at an obstacle and is waiting on the
+        // Pi's camera. The Pi's MSG with the arrow it read follows.
+        "SCAN" -> say("Robot stopped to read an arrow.")
         "ERR" -> warn("Robot did not recognise that command.")
-        "NO_REPLY" -> warn("No reply from the robot within 25 s.")
+        // The bridge waits 200 s for START2, not the 25 s a move gets.
+        "NO_REPLY" -> when {
+            // Parked and timed already; only the routine's DONE went missing.
+            task2DonePending -> {
+                task2DonePending = false
+                Unit
+            }
+
+            _run.value.running && _run.value.task == Task.TASK2 ->
+                warn("Robot never reported back from Task 2.")
+
+            else -> warn("No reply from the robot within 25 s.")
+        }
         else -> when {
             msg.stoppedShort -> {
                 moveCutShort = true
@@ -338,6 +379,21 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
             }
             msg.isWarning -> warn("Robot: ${msg.reply}")
             else -> say("Robot: ${msg.reply}")
+        }
+    }
+
+    /**
+     * Task 2's finish line. The rules stop the timing when the robot is in
+     * the carpark and stopped, which is exactly when the board says PARKED --
+     * a moment before the routine returns and sends its DONE.
+     */
+    private fun onParked() {
+        val live = _run.value
+        if (live.running && live.task == Task.TASK2) {
+            task2DonePending = true
+            finishRun("Parked")
+        } else {
+            say("Robot reports it is parked.")
         }
     }
 
@@ -623,6 +679,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         val previous = _run.value
         if (previous.running || !previous.canStart) return
         val task = previous.task
+        task2DonePending = false
         clearRecording()
         // A new attempt starts with nothing found. This used to count the
         // previous run's image IDs, still sitting on the obstacles, as already
@@ -695,6 +752,7 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         armingTicker = null
         runTicker?.cancel()
         runTicker = null
+        task2DonePending = false
         _run.value = RunState(task = _run.value.task)
     }
 
@@ -729,7 +787,8 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
      *    blocked or stalled move, so this can arrive with images still
      *    missing -- the attempt is still over, and the tally already says
      *    how it went.
-     *  - Task 2, the board reports the routine returned.
+     *  - Task 2, the board says PARKED, or (older firmware) the routine
+     *    returned with DONE.
      */
     private fun finishRun(note: String) {
         val live = _run.value
@@ -738,8 +797,12 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
         runTicker = null
         armingTicker?.cancel()
         armingTicker = null
-        _run.value = live.copy(phase = RunPhase.FINISHED, armingSec = 0)
-        say("$note in ${RunState.formatClock(live.elapsedSec)}.")
+        // Read the clock now rather than use the ticker's last value, which
+        // can be up to a tick old -- enough to show the final time a second
+        // short.
+        val elapsed = (System.currentTimeMillis() - runStartMs) / 1000
+        _run.value = live.copy(phase = RunPhase.FINISHED, armingSec = 0, elapsedSec = elapsed)
+        say("$note in ${RunState.formatClock(elapsed)}.")
     }
 
     private fun transmit(line: String) {

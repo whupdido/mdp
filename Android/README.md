@@ -230,9 +230,14 @@ the carpark**: leaving it during preparation is a disqualification (FAQ 9).
 **Task 2 sends `START2` and no map**, because its obstacles are placed after
 the preparation time and their distances are deliberately withheld — there is
 nothing to key in. `a1_bridge.py` forwards it to the board, where `dispatch()`
-runs the whole `task_2()` routine: `ACK` when it accepts, `DONE` when it
-returns, `BUSY` if one is already running. Because it blocks for up to three
-minutes the bridge waits on `TASK2_TIMEOUT_SECONDS`, not the per-move timeout.
+runs the whole `task_2()` routine: `ACK` when it accepts, `SCAN` at each
+arrow, `PARKED` once it has stopped in the carpark, `DONE` when it returns,
+and `BUSY` if one is already running. **The clock stops on `PARKED`**, which
+is when the rules stop timing. `DONE` still stops it on older firmware.
+Because it blocks for up to three minutes, the bridge waits on
+`TASK2_TIMEOUT_SECONDS`, not the per-move timeout. Once the routine returns,
+the bridge sends one frame per arrow to the laptop, which tiles them with
+their boundary boxes like Task 1's images (rule 8).
 See the `START2` section in
 [`stm32/STM32_motion_spec.md`](../stm32/STM32_motion_spec.md).
 
@@ -257,11 +262,12 @@ leaves B3 called B3, because the robot has already been told about B3.
 | `STATUS,PLAN,SET` | hold over — **this is what makes START live** | rules |
 | `STATUS,PLAN,FAILED,<why>` | no route, or pre-flight failed; the reason is shown | rules |
 | `STM,<reply>` | relayed board reply | — |
+| `STM,PARKED` | Task 2 over: **stops the clock**. Bare `PARKED` and `STATUS,PARKED` work too | rules |
 | `STM,[WARN] <text>` | board diagnostic; a warning, not a status line | — |
 | `ERR,<reason>` | warning — something we sent was refused | — |
 
 `STM,<reply>` covers `READY` `DONE` `ACK` `BUSY` `STALL` `TIMEOUT` `BLOCKED`
-`ERR` `NO_REPLY`. **`STALL`, `TIMEOUT` and `BLOCKED` raise a visible
+`SCAN` `ERR` `NO_REPLY`. **`STALL`, `TIMEOUT` and `BLOCKED` raise a visible
 warning**, because the STM spec says position is unknown after any of them —
 the robot drawn on the map is wrong until something re-references it.
 

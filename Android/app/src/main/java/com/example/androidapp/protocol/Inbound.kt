@@ -70,6 +70,21 @@ sealed class Inbound {
         val stoppedShort: Boolean get() = isWarning && "COLLISION" in reply
     }
 
+    /**
+     * PARKED — Task 2's robot is back in the carpark and has stopped, which is
+     * the moment the rules stop the clock.
+     *
+     * The board says it from the end of task_2(), and the bridge relays it the
+     * way it relays every board reply, so it normally arrives as STM,PARKED.
+     * Bare PARKED and STATUS,PARKED are accepted too, so the stop does not hang
+     * on which of the three the Pi ends up sending.
+     *
+     * Its own message rather than another StmReply because DONE is too busy to
+     * trust for this: the board also answers every IM038/IM039 arrow with a
+     * DONE while the routine is still driving.
+     */
+    object Parked : Inbound()
+
     /** STATUS,SENT,<command> — the bridge confirming it forwarded a command. */
     data class Forwarded(val command: String) : Inbound()
 
@@ -120,12 +135,15 @@ fun parseInbound(raw: String): Inbound {
         "STATUS" -> parseStatus(tail)
         "STM" -> tail.trim().uppercase()
             .takeIf { it.isNotEmpty() }
-            ?.let { Inbound.StmReply(it) }
+            ?.let { if (it == PARKED) Inbound.Parked else Inbound.StmReply(it) }
             ?: Inbound.Unknown(raw)
         "ERR" -> Inbound.Rejected(tail.trim().ifEmpty { "unspecified" })
+        PARKED -> if (tail.isBlank()) Inbound.Parked else Inbound.Unknown(raw)
         else -> Inbound.Unknown(raw)
     }
 }
+
+private const val PARKED = "PARKED"
 
 /**
  * The Pi bridge sends both plain notices ("STATUS,RPi bridge ready") and a
@@ -143,6 +161,8 @@ private fun parseStatus(tail: String): Inbound {
 
         f.size >= 2 && kind.equals("PLAN", ignoreCase = true) ->
             parsePlan(f) ?: Inbound.Message(unwrapBrackets(tail))
+
+        f.size == 1 && kind.equals(PARKED, ignoreCase = true) -> Inbound.Parked
 
         else -> Inbound.Message(unwrapBrackets(tail))
     }

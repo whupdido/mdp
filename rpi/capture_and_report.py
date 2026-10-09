@@ -181,18 +181,23 @@ TASK2_ARROW_IDS = (RIGHT_ARROW_ID, LEFT_ARROW_ID)
 TASK2_SCAN_BUDGET_SECONDS = 2.5
 
 
-def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS):
+def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS, seen=None):
     """Keep capturing and detecting until a left/right arrow is seen or the
     budget runs out. Sends IM038/IM039 to the STM on success and returns the
     Image ID; returns None (sending nothing) if no arrow was seen, so the
     board falls back to its own default.
 
     Opens the camera once for the whole window instead of per frame like
-    capture_frame() -- reopening costs a good part of the 3 s on the Pi."""
+    capture_frame() -- reopening costs a good part of the 3 s on the Pi.
+
+    Zhenxi: `seen`, if given, is a list this appends one (arrow ID or None,
+    frame) to: the frame the arrow was read from, or else the last one tried.
+    a1_bridge keeps them for the end-of-run collage (report_task2_images)."""
     deadline = time.monotonic() + budget_s
     cap = cv2.VideoCapture(CAMERA_INDEX)
     if not cap.isOpened():
         raise RuntimeError("Could not open camera for the Task 2 arrow read")
+    last = None
     try:
         attempt = 0
         while time.monotonic() < deadline:
@@ -203,8 +208,10 @@ def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+            last = (None, frame)
             try:
-                class_id = detect(cv2.rotate(frame, cv2.ROTATE_180), timeout=remaining)
+                class_id = detect(frame, timeout=remaining)
             except socket.timeout:
                 print(f"[TASK2] Attempt {attempt}: no answer before the scan window closed")
                 break
@@ -214,11 +221,41 @@ def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS):
             print(f"[TASK2] Attempt {attempt}: detected {class_id}")
             if class_id in TASK2_ARROW_IDS:
                 send_to_stm(class_id, stm_serial)
+                last = (class_id, frame)
                 return class_id
     finally:
         cap.release()
+        if seen is not None and last is not None:
+            seen.append(last)
     print("[TASK2] No arrow seen within the scan window")
     return None
+
+
+# Zhenxi: per-frame cap for the end-of-run Task 2 collage. Generous, since the
+# run is already over; finite, so a hung laptop cannot hang the bridge too.
+TASK2_COLLAGE_TIMEOUT_SECONDS = 10.0
+
+
+def report_task2_images(frames, run_id: str):
+    """Zhenxi: rule 8 for Task 2 -- the arrows' RAW frames, boxed and tiled.
+
+    read_arrow() asks the detection server without a run_id, so the server
+    saved every frame but tiled none: its run_id-less fallback only stitches
+    within one connection, and every detect() is a connection of its own.
+    This sends one frame per obstacle again, with a run_id, so the server's
+    collage collector builds the sheet exactly as it does for Task 1.
+
+    `frames` is one frame per obstacle, in the order they were passed.
+    """
+    for n, frame in enumerate(frames, start=1):
+        detect(
+            frame,
+            run_id=run_id,
+            expected_images=len(frames),
+            obstacle_number=n,
+            capture_index=n,
+            timeout=TASK2_COLLAGE_TIMEOUT_SECONDS,
+        )
 
 
 def report_obstacle(

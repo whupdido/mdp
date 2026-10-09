@@ -73,6 +73,11 @@ STM_POLL_SECONDS = 0.02
 # they had arrived then -- see the wait loop in main().
 inbox: list[str] = []
 
+# Zhenxi: what each Task 2 scan window looked at, in order, as (arrow ID or
+# None, frame). task2_scan() fills it, each START2 empties it, and
+# show_task2_images() turns it into the end-of-run collage.
+task2_frames: list[tuple] = []
+
 # obstacle_number -> {"pos": (x, y), "face": "N"/"E"/"S"/"W"/None}
 # This is what image recognition needs before it can call report_obstacle():
 # the obstacle number and which face to look at. Whatever decides "we've
@@ -366,7 +371,7 @@ def task2_scan(stm, android):
     from capture_and_report import read_arrow
 
     try:
-        class_id = read_arrow(stm)
+        class_id = read_arrow(stm, seen=task2_frames)
     except Exception as exc:  # camera or detection server down
         print(f"[TASK2] Arrow read failed: {exc}")
         send_line(android, "MSG,Arrow read failed - board will use its default")
@@ -377,6 +382,51 @@ def task2_scan(stm, android):
         side = "RIGHT" if class_id == 38 else "LEFT"
         send_line(android, f"MSG,Arrow {side} ({class_id})")
     return class_id
+
+
+def pick_task2_frames(seen, obstacles=2):
+    """Zhenxi: one frame per obstacle, out of one frame per scan window.
+
+    task_2() can scan the same obstacle up to three times (straight on, then
+    tilted each way) before it takes its default and drives on, so windows
+    do not map one-to-one onto obstacles. A window that read an arrow closes
+    its obstacle; one that did not is a retry, replaced by the next window.
+    An obstacle that never shows an arrow keeps its last frame, so the sheet
+    still shows what the camera saw there. (If the FIRST obstacle never
+    reads, the second's windows look like more retries -- the Pi cannot tell
+    them apart -- and that run's sheet comes out one tile short.)
+    """
+    picks = []
+    for class_id, frame in seen:
+        if not picks or (picks[-1][0] is not None and len(picks) < obstacles):
+            picks.append((class_id, frame))
+        elif picks[-1][0] is None:
+            picks[-1] = (class_id, frame)
+    return [frame for _, frame in picks]
+
+
+def show_task2_images(android):
+    """Zhenxi: rule 8 for Task 2. Tile the arrows' RAW frames, with their
+    boundary boxes, on the laptop -- the same sheet Task 1 gets.
+
+    Runs once the routine has returned, so it costs the robot no time. The
+    laptop being down only loses the sheet: the run is over by then.
+    """
+    picks = pick_task2_frames(task2_frames)
+    task2_frames.clear()
+    if not picks:
+        return
+    from capture_and_report import report_task2_images
+
+    run_id = time.strftime("task2-%Y%m%d-%H%M%S")
+    try:
+        report_task2_images(picks, run_id)
+    except Exception as exc:  # laptop down or detection server not running
+        print(f"[TASK2] Could not send the images for the collage: {exc}")
+        send_line(android, "MSG,Task 2 images not shown - laptop unreachable")
+        return
+    print(f"[TASK2] {len(picks)} image(s) sent for the collage, run {run_id}")
+    send_line(android, f"MSG,Task 2 images on the laptop ({len(picks)})")
 
 
 def main(on_face_known=None, on_scan=task2_scan):
@@ -477,9 +527,14 @@ def main(on_face_known=None, on_scan=task2_scan):
                     send_line(stm, command)
                     send_line(android, f"STATUS,SENT,{command}")
                     print(f"RPi -> STM32: {command} (Task 2, up to {TASK2_TIMEOUT_SECONDS}s)")
+                    task2_frames.clear()
                     relay_stm_replies(
                         stm, android, TASK2_TIMEOUT_SECONDS, command, on_scan=on_scan
                     )
+                    # Zhenxi: only once the routine is over -- its DONE, a
+                    # STOP, or the timeout. The tablet's clock has already
+                    # stopped on PARKED, so the collage costs no run time.
+                    show_task2_images(android)
                     continue
 
                 if not MOVE_PATTERN.fullmatch(command):
