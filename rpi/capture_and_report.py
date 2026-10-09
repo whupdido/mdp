@@ -23,6 +23,7 @@ Example, once wired into the real loop:
 # on the Pi's older Python (that union syntax needs 3.10+ without this).
 from __future__ import annotations
 
+import os
 import pickle
 import socket
 import struct
@@ -34,8 +35,9 @@ import cv2
 import a1_bridge
 
 # Laptop's IP on the shared WiFi, running `python -m server.yolo_task1`.
-# TODO: set this before running -- find it with `ipconfig getifaddr en0` on the Mac.
-DETECTION_SERVER_IP = "SET_ME_TO_YOUR_LAPTOP_IP"
+# Find it with `ipconfig getifaddr en0` on the Mac. MDP_LAPTOP_IP overrides
+# the default (the boot service sets it), so a new network needs no edit here.
+DETECTION_SERVER_IP = os.environ.get("MDP_LAPTOP_IP", "192.168.4.40")
 DETECTION_SERVER_PORT = 5001
 CAMERA_INDEX = 0  # matches /dev/video0, same as rpi_camera_server.py
 

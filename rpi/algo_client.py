@@ -11,14 +11,15 @@ the server side's.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import struct
 
 # Laptop's IP on the shared WiFi, running `python server/algo_server.py`.
-# TODO: set this before running -- find it with `ipconfig getifaddr en0` on
-# the Mac. Same value as capture_and_report.DETECTION_SERVER_IP whenever
-# both servers run on the same laptop.
-ALGO_SERVER_IP = "SET_ME_TO_YOUR_LAPTOP_IP"
+# Find it with `ipconfig getifaddr en0` on the Mac. Same value as
+# capture_and_report.DETECTION_SERVER_IP whenever both servers run on the same
+# laptop, and the same MDP_LAPTOP_IP override.
+ALGO_SERVER_IP = os.environ.get("MDP_LAPTOP_IP", "192.168.4.40")
 ALGO_SERVER_PORT = 5002
 
 
