@@ -575,6 +575,8 @@ void task_2(void) {
 		move_straight_mm(100);
 		accum_forward += 100;
 		success = task_2_image_rec();
+		move_straight_mm(-100);
+		accum_forward -= 100;
 
 		if (success) {
 			if (image_found == 39) dodge_left_2 = 1;
@@ -614,8 +616,6 @@ void task_2(void) {
 				/* Straighten out from Right Tilt (equivalent to returning from Right Dodge).
 				 * This safely returns the car to 0 degrees before the maneuver continues! */
 				task_2_straighten(0, 15, &accum_forward, &accum_left);
-				move_straight_mm(-100);
-				accum_forward -= 100;
 			}
 		}
 
