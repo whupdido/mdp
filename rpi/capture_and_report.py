@@ -101,12 +101,17 @@ def detect(
     expected_images: int | None = None,
     obstacle_number: int | None = None,
     capture_index: int | None = None,
+    timeout: float | None = None,
 ):
     """Send one frame to the detection server. Returns the official Image ID
     (11-40), or None if nothing was confidently detected."""
     height, width = frame.shape[:2]
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Denzel: None blocks forever (Task 1's behaviour). Task 2 passes what is
+    # left of its scan window, so an unreachable laptop costs that window,
+    # not the ~75 s a blocking connect takes to give up.
+    sock.settimeout(timeout)
     sock.connect((DETECTION_SERVER_IP, DETECTION_SERVER_PORT))
     try:
         _recv_json(sock)  # class-name metadata, sent on connect -- not needed here
@@ -195,7 +200,14 @@ def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS):
             if not ok:
                 continue
             attempt += 1
-            class_id = detect(cv2.rotate(frame, cv2.ROTATE_180))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                class_id = detect(cv2.rotate(frame, cv2.ROTATE_180), timeout=remaining)
+            except (socket.timeout, OSError) as exc:
+                print(f"[TASK2] Attempt {attempt}: detection server unreachable ({exc})")
+                break
             print(f"[TASK2] Attempt {attempt}: detected {class_id}")
             if class_id in TASK2_ARROW_IDS:
                 send_to_stm(class_id, stm_serial)
