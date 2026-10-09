@@ -245,6 +245,7 @@ int task_2_image_rec(void){
 	OLED_Refresh_Gram();
 	/* Reset the flag before we start waiting */
 	image_found = 0;
+	command_send("SCAN\r\n");
 
 	uint32_t start_time = HAL_GetTick();
 	const uint32_t TIMEOUT_MS = 3000; /* Wait up to 3 seconds */
@@ -363,8 +364,8 @@ void task_2(void) {
 	trigger_ultrasonic();
 	HAL_Delay(60);
 
-	/* Stop 30cm (300mm) away to read the image. */
-	int32_t dist_forward = (ultrasonic_distance_cm * 10) - 300;
+	/* Stop 20cm (200mm) away to read the image. */
+	int32_t dist_forward = (ultrasonic_distance_cm * 10) - 200;
 
 	if (dist_forward > 0) {
 		move_straight_mm(dist_forward);
@@ -375,10 +376,60 @@ void task_2(void) {
 
 	int dodge_left;
 	if (success) {
-		dodge_left = (image_found == 39) ? 1 : 0;
+		if (image_found == 39)
+			dodge_left = 1;
+		else if (image_found == 38)
+			dodge_left = 0;
 	}
 	else {
-		dodge_left = 1; // IMPLEMENT
+		//dodge_left = 1; // IMPLEMENT
+		/* =========================================================
+		 * RETRY 1: Move 10cm forward
+		 * ========================================================= */
+		move_straight_mm(100);
+		accum_forward += 100;
+		success = task_2_image_rec();
+
+		if (success) {
+			if (image_found == 39) dodge_left = 1;
+			else if (image_found == 38) dodge_left = 0;
+		}
+		else {
+			/* =========================================================
+			 * RETRY 2: Tilt Left via Reverse Turn
+			 * ========================================================= */
+			/* Steer Right (0) in Reverse (0) sweeps the tail Right and nose Left */
+			task_2_turn(0, 0, 15, 0, &accum_forward, &accum_left);
+			success = task_2_image_rec();
+
+			if (success) {
+				if (image_found == 39) dodge_left = 1;
+				else if (image_found == 38) dodge_left = 0;
+
+				/* Straighten out from Left Tilt (equivalent to returning from Left Dodge) */
+				task_2_straighten(1, 15, &accum_forward, &accum_left);
+			}
+			else {
+				/* Failed Left Tilt. Straighten out first to reset chassis to 0 degrees */
+				task_2_straighten(1, 15, &accum_forward, &accum_left);
+
+				/* =========================================================
+				 * RETRY 3: Tilt Right via Reverse Turn
+				 * ========================================================= */
+				/* Steer Left (1) in Reverse (0) sweeps the tail Left and nose Right */
+				task_2_turn(1, 0, 15, 0, &accum_forward, &accum_left);
+				success = task_2_image_rec();
+
+				if (success) {
+					if (image_found == 39) dodge_left = 1;
+					else if (image_found == 38) dodge_left = 0;
+				}
+
+				/* Straighten out from Right Tilt (equivalent to returning from Right Dodge).
+				 * This safely returns the car to 0 degrees before the maneuver continues! */
+				task_2_straighten(0, 15, &accum_forward, &accum_left);
+			}
+		}
 	}
 
 	OLED_Clear();
@@ -490,10 +541,62 @@ void task_2(void) {
 
 	int dodge_left_2;
 	if (success) {
-		dodge_left_2 = (image_found == 39) ? 1 : 0;
+		if (image_found == 39)
+			dodge_left_2 = 1;
+		else if (image_found == 38)
+			dodge_left_2 = 0;
 	}
 	else {
-		dodge_left_2 = 0; // IMPLEMENT
+		/* =========================================================
+		 * RETRY 1: Move 10cm forward
+		 * ========================================================= */
+		move_straight_mm(100);
+		accum_forward += 100;
+		success = task_2_image_rec();
+
+		if (success) {
+			if (image_found == 39) dodge_left_2 = 1;
+			else if (image_found == 38) dodge_left_2 = 0;
+		}
+		else {
+			/* =========================================================
+			 * RETRY 2: Tilt Left via Reverse Turn
+			 * ========================================================= */
+			/* Steer Right (0) in Reverse (0) sweeps the tail Right and nose Left */
+			task_2_turn(0, 0, 15, 0, &accum_forward, &accum_left);
+			success = task_2_image_rec();
+
+			if (success) {
+				if (image_found == 39) dodge_left_2 = 1;
+				else if (image_found == 38) dodge_left_2 = 0;
+
+				/* Straighten out from Left Tilt (equivalent to returning from Left Dodge) */
+				task_2_straighten(1, 15, &accum_forward, &accum_left);
+			}
+			else {
+				/* Failed Left Tilt. Straighten out first to reset chassis to 0 degrees */
+				task_2_straighten(1, 15, &accum_forward, &accum_left);
+
+				/* =========================================================
+				 * RETRY 3: Tilt Right via Reverse Turn
+				 * ========================================================= */
+				/* Steer Left (1) in Reverse (0) sweeps the tail Left and nose Right */
+				task_2_turn(1, 0, 15, 0, &accum_forward, &accum_left);
+				success = task_2_image_rec();
+
+				if (success) {
+					if (image_found == 39) dodge_left_2 = 1;
+					else if (image_found == 38) dodge_left_2 = 0;
+				}
+
+				/* Straighten out from Right Tilt (equivalent to returning from Right Dodge).
+				 * This safely returns the car to 0 degrees before the maneuver continues! */
+				task_2_straighten(0, 15, &accum_forward, &accum_left);
+				move_straight_mm(-100);
+				accum_forward -= 100;
+			}
+		}
+
 	}
 	int turn_out = dodge_left_2 ? 1 : 0;
 	int turn_in  = !dodge_left_2;
@@ -713,7 +816,7 @@ void task_2(void) {
 	if (dodge_left_2) accum_left += s_lat; else accum_left -= s_lat;
 
 	/* Drive the remaining half of the gap */
-	int remaining_dist = dist_between - s_fwd - 200;
+	int remaining_dist = dist_between - s_fwd + 200;
 	if (remaining_dist > 0) {
 		move_straight_mm(remaining_dist);
 		accum_forward -= remaining_dist;

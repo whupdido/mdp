@@ -103,7 +103,8 @@
    A physical quantity, independent of PWM_MAX -- do NOT rescale these
    if you change the PWM period.                                            */
 // Max 85 for left motor, 80 for right on my floor
-#define SPEED_STRAIGHT      60
+//#define SPEED_STRAIGHT      60
+#define SPEED_STRAIGHT      80
 #define SPEED_TURN          50
 
 /* VERIFIED ON HARDWARE -- DO NOT CHANGE.
