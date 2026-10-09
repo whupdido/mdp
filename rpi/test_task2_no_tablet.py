@@ -62,6 +62,11 @@ def scan_only(stm):
 
 def full_run(stm):
     tablet = NoTablet()
+    # Zero the gyro first, and wait for it: GC answers DONE (or ERR) itself,
+    # and a START2 sent while GC is still running is rejected as BUSY.
+    a1_bridge.send_line(stm, "GC")
+    print("RPi -> STM32: GC -- zeroing the gyro, keep the robot still")
+    a1_bridge.relay_stm_replies(stm, tablet, a1_bridge.STM_TIMEOUT_SECONDS, "GC")
     a1_bridge.send_line(stm, "START2")
     print("RPi -> STM32: START2 -- the robot will drive now")
     a1_bridge.relay_stm_replies(
