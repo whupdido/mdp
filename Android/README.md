@@ -475,9 +475,11 @@ on that image** (`A`, `7`, `↑`). Mapped from the briefing's image pool in
 
 The robot does not teleport between poses. It travels, and a turn leaves along
 the heading it was already facing before curving into the new one. Right turns
-animate wider than left because they *are* wider — `FR` 366 mm against `FL`
-272 mm, per the latest re-measurement in `stm32/STM32_motion_spec.md`. A 90°
-turn carries the car 2.7–3.7 cells along. If the map ever appears to pivot the
+animate wider than left because they *are* wider — `FR` 352 mm against `FL`
+282 mm, the radii the firmware runs (`stm32/Core/Inc/calib.h`, tape measured
+07-Oct with the front weights on). The tables in `stm32/STM32_motion_spec.md`
+are the older 25-Sep measurements (`FR` 366, `FL` 272); **`calib.h` is the
+source of truth**. A forward 90° turn carries the car 2.8–3.5 cells along. If the map ever appears to pivot the
 robot on the spot, it is lying about the robot.
 
 ---
@@ -625,8 +627,9 @@ Simulator mode on the emulator, and the real tablet for anything with a radio.
   two minutes, the rules add the extra to the run time (FAQ 8); the tablet
   does not know about that. The supervisor's watch is the official one.
 - **The robot cannot turn on the spot.** Ackermann steering: a 90° turn carries
-  the car 2.7–3.7 cells along, and right turns need ~30 % more space than left
-  going forward, 35 % in reverse.
+  the car 2.5–3.6 cells along, and right turns need ~25 % more space than left
+  going forward, ~40 % in reverse (`calib.h`, 07-Oct: FL 282, FR 352, BL 254,
+  BR 357 mm).
 - **`STALL` and `TIMEOUT` invalidate the map.** After either, the drawn position
   is stale until something re-references it.
 - **Pair the tablet and the Pi in Android Settings first**, not in code. If they
