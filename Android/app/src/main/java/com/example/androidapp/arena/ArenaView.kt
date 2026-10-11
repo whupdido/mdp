@@ -285,9 +285,9 @@ class ArenaView @JvmOverloads constructor(
         // Lead distance ahead of the old heading. No lead for a move with no
         // turn — a straight line is the honest picture there.
         //
-        // Left and right are not symmetric. Kush re-measured the turn radii on
-        // 31-Aug-2026 (stm32/STM32_motion_spec.md): FL 277 mm against FR
-        // 365 mm, so a right turn genuinely swings about 30 % wider than a
+        // Left and right are not symmetric. The firmware's radii
+        // (stm32/Core/Inc/calib.h, 07-Oct-2026) are FL 282 mm against FR
+        // 352 mm, so a right turn genuinely swings about 25 % wider than a
         // left. Drawing them the same would misrepresent the one asymmetry
         // that actually costs us space in the arena.
         val turning = distance > 0.01f && abs(b1 - b0) > 1f
@@ -797,16 +797,17 @@ class ArenaView @JvmOverloads constructor(
 
     private companion object {
         /**
-         * Turn radii from `stm32/Core/Inc/calib.h`, Kush's turn-test rig
-         * (26 Sep): all four now repeatable to +-2..4 mm, where FL and BL
-         * used to be +-13..14 mm and explicitly not repeatable.
+         * Forward turn radii from `stm32/Core/Inc/calib.h`: tape measured
+         * 07-Oct-2026 with the front weights on (were 272 / 366 on 25-Sep,
+         * before the weights). The motion spec's tables still show 25-Sep.
          *
          * These only shape the animation arc, so being a few mm stale is
          * cosmetic here -- but they should track calib.h so the picture
-         * matches the car. The planner's copy is in algorithm/config.py.
+         * matches the car. The planner reads calib.h itself at start-up
+         * (algorithm/calibration.py), so it cannot drift the same way.
          */
-        const val RADIUS_FL_MM = 272f
-        const val RADIUS_FR_MM = 366f
+        const val RADIUS_FL_MM = 282f
+        const val RADIUS_FR_MM = 352f
         const val LEAD_LEFT = 0.48f
 
         const val BOARD = 0xFF080D11.toInt()
