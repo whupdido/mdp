@@ -22,6 +22,9 @@ whoever is building it.
 - [If you are integrating, read this](#if-you-are-integrating-read-this)
 - [The message protocol](#the-message-protocol)
 - [Starting a run](#starting-a-run)
+  - [Task 1 is three presses](#task-1-is-three-presses)
+  - [Task 2 is one press](#task-2-is-one-press)
+  - [Everything that has to be running](#everything-that-has-to-be-running)
 - [Where the robot starts](#where-the-robot-starts)
 - [Quick start](#quick-start)
 - [Using the app](#using-the-app)
@@ -72,9 +75,10 @@ in isolation and the error only appears once they are connected.
 
   The rules also require the RAW captures, with their bounding boxes, tiled in
   one window at the end of a run — on *either* the tablet or the laptop. **This
-  is being done on the laptop** (Denzel, 25 Sep), so the tablet deliberately
-  does not have that page. If that ever changes, it lands here and it is not a
-  small job; do not assume the tablet already covers it.
+  is done on the laptop, for both tasks** (Denzel, 25 Sep; Task 2 since #40),
+  so the tablet deliberately does not have that page. If that ever changes, it
+  lands here and it is not a small job; do not assume the tablet already
+  covers it.
 - **STM board** — the drive controls emit your format unchanged. Every string
   the app can send lives in one file,
   [`protocol/Outbound.kt`](app/src/main/java/com/example/androidapp/protocol/Outbound.kt).
@@ -180,24 +184,6 @@ RX  TARGET,1,35,W                    <- image ID, live on the map
 RX  MSG,Task 1 route complete
 ```
 
-#### Everything that has to be running
-
-```bash
-# Laptop
-python -m server.algo_server      # route planning, port 5002
-python -m server.yolo_task1       # image detection, port 5001
-
-# Pi
-sudo rfcomm bind 0 <tablet-mac>
-python3 run_task1.py              # Task 1   (a1_bridge.py for Task 2)
-
-# Tablet
-Connect -> pick the Pi
-```
-
-Forget the laptop's algo server and **PLAN will tell you** before the clock
-starts. That is the whole reason it is a separate press.
-
 #### When a move goes wrong mid-run
 
 `run_task1.py` does not abandon the route on the first problem — each
@@ -211,6 +197,93 @@ unvisited obstacle is worth ten points.
 
 An obstacle already photographed is never read again — a second look can
 detect something different, and a wrong image ID is minus ten points (FAQ 4).
+
+#### Task 2 is one press
+
+Task 2's obstacles go down only *after* the preparation time, and the rules
+forbid entering anything about them into the system (rule 2). So there is
+nothing to key in, nothing to plan and no map to send: tap **TASK 2**, wait
+for the supervisor, press **START**. The clock counts down from 3:00.
+
+| | Press | Tablet sends | What comes back |
+|---|---|---|---|
+| 1 | **START** | `START2` | `STM,ACK`; at each obstacle `STM,SCAN` and an arrow `MSG`; then `STM,PARKED` |
+
+`a1_bridge.py` hands `START2` to the board, and `task_2()` drives the whole
+course by itself. At each obstacle the board stops and says `SCAN`. The Pi
+photographs the arrow, asks the laptop what it is, and answers `IM038` (go
+round the right) or `IM039` (go round the left) inside the board's 3 s window.
+A miss is retried, up to four scans per obstacle; after four misses the board
+dodges **left** by default. A wrong side is a disqualification (FAQ 10), so
+the default is a last resort, not a plan.
+
+**The clock stops on `PARKED`.** The board sends it the moment the car is in
+the carpark and stopped, which is exactly when the rules stop timing (rule 6).
+`DONE` follows when the routine returns, and still stops the clock on firmware
+from before `PARKED`.
+
+**The images go to the laptop afterwards.** Once the routine has returned —
+so it costs no run time — the Pi sends one frame per obstacle back to the
+laptop, which boxes and tiles them like Task 1's (rule 8):
+`yolo_logs/task1_collage_task2-<time>.jpg`. Open it after the run, let the
+supervisor photograph it, and email it to them (rule 10).
+
+What the real `a1_bridge.py` sends the tablet, captured against a scripted
+board where obstacle 1 was read on its second scan:
+
+```
+TX  START2                                     <- the one press
+RX  STATUS,SENT,START2
+RX  STM,ACK                                    "Robot accepted Task 2."
+RX  STM,SCAN                                   "Robot stopped to read an arrow."
+RX  MSG,No arrow seen - board will use its default     <- it retries first
+RX  STM,SCAN
+RX  MSG,Arrow LEFT (39)                        obstacle 1: round the left
+RX  STM,SCAN
+RX  MSG,Arrow RIGHT (38)                       obstacle 2: round the right
+RX  STM,PARKED                                 "Parked in 1:52." Clock stops
+RX  STM,DONE                                   "Robot has finished Task 2."
+RX  MSG,Task 2 images on the laptop (2 of 2)
+```
+
+**Retry** (rule 7): press **RUN AGAIN**, then **START**. **Stopping by hand**:
+**STOP RUN**, then confirm. That scores as incomplete; the board stops where
+it is and does not send `PARKED`.
+
+The robot icon does not move during Task 2. The route is the board's own and
+nothing reports poses — and the rules only ask for a live map in Task 1.
+Because `START2` blocks for up to three minutes, the bridge waits on
+`TASK2_TIMEOUT_SECONDS` (200 s) rather than the per-move timeout. The full
+board-side contract is the `START2` section of
+[`stm32/STM32_motion_spec.md`](../stm32/STM32_motion_spec.md).
+
+#### Everything that has to be running
+
+```bash
+# Laptop
+python -m server.yolo_task1       # image detection, port 5001 -- both tasks
+python -m server.algo_server      # route planning, port 5002 -- Task 1 only
+
+# Pi -- once; Denzel's autostart picks the program and restarts it if it dies
+cd rpi
+./install_autostart.sh <tablet-mac> task1 <laptop-ip>   # Task 1: run_task1.py
+./install_autostart.sh <tablet-mac> task2 <laptop-ip>   # Task 2: a1_bridge.py
+#   switch task: run it again with the other one.  Logs: journalctl -u mdp -f
+#   by hand instead: sudo rfcomm bind 0 <tablet-mac>, then the program
+
+# Robot, during prep, inside the carpark
+long-press the board button to zero the gyro (rule 1 allows calibration)
+
+# Tablet
+Connect -> pick the Pi -> green "Connected" -> TASK 1 or TASK 2
+```
+
+Forget the laptop's algo server and **PLAN will tell you** before the clock
+starts. That is the whole reason it is a separate press.
+
+**Task 2 has no such check.** If `server.yolo_task1` is not running, every
+scan misses and the board dodges left at both obstacles — a disqualification
+the moment an arrow says right. Look at the laptop terminal before START.
 
 ### Where the robot starts
 
@@ -227,19 +300,8 @@ same thing in both directions — and `rpi/run_task1.py` passes it to
 The app warns before planning if the robot's 3 × 3 body is not **wholly inside
 the carpark**: leaving it during preparation is a disqualification (FAQ 9).
 
-**Task 2 sends `START2` and no map**, because its obstacles are placed after
-the preparation time and their distances are deliberately withheld — there is
-nothing to key in. `a1_bridge.py` forwards it to the board, where `dispatch()`
-runs the whole `task_2()` routine: `ACK` when it accepts, `SCAN` at each
-arrow, `PARKED` once it has stopped in the carpark, `DONE` when it returns,
-and `BUSY` if one is already running. **The clock stops on `PARKED`**, which
-is when the rules stop timing. `DONE` still stops it on older firmware.
-Because it blocks for up to three minutes, the bridge waits on
-`TASK2_TIMEOUT_SECONDS`, not the per-move timeout. Once the routine returns,
-the bridge sends one frame per arrow to the laptop, which tiles them with
-their boundary boxes like Task 1's images (rule 8).
-See the `START2` section in
-[`stm32/STM32_motion_spec.md`](../stm32/STM32_motion_spec.md).
+**Task 2 sends no start pose and no map** — the route is the board's own. See
+[Task 2 is one press](#task-2-is-one-press).
 
 Obstacle numbers are **never reused while an obstacle is alive**. Deleting B2
 leaves B3 called B3, because the robot has already been told about B3.
@@ -318,7 +380,7 @@ sdk.dir=C:/path/to/your/Android/Sdk
 ```bash
 ./gradlew installDebug     # build and push to a connected device
 ./gradlew assembleDebug    # just build the APK
-./gradlew test             # 86 unit tests, no device needed
+./gradlew test             # 94 unit tests, no device needed
 ```
 
 **Toolchain:** AGP 9.3.1, Gradle 9.5, JDK 25, `compileSdk` 37, `minSdk` 24.
@@ -335,23 +397,38 @@ One screen, landscape, tablet-first. No drawer and no tabs: during a timed run
 nobody should have to navigate.
 
 ```
-┌──────────────────────────────┬──────────────────────┐
-│                              │  ROBOT LINK          │
-│                              │  ● Connected to …    │
-│        ARENA                 │  [Connect][Disconn]  │
-│        20 × 20               │  Simulator       [ ] │
-│                              ├──────────────────────┤
-│   tap    → add obstacle      │  STATUS  or  TRAFFIC │
-│   drag   → move it           │                      │
-│   off    → delete it         ├──────────────────────┤
-│   tap it → face compass      │  DRIVE        [Pad]  │
-│                              │  [F-L][FWD][F-R]     │
-│                              │  [B-L][BCK][B-R]     │
-│              ROBOT (7,2) W   │  [-][+]  [  STOP  ]  │
-├──────────────────────────────┼──────────────────────┤
-│                              │[Undo][Clear][Demo][⟲]│
-└──────────────────────────────┴──────────────────────┘
+┌────────────────────────────┬────────────┬──────────────────────┐
+│                            │ RUN        │  ROBOT LINK          │
+│                            │ [ TASK 1 ] │  ● Connected to …    │
+│        ARENA               │ [ TASK 2 ] │  [Connect][Disconn]  │
+│        20 × 20             │            │  Simulator       [ ] │
+│                            │    6:00    ├──────────────────────┤
+│   tap    → add obstacle    │            │  STATUS  or  TRAFFIC │
+│   drag   → move it         │ IMAGES 0/5 │                      │
+│   off    → delete it       │            ├──────────────────────┤
+│   tap it → face compass    │ hint       │  DRIVE        [Pad]  │
+│                            │ [ SETUP  ] │  [F-L][FWD][F-R]     │
+│   robot: drag → move       │            │  [B-L][BCK][B-R]     │
+│          tap  → facing     │ [ START  ] │  [-][+]  [  STOP  ]  │
+│            ROBOT (1,1) N   │            ├──────────────────────┤
+│                            │            │[Undo][Clear][Demo][⟲]│
+└────────────────────────────┴────────────┴──────────────────────┘
 ```
+
+**Run** is the only column that matters during an attempt. Pick **TASK 1**
+(6:00) or **TASK 2** (3:00) and the clock shows that budget.
+
+| Task 1 | Task 2 |
+|---|---|
+| **SETUP → PLAN → START**, one live at a time | **START** only — no SETUP button, nothing to plan |
+| **IMAGES** counts the IDs found | no tally — Task 2 is scored on time |
+| ends when every obstacle has an ID, or the Pi says the route is done | ends on `PARKED` |
+
+While a run is live, START turns red and reads **STOP RUN** (it asks first: a
+hand stop scores as incomplete). DRIVE and the bottom row disappear, so nothing
+else can be pressed by accident — the rules allow only the start button during
+an attempt. When the run ends the clock freezes and the button turns green:
+**RUN AGAIN**, which clears the clock for the retry.
 
 **Arena.** Tap an empty cell to add an obstacle; it takes the lowest free
 number. Drag to move, drag past the edge to delete. Tap a placed obstacle to
@@ -398,9 +475,9 @@ on that image** (`A`, `7`, `↑`). Mapped from the briefing's image pool in
 
 The robot does not teleport between poses. It travels, and a turn leaves along
 the heading it was already facing before curving into the new one. Right turns
-animate wider than left because they *are* wider — `FR` 365 mm against `FL`
-277 mm, per the latest re-measurement in `stm32/STM32_motion_spec.md`. A 90°
-turn carries the car 2.8–3.8 cells along. If the map ever appears to pivot the
+animate wider than left because they *are* wider — `FR` 366 mm against `FL`
+272 mm, per the latest re-measurement in `stm32/STM32_motion_spec.md`. A 90°
+turn carries the car 2.7–3.7 cells along. If the map ever appears to pivot the
 robot on the spot, it is lying about the robot.
 
 ---
@@ -422,6 +499,20 @@ STM,DONE
 ROBOT,99,99,N        ignored, with a warning — out of bounds
 !!!                  ignored silently, logged to Traffic
 ```
+
+A Task 2 run, after tapping TASK 2 and START:
+
+```
+STM,ACK              "Robot accepted Task 2."
+STM,SCAN             "Robot stopped to read an arrow."
+MSG,Arrow LEFT (39)  shown as is
+STM,PARKED           the clock stops; START becomes RUN AGAIN
+STM,DONE             "Robot has finished Task 2."
+```
+
+While the clock is running, `uiautomator dump` cannot read the screen (it
+waits for an idle UI that never comes), so scripted emulator tests have to tap
+by coordinate mid-run.
 
 Everything the app *sends* is logged in Traffic too, so you can confirm your own
 module will receive what it expects before wiring anything together.
@@ -480,12 +571,25 @@ in the app has to change.
 cd Android && ./gradlew test
 ```
 
-**45 JVM tests, no device needed.**
+**94 JVM tests, no device needed.**
 
-- `ProtocolTest` — every inbound format, both `TARGET` spellings, the Pi
-  bridge's whole vocabulary, and a pile of garbage that must not crash it.
-- `ArenaModelTest` — obstacle numbering and reuse, collisions, bounds, the 3 × 3
-  footprint, target ID range, breadcrumbs, and the image-pool glyph map.
+- `ProtocolTest` (39) — every inbound format, both `TARGET` spellings, the Pi
+  bridge's whole vocabulary including `STATUS,PLAN,…` and `PARKED`, and a pile
+  of garbage that must not crash it.
+- `ArenaModelTest` (21) — obstacle numbering and reuse, collisions, bounds, the
+  3 × 3 footprint, target ID range, breadcrumbs, headings, and the image-pool
+  glyph map.
+- `RunStateTest` (34) — both tasks' budgets, clocks and start strings, which
+  button is live in every run phase, where the start pose may go, and
+  re-running the same map without last run's IDs counting.
+
+The other end of the link has its own offline tests, no hardware needed:
+
+```bash
+python3 rpi/test_a1_bridge.py     # Task 2 and manual driving: START2, SCAN, PARKED, the image sheet
+python3 rpi/test_run_task1.py     # Task 1 runner
+python3 rpi/test_task1_chain.py   # Task 1, SETUP to the last image, with fakes
+```
 
 Add to these when you change parsing or the model. They are fast, and they are
 the reason the protocol survived contact with the real bridge.
@@ -511,12 +615,17 @@ Simulator mode on the emulator, and the real tablet for anything with a radio.
 
 - **No Bluetooth on emulators.** C.1, C.2 and C.8 can only be tested on the
   tablet.
-- **The Pi bridge blocks while waiting for the board.** For up to 25 s after
-  forwarding a motion command it reads nothing from Android, so obstacle edits
-  made mid-move queue in the RFCOMM buffer. Fine for a demo, worth remembering
-  during a timed run.
+- **The Pi does one thing at a time.** While a move runs (up to 25 s), or the
+  whole of Task 2 (up to 200 s), only `STOP` is handled straight away; anything
+  else the tablet sends waits its turn and is then handled in order.
+- **Task 2 has no pre-flight.** Nothing checks the laptop before START, so a
+  dead detection server shows up as "No arrow seen" at the first obstacle —
+  already too late. Check the laptop first.
+- **The tablet's clock starts at the START press.** If preparation overruns
+  two minutes, the rules add the extra to the run time (FAQ 8); the tablet
+  does not know about that. The supervisor's watch is the official one.
 - **The robot cannot turn on the spot.** Ackermann steering: a 90° turn carries
-  the car 2.8–3.8 cells along, and right turns need ~30 % more space than left
+  the car 2.7–3.7 cells along, and right turns need ~30 % more space than left
   going forward, 35 % in reverse.
 - **`STALL` and `TIMEOUT` invalidate the map.** After either, the drawn position
   is stale until something re-references it.
