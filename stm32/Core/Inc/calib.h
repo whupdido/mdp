@@ -123,13 +123,42 @@
        obstacle 1 dodge much closer to obstacle 2 than in the tested runs.
        Only the sensing phases after obstacle 2 (move_straight_watch) use the
        measured brake point their stops were tuned with. Turns are SPEED_TURN
-       in both.                                                              */
+       in both.
+       Kush (11-Oct, speed step 5): Task 2 cruise 60 -> 80, crawl kept at 15,
+       and every Task 2 straight now starts slowing from the measured wheel
+       speed (MOTION_PROFILE_TASK2.brake_measured = 1 in control.c), as the
+       sensing phases already did. The 09-Oct 80 kept the original brake
+       point, which from 80 left ~20 cm of crawl, so 0c37bfe raised the crawl
+       to 50 and the car then stopped from ~20 counts/tick and ran long. Here
+       the brake goes on at the same crawl as the tested runs, the crawl is cut
+       to a few cm, and the stop is the same. To go back: 60 here and
+       brake_measured 0u in control.c.                                       */
 // Max 85 for left motor, 80 for right on my floor (full PWM, see the note above)
 #define SPEED_STRAIGHT      60      /* Task 1 cruise                             */
 #define SPEED_CRAWL         15      /* commanded speed the brake goes on at      */
 #define SPEED_TURN          50      /* every turn, Task 1 and Task 2             */
 
-#define T2_SPEED_STRAIGHT   60      /* Task 2 cruise, as tested (pre-0c37bfe)    */
+/* Kush (11-Oct, speed step 6): faster turns. TURN_FAST 1 = on, 0 = every turn
+   exactly as before.
+   When on, a turn speeds up twice as fast (TURN_FAST_RAMP_UP command steps a
+   tick instead of 1.2) to SPEED_TURN_FAST, and is back down at SPEED_TURN by
+   TURN_FAST_HANDOVER_DEG before the point where every turn starts slowing
+   (20 deg from the end of a turn over 45 deg, 6 deg from the end of a smaller
+   one). From there on the turn runs exactly as before, and that last part is
+   what sets the angle it ends at and the coast that is part of the measured
+   radii (TURN_RADIUS_*), so those still hold. A 90 is fast for its first
+   ~50 deg, a 45 for its first ~19, a 30 for its first ~4; anything under
+   26 deg (the arrow-scan retries, the parking shift) is unchanged. Applies
+   to every move_turn_deg(), Task 1 included.
+   If the turns start ending at a different angle, set TURN_FAST to 0 first. */
+#ifndef TURN_FAST
+#define TURN_FAST               1
+#endif
+#define SPEED_TURN_FAST         65      /* commanded, middle of a turn               */
+#define TURN_FAST_RAMP_UP       2.4f    /* command steps per tick speeding up (1.2)  */
+#define TURN_FAST_HANDOVER_DEG  20.0f   /* back at SPEED_TURN this far before slowing */
+
+#define T2_SPEED_STRAIGHT   80      /* Task 2 cruise (60 as tested; 80 since 11-Oct) */
 #define T2_SPEED_CRAWL      15      /* Task 2 crawl, as tested (pre-0c37bfe)     */
 /* Extra feedforward for Task 2's forward straights, in duty per count/tick of
    command above the crawl (see MODE_STRAIGHT in control.c). 0 = off, as in
@@ -168,11 +197,15 @@
 
 /* Range the readings are trusted over. Below IR_MIN_CM the response curve
    folds back on itself, so a 5 cm target reads the same as a 20 cm one.
-   IR_MAX_CM is deliberately just past the top of the calibration sweep: past
-   that the curve is too flat for the reading to mean much, so it saturates
-   instead of pretending to resolve 60 from 75.                              */
+   The calibration sweep went to about 60 cm; past that the curve is flat, so
+   a reading of 60-80 cm only says roughly how far, not exactly.
+   Kush (11-Oct): IR_MAX_CM 60 -> 80 (the sensor's rated range) so the Task 2
+   search for obstacle 1 on the way back can tell "something at 60-70 cm"
+   from open space (obstacle_nav.c, T2_OBS1_FAR_CM). Every other IR check
+   switches below 60 cm, so a reading above 60 meant the same to them before
+   (60, clamped) as it does now (60-80).                                      */
 #define IR_MIN_CM           10.0f
-#define IR_MAX_CM           60.0f
+#define IR_MAX_CM           80.0f
 
 /* --- safety limits, in 10 ms control ticks ---
    These exist because a stalled motor held at full duty is what tripped the

@@ -80,10 +80,12 @@ uint8_t move_straight_mm(int32_t mm);
                            commanded speed. The default; the Pi's FW/BW/FL/...
                            commands always run on it.
      MOTION_PROFILE_TASK2  task_2() switches to it for the run and back after.
-                           The straights Task 2 was tested with before
-                           0c37bfe: cruise 60, crawl 15, brake point from the
+                           Since 11-Oct (speed step 5): cruise 80, crawl 15,
+                           brake point from the measured speed. Tested before
+                           that with cruise 60, crawl 15, brake point from the
                            commanded speed (the same as Task 1). See calib.h.
-   Every turn runs at SPEED_TURN in both profiles, as in the original code. A
+   Every turn runs at SPEED_TURN in both profiles, as in the original code
+   (with TURN_FAST in calib.h on, faster in its middle, since 11-Oct). A
    move_straight_watch() always uses SPEED_CRAWL and the measured brake point
    (control.c, straight_stop_counts). */
 typedef struct {

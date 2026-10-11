@@ -153,9 +153,15 @@ static volatile float ir_filt[2] = { IR_MAX_CM, IR_MAX_CM };
 /* Ultrasonic: one ping every US_PING_TICKS ticks, for the collision check and
    the parking guard. 60 ms, the HC-SR04 datasheet's minimum cycle (it was
    40 ms, and the sound of one ping can still be around for the next). The
-   distances the approaches drive on come from ultrasonic_quiet_ping_cm(). */
+   distances the approaches drive on come from ultrasonic_quiet_ping_cm().
+   Kush (11-Oct, speed step 3): US_QUIET_MS 100 -> 60. 100 was the original's
+   pause; 60 is the datasheet cycle the background pings already keep, and it
+   takes 40 ms off each of the ~9-12 quiet pings in a Task 2 run. If the
+   [T2] "obs1 us=" / "obs2 us=" readings start coming out longer than the
+   tape says (a missed weak echo, see ultrasonic_quiet_ping_cm), put it back
+   to 100. */
 #define US_PING_TICKS   6u
-#define US_QUIET_MS     100u      /* silence before a quiet ping              */
+#define US_QUIET_MS     60u       /* silence before a quiet ping (was 100)    */
 #define US_ECHO_WAIT_MS 60u       /* the original's wait after its trigger    */
 #define US_MIN_CM       2.0f      /* below this the HC-SR04 is guessing        */
 #define US_MAX_CM       400.0f    /* past its range: a missing echo, not a wall */

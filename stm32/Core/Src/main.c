@@ -103,7 +103,7 @@
 /* Kush (09-Oct): the arrows CAL_TASK2 acts on instead of scanning, one per
    obstacle: T2_ARROW_LEFT or T2_ARROW_RIGHT (the side the car goes round it).
    Only used when CAL_PROGRAM is CAL_TASK2; START2 from the Pi always scans. */
-#define CAL_T2_ARROW_OBS1      T2_ARROW_LEFT
+#define CAL_T2_ARROW_OBS1      T2_ARROW_RIGHT
 #define CAL_T2_ARROW_OBS2      T2_ARROW_RIGHT
 
 #if (CAL_T2_ARROW_OBS1 != T2_ARROW_LEFT && CAL_T2_ARROW_OBS1 != T2_ARROW_RIGHT) || \

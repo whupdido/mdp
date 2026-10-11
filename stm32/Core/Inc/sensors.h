@@ -44,9 +44,10 @@ float ultrasonic_median_cm(void);
 float ultrasonic_read_cm(uint8_t new_readings, uint32_t timeout_ms);
 
 /* Kush (09-Oct): one ping taken as the original code took its readings: the
-   background pings pause, 100 ms of silence, one ping, up to 60 ms for the
-   echo. ~110-160 ms. Returns cm, or -1 for no echo. Polls the UART while it
-   waits. For the distances the Task 2 approaches drive on. */
+   background pings pause, US_QUIET_MS of silence (60 ms since 11-Oct, was
+   100), one ping, up to 60 ms for the echo. ~65-120 ms. Returns cm, or -1 for
+   no echo. Polls the UART while it waits. For the distances the Task 2
+   approaches drive on. */
 float ultrasonic_quiet_ping_cm(void);
 
 /**

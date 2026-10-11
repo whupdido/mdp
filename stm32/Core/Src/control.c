@@ -150,10 +150,13 @@ const motion_profile_t MOTION_PROFILE_TASK1 = {
     .brake_measured    = 0u,
     .straight_ff_extra = 0.0f,
 };
+/* Kush (11-Oct, speed step 5): brake_measured 0 -> 1 with the cruise raised to
+   80 (calib.h): from 80 the commanded-speed brake point would leave ~20 cm of
+   crawl at the end of every move. Same crawl (15) and brake lead as before. */
 const motion_profile_t MOTION_PROFILE_TASK2 = {
     .straight_cruise   = (float)T2_SPEED_STRAIGHT,
     .straight_crawl    = (float)T2_SPEED_CRAWL,
-    .brake_measured    = 0u,
+    .brake_measured    = 1u,
     .straight_ff_extra = (float)T2_STRAIGHT_FF_EXTRA,
 };
 static const motion_profile_t *volatile profile = &MOTION_PROFILE_TASK1;
@@ -1217,6 +1220,20 @@ void control_tick(void)
 
 			/* --- Slew-Rate Acceleration & Deceleration Ramp --- */
 			float target_base_speed = (float)(dir_forward * SPEED_TURN);
+			float ramp_up_step      = 1.2f;   /* RAMP_STEP below, while speeding up */
+#if TURN_FAST
+			/* Kush (11-Oct, speed step 6, TURN_FAST in calib.h): faster in the
+			 * middle of the turn only. Back at SPEED_TURN TURN_FAST_HANDOVER_DEG
+			 * before the slow-down below starts, so from there the end of the
+			 * turn is the same as before. */
+			{
+				const float slow_from_deg = (target_deg_total > 45.0f) ? 20.0f : 6.0f; /* DECEL_DEG / SHORT_DECEL_DEG */
+				if (remaining_deg >= slow_from_deg + TURN_FAST_HANDOVER_DEG) {
+					target_base_speed = (float)(dir_forward * SPEED_TURN_FAST);
+					ramp_up_step      = TURN_FAST_RAMP_UP;
+				}
+			}
+#endif
 
 			/* FIX: Change '>=' to '>' so 45-deg turns carry clean, constant speed
 			 * without losing momentum over a 20-deg crawl window. */
@@ -1236,11 +1253,14 @@ void control_tick(void)
 
 			const float RAMP_STEP = 1.2f;
 
+			/* Kush (11-Oct): ramp_up_step only while moving away from 0
+			 * (speeding up, either direction); slowing is always RAMP_STEP.
+			 * With TURN_FAST 0 both are 1.2, as before. */
 			if (current_speed_ramp < target_base_speed) {
-				current_speed_ramp += RAMP_STEP;
+				current_speed_ramp += (current_speed_ramp >= 0.0f) ? ramp_up_step : RAMP_STEP;
 				if (current_speed_ramp > target_base_speed) current_speed_ramp = target_base_speed;
 			} else if (current_speed_ramp > target_base_speed) {
-				current_speed_ramp -= RAMP_STEP;
+				current_speed_ramp -= (current_speed_ramp <= 0.0f) ? ramp_up_step : RAMP_STEP;
 				if (current_speed_ramp < target_base_speed) current_speed_ramp = target_base_speed;
 			}
 

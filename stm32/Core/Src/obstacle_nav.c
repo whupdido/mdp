@@ -251,8 +251,9 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
  * against the old step ranges: front face ~120 mm past the edge (old 0-200),
  * end ~95 (0-100), back face ~120 (0-200), obstacle 1 heading home ~65
  * (0-50, which only moves the car a little further from obstacle 1 before
- * it turns behind it), obstacle 1 from behind lined up at ~27 (0-50, average
- * 25) by the back-off below. The IR is a 5-tick median
+ * it turns behind it; ~90 since speed step 4, see T2_SENSE_OBS1), obstacle 1
+ * from behind lined up at ~27 (0-50, average 25) by the back-off below. The
+ * IR is a 5-tick median
  * (sensors.c), not one raw sample, and the ultrasonic is a median of
  * background pings, not one ping.
  *
@@ -264,20 +265,44 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
  * original brake point, the same as Task 1). Back to the Task 1 profile on
  * return. 0c37bfe's 80 / 50 and the faster straights tried on 09-Oct both
  * left the car much closer to obstacle 2 after the obstacle 1 dodge.
+ * Speed step 5 (11-Oct): cruise 80, but with the crawl kept at 15 and the
+ * brake point worked out from the measured wheel speed (calib.h), so each
+ * straight stops from the same crawl as before. A dodge that still ends
+ * closer to obstacle 2 is now backed off to the standoff (see below).
  *
  * Turns. Exactly as in the version that ran on 09-Oct: every turn at
- * SPEED_TURN, the same servo_us(SERVO_CENTRE); HAL_Delay(150) pauses and
- * HAL_Delay(150)s before turns, CREEP 3's forward + reverse pivot of the tilt
- * before a plain 90 for TURN 4, and the parking turn at 90 + tilt (more when
- * the car drifted away from obstacle 1). A faster 90 degree turn, no pauses,
- * the tilt folded into TURN 4 and the opposite parking-turn sign were tried
- * on 09-Oct and reverted the same day. Only the tilt's measurement is new:
+ * SPEED_TURN (since speed step 6, 11-Oct, faster in its middle when
+ * TURN_FAST in calib.h is 1; the end of every turn is unchanged), the same
+ * servo_us(SERVO_CENTRE); HAL_Delay(150) pauses,
+ * CREEP 3's forward + reverse pivot of the tilt before a plain 90 for TURN 4
+ * (removed 11-Oct: it never turned the car, see CREEP 3; TURN 4 is now
+ * 90 + the tilt instead),
+ * and the parking turn at 90 + tilt (more when the car drifted away from
+ * obstacle 1). A faster 90 degree turn, no pauses, the tilt folded into
+ * TURN 4 and the opposite parking-turn sign were tried on 09-Oct and
+ * reverted the same day. Speed step 1 (11-Oct) dropped only the plain
+ * HAL_Delay(150) in task_2_turn() / task_2_straighten() and the 100 ms after
+ * the first dodge turn: the car is standing still then and nothing moves
+ * during them (the steering pauses stay). Speed step 2 (11-Oct) dropped the
+ * four steering pauses that came right before a straight (PHASE 3's 100 mm,
+ * the consecutive reverse, CREEP 1, CREEP 2), since every straight centres
+ * the steering and waits 150 ms itself; the ones before turns stay. Only the
+ * tilt's measurement is new:
  *  - Both tilts came from two single raw IR readings. Now a least-squares
  *    line through every sample taken along the face, ends trimmed, cut to
  *    whole degrees toward zero as before.
  *
  * Without the Pi. task_2_with_arrows() runs exactly this with both arrows
  * given, for calibration runs started from SW1 (CAL_TASK2 in main.c).
+ *
+ * Obstacle 2 standoff (11-Oct). If the dodge leaves the car closer than
+ * 30 cm to obstacle 2, however close, it now backs off to 30 cm before
+ * reading the arrow, and checks the distance again. The original only moved
+ * on a reading over 5 cm, so at the 60 cm minimum gap (nose a few cm from
+ * obstacle 2) it stayed put and went round obstacle 2 from there, into it.
+ * The way back now drives blind for the distance measured to obstacle 2
+ * right after the dodge before it looks for obstacle 1 (FIND OBSTACLE 1):
+ * the old figure added the back-off in, and then missed obstacle 1.
  *
  * Fixed on the way:
  *  - SCAN went out twice per stop (both sides of the 09-Oct merge added one).
@@ -299,7 +324,16 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
 #define T2_STANDOFF_OBS2_MM     300     /* and to obstacle 2                         */
 /* No echo at all: obstacle 1 is at least 600 mm out, so 300 still leaves 300. */
 #define T2_NO_ECHO_OBS1_MM      300
-#define T2_NO_ECHO_BETWEEN_MM   1250    /* dist_between without a reading            */
+/* Kush (11-Oct): obstacle 2 closer than its standoff after the dodge (at the
+   60 cm minimum gap the dodge leaves the nose a few cm from it): back off to
+   the standoff, see the OBSTACLE 2 STANDOFF block in task_2_run().
+   No echo right after the dodge = too close for the HC-SR04 to time (it
+   needs ~2 cm): back off this far without one, then measure again. */
+#define T2_OBS2_BLIND_BACK_MM   150
+/* After backing off, measure again and correct once more if the car is
+   further than this from the standoff (a reading a few cm from the face can
+   be off by a few cm). */
+#define T2_OBS2_RECHECK_MM      25
 /* The approach to obstacle 2 only acts on a reading under this, as the original
    did: anything further is taken as a miss and the car stays where the dodge
    left it. Raised to 250 on 09-Oct and put back the same day: a far echo after
@@ -312,11 +346,23 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    From the sense speed the car needs about 50 -> 95 mm, 45 -> 80 mm,
    35 -> 55 mm, 30 -> 45 mm of room to slow to its crawl (simulated), plus
    ~10-20 mm for the IR to confirm the edge. See the header above for where
-   each phase ends up against the old creep. */
+   each phase ends up against the old creep.
+   Kush (11-Oct, speed step 4): OBS1 30 -> 42 and PARK 35 -> 49 (x1.4).
+   Simulated over 36 layouts: ~1.1 s a run, same clearances, same obstacle 1
+   fit (n ~19, tilt within 1 deg), parked within a few mm of before. The
+   obstacle 1 search now ends ~90 mm past the edge instead of ~65 (the turn
+   behind obstacle 1 is that much further on, accum_forward counts it), and
+   the search from behind ~65 mm past instead of ~40, which extra_back
+   reverses as before (now ~55 mm instead of ~25).
+   FACE and SIDE stay: a watch cannot run faster than the cruise (60 then,
+   80 since speed step 5; see MODE_STRAIGHT in control.c), and FACE at 60 saved ~0.06 s simulated while
+   ending the back face ~35 mm further out (from 60 the car needs ~135 mm to
+   slow), which swings TURN 4 that much closer to the side wall. SIDE made
+   no difference: with the end only 10 cm deep, CREEP 2 never moved. */
 #define T2_SENSE_FACE           50.0f   /* along obstacle 2's front and back faces */
 #define T2_SENSE_SIDE           45.0f   /* along its 10 cm end                     */
-#define T2_SENSE_OBS1           30.0f   /* finding obstacle 1 on the way back      */
-#define T2_SENSE_PARK           35.0f   /* last ultrasonic approach in the carpark */
+#define T2_SENSE_OBS1           42.0f   /* finding obstacle 1 on the way back (was 30) */
+#define T2_SENSE_PARK           49.0f   /* last ultrasonic approach in the carpark (was 35) */
 
 /* CREEP 1: along obstacle 2's front face until the inner IR loses it. */
 #define T2_FRONT_CLEAR_CM       35.0f
@@ -334,6 +380,17 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
 #define T2_OBS1_CM              55.0f
 #define T2_OBS1_AFTER_MM        25      /* old: 50 mm steps */
 #define T2_OBS1_MAX_MM          500
+/* Kush (11-Oct): heading home the car passes obstacle 1 at the side, its IR
+   ~45 cm from it with a 60 cm wide obstacle 2, further with a wider one or
+   if the car has turned a few degrees away; at 55 cm it could miss it. So
+   that search counts anything within T2_OBS1_FAR_CM as obstacle 1, but
+   never anything within T2_OBS1_MARGIN_CM of what the IR reads just before
+   the search starts (open space, or a wall on the far side of the course),
+   and never less than T2_OBS1_CM. With the rules' layout the next thing that
+   side IR could see is the wall beyond the far end of obstacle 2, about 1 m
+   or more away (its 50 cm clearance + obstacle 2 + the car's own offset). */
+#define T2_OBS1_FAR_CM          70.0f
+#define T2_OBS1_MARGIN_CM       10.0f
 /* Behind obstacle 1, where the car stops sets where it lines up with the
    carpark. The old creep stopped 0-50 mm past the edge (25 on average),
    judged at a standstill. The watch confirms the edge a little late (sensor
@@ -390,7 +447,8 @@ static void t2_status(const char *s)
 /* Front distance for an approach: three quiet pings (sensors.h), each taken
    the way the original took its one reading, and their median (the nearer of
    two if one got no echo, the one if only one did). -1 if none came back.
-   About 0.35-0.5 s. The background pings every 40 ms that this used to read
+   About 0.2-0.35 s (0.35-0.5 s before the quiet gap went from 100 to 60 ms
+   on 11-Oct, sensors.c). The background pings every 40 ms that this used to read
    could miss obstacle 1's weak echo and report what was behind it, and the
    car then drove too far. */
 static float t2_front_cm(void)
@@ -525,8 +583,10 @@ int task_2_turn(int left, int forward, int degrees, int current_angle, int32_t* 
     *accum_forward += d_forward;
     *accum_left    += d_left;
 
-    /* Execute the physical turn */
-    HAL_Delay(150);
+    /* Execute the physical turn. Kush (11-Oct): no HAL_Delay(150) first any
+       more (speed step 1). The car is already standing still here (every move
+       ends with 100 ms of settle) and move_turn_deg() sets the steering and
+       waits SERVO_SETTLE_MS itself, so the wait changed nothing but the time. */
     move_turn_deg(left, forward, degrees);
     return 1;
 }
@@ -540,9 +600,9 @@ int task_2_turn(int left, int forward, int degrees, int current_angle, int32_t* 
  * @param accum_left Pointer to left tracker.
  */
 void task_2_straighten(int original_dodge_left, int degrees, int32_t* accum_forward, int32_t* accum_left) {
-    /* 1. We physically turn opposite to the original dodge to straighten out */
+    /* 1. We physically turn opposite to the original dodge to straighten out.
+       Kush (11-Oct): no HAL_Delay(150) first any more, as in task_2_turn(). */
     int turn_left = !original_dodge_left;
-    HAL_Delay(150);
     move_turn_deg(turn_left, 1, degrees);
 
     /* 2. Calculate the displacement footprint */
@@ -646,17 +706,21 @@ static void task_2_run(void)
 	 * PHASE 1 + 2: Outward S-curve into the side lane
 	 * --------------------------------------------------------- */
 	task_2_turn(dodge_left, 1, 45, 0, &accum_forward, &accum_left);
-	HAL_Delay(100);
+	/* Kush (11-Oct): the HAL_Delay(100) that was here went with speed step 1
+	   (see task_2_turn): the car is standing still and the next turn waits
+	   for its steering itself. */
 	task_2_straighten(dodge_left, 45, &accum_forward, &accum_left);
 
 	/* ---------------------------------------------------------
 	 * PHASE 3: Forward Clear
 	 * --------------------------------------------------------- */
 	t2_status("Clearing!       ");
-	/* MECHANICS FIX 1: Let the servo physically return to center
-	 * before reversing so we don't swing a Ghost Arc! */
-	servo_us(SERVO_CENTRE);
-	HAL_Delay(150);
+	/* MECHANICS FIX 1 (let the servo return to centre first, so the move
+	 * does not start on an arc) is still met: the turn that just ended
+	 * centred the steering when it stopped and waited 100 ms, and
+	 * move_straight_mm() centres it again and waits 150 ms before driving.
+	 * Kush (11-Oct, speed step 2): the servo_us(SERVO_CENTRE);
+	 * HAL_Delay(150) that was here only added 150 ms to that. */
 	accum_forward += move_straight_measured(100);
 
 	/* ---------------------------------------------------------
@@ -669,20 +733,63 @@ static void task_2_run(void)
 	HAL_Delay(150);
 	task_2_straighten(turn_inward, 45, &accum_forward, &accum_left);
 
-	/* We want to sit exactly 30cm (300mm) away from Obstacle 2 */
-	float us2 = t2_front_cm();
-	int32_t dist_between   = (us2 > 0.0f) ? (int32_t)(us2 * 10.0f) + 250 : T2_NO_ECHO_BETWEEN_MM;
+	/* ---------------------------------------------------------
+	 * OBSTACLE 2 STANDOFF: sit 30 cm (T2_STANDOFF_OBS2_MM) from it to read
+	 * the arrow.
+	 * Kush (11-Oct): the dodge can leave the car closer than that (a few cm
+	 * at the 60 cm minimum gap), and the original only moved on a reading
+	 * over 5 cm, so there it stayed put and turned into obstacle 2. Now:
+	 *  - closer than 30 cm, however close: back off to 30 cm;
+	 *  - no echo at all: too close for the sensor to time, so back off
+	 *    T2_OBS2_BLIND_BACK_MM and measure again;
+	 *  - after backing off, measure once more and correct once if the car is
+	 *    still more than T2_OBS2_RECHECK_MM out (a reading that close to the
+	 *    face can be a few cm off);
+	 *  - further than 30 cm (and under T2_US_MAX_TRUST_CM): forward to 30 cm,
+	 *    as before.
+	 * d_after_dodge, the distance to obstacle 2 right after the dodge, also
+	 * sets how far the way back drives before it looks for obstacle 1 (FIND
+	 * OBSTACLE 1).
+	 * --------------------------------------------------------- */
+	int32_t backed        = 0;       /* mm backed off here (net, measured)       */
+	int32_t d_after_dodge = 0;       /* mm to obstacle 2 right after the dodge   */
+	const float us2_first = t2_front_cm();
+	float us2 = us2_first;
+	if (us2 > 0.0f) {
+		d_after_dodge = (int32_t)(us2 * 10.0f);
+	} else {
+		const int32_t d = move_straight_measured(-T2_OBS2_BLIND_BACK_MM);
+		accum_forward += d;
+		backed        -= d;
+		us2 = t2_front_cm();
+		if (us2 > 0.0f) {
+			d_after_dodge = (int32_t)(us2 * 10.0f) - backed;
+			if (d_after_dodge < 0) d_after_dodge = 0;
+		}
+	}
 	int32_t dist_to_target = (us2 > 0.0f) ? (int32_t)(us2 * 10.0f) - T2_STANDOFF_OBS2_MM : 0;
-	snprintf(u, sizeof u, "[T2] obs2 us=%.1fcm drive=%ldmm\r\n", (double)us2, (long)dist_to_target);
-	command_send(u);
-
-	/* If dist_to_target is positive, we drive forward. If negative, we reverse! */
-	if (dist_to_target != 0 && us2 > 5.0f && us2 < T2_US_MAX_TRUST_CM) {
+	float us2_check = -1.0f;
+	if (us2 > 0.0f && dist_to_target < 0) {
+		/* Closer than the standoff: back off to it, then check. */
+		int32_t d = move_straight_measured(dist_to_target);
+		accum_forward += d;
+		backed        -= d;
+		us2_check = t2_front_cm();
+		if (us2_check > 0.0f && us2_check < T2_US_MAX_TRUST_CM) {
+			const int32_t err = (int32_t)(us2_check * 10.0f) - T2_STANDOFF_OBS2_MM;
+			if (err < -T2_OBS2_RECHECK_MM || err > T2_OBS2_RECHECK_MM) {
+				d = move_straight_measured(err);
+				accum_forward += d;
+				backed        -= d;
+			}
+		}
+	} else if (dist_to_target > 0 && us2 < T2_US_MAX_TRUST_CM) {
+		/* Further than the standoff: forward to it, as before. */
 		accum_forward += move_straight_measured(dist_to_target);
 	}
-	if (dist_to_target < 0){
-		dist_between -= dist_to_target;
-	}
+	snprintf(u, sizeof u, "[T2] obs2 us=%.1fcm then=%.1fcm check=%.1fcm backed=%ldmm\r\n",
+	         (double)us2_first, (double)us2, (double)us2_check, (long)backed);
+	command_send(u);
 
 	/* ======================================================================
 	 * OBSTACLE 2: The Perfect Orthogonal Box-Wrap
@@ -714,9 +821,15 @@ static void task_2_run(void)
 	accum_left    += dodge_left_2 ? R_out : -R_out;
 
 	// Reverse slightly if consecutive
+	/* Kush (11-Oct, speed step 2): no servo_us(SERVO_CENTRE); HAL_Delay(150)
+	   before this move, CREEP 1 or CREEP 2 any more. The turn before each
+	   centred the steering when it stopped and waited 100 ms, and every
+	   straight move centres it again (with the reverse trim when backing)
+	   and waits 150 ms before it drives, so the servo still gets 250 ms to
+	   come back from full lock (a turn gives it 250 ms to get there). The
+	   IR checks before CREEP 1 and 2 now come 100 ms after the turn stopped
+	   instead of 250 ms; the IR median covers only the last 50 ms. */
 	if (dodge_left == dodge_left_2){
-		servo_us(SERVO_CENTRE);
-		HAL_Delay(150);
 		int32_t d = move_straight_measured(-100);
 		accum_left += dodge_left_2 ? d : -d;
 	}
@@ -725,8 +838,6 @@ static void task_2_run(void)
 	 * CREEP 1: The Front Face -- now one move, until the inner IR loses it
 	 * --------------------------------------------------------- */
 	t2_status("Front Face!     ");
-	servo_us(SERVO_CENTRE);
-	HAL_Delay(150);
 	if (ir_filtered_cm(inner) < T2_FRONT_CLEAR_CM) {   /* already clear: no move, as before */
 		w = (watch_t){ .kind = WATCH_IR_ABOVE, .ir_side = inner, .thresh_cm = T2_FRONT_CLEAR_CM,
 		               .after_mm = T2_FRONT_AFTER_MM, .sense_speed = T2_SENSE_FACE };
@@ -750,9 +861,7 @@ static void task_2_run(void)
 	 * CREEP 2: The Side Face
 	 * --------------------------------------------------------- */
 	t2_status("Side Face!      ");
-	servo_us(SERVO_CENTRE);
-	HAL_Delay(150);
-	if (ir_filtered_cm(inner) < T2_SIDE_CLEAR_CM) {
+	if (ir_filtered_cm(inner) < T2_SIDE_CLEAR_CM) {   /* speed step 2: see the reverse above */
 		w = (watch_t){ .kind = WATCH_IR_ABOVE, .ir_side = inner, .thresh_cm = T2_SIDE_CLEAR_CM,
 		               .after_mm = T2_SIDE_AFTER_MM, .sense_speed = T2_SENSE_SIDE };
 		move_straight_watch(T2_SIDE_MAX_MM, &w);
@@ -789,24 +898,29 @@ static void task_2_run(void)
 		accum_left    += dodge_left_2 ? -true_lat : true_lat;
 		accum_forward += (tilt_back > 0) ? true_fwd : -true_fwd;
 	}
-	/* The original correction: a forward turn and a reverse turn of the tilt,
-	   in place, before a plain 90 for TURN 4. */
-	if (tilt_back != 0) {
-		t2_status("Fixing Tilt!    ");
-		int drifted_away = (tilt_back > 0) ? 1 : 0;
-		int pivot_left = dodge_left_2 ? 0 : 1;
-		if (!drifted_away) pivot_left = !pivot_left;
-
-		/* Zero-space pivot to snap exactly to East/West */
-		move_turn_deg(pivot_left, 1, abs(tilt_back));
-		move_turn_deg(!pivot_left, 0, abs(tilt_back));
-	}
+	/* Kush (11-Oct): the "Fixing Tilt!" pivot that was here is gone: a forward
+	   turn and a reverse turn of |tilt_back| degrees, opposite locks. It did
+	   not turn the car. move_turn_deg() stops any turn of 45 deg or less once
+	   the angle left is within its 3.3-4.7 deg braking lead, so a 1-3 deg
+	   turn stopped on its first tick (the wheels went to lock and back, that
+	   was all) and a 4-5 deg one turned 0.3-1.7 deg. Had both turns run, they
+	   would have doubled the correction: reversing on the opposite lock keeps
+	   rotating the same way. tilt_back is still measured and logged, the
+	   dead reckoning above still uses it, and TURN 4 now corrects it. */
 
 	/* ---------------------------------------------------------
 	 * TURN 4: 90 Degrees Inward (East/West -> South)
+	 * Kush (11-Oct): 90 + the back-face tilt, the same as the parking turn
+	 * does with obstacle 1's. + = the car was heading away from the face, so
+	 * it turns that much further to come home straight; - = it turns less.
+	 * As part of a 90 the extra degrees really happen (the 2.5 deg braking
+	 * lead of a big turn, not the 3.3-4.7 deg one that stopped the pivot).
 	 * --------------------------------------------------------- */
 	t2_status("Turn 4!         ");
-	move_turn_deg(turn_in, 1, 90);
+	const int turn4_deg = 90 + tilt_back;   /* tilt_back is clamped to +-5 */
+	snprintf(u, sizeof u, "[T2] turn4=%d (back tilt %d)\r\n", turn4_deg, tilt_back);
+	command_send(u);
+	move_turn_deg(turn_in, 1, turn4_deg);
 
 	accum_forward -= R_in;
 	accum_left    += dodge_left_2 ? -R_in : R_in;
@@ -840,11 +954,31 @@ static void task_2_run(void)
 	 * The rest of the gap, then FIND OBSTACLE 1 (forward pass) -- one move.
 	 * The IR is ignored for the first remaining_dist, exactly the stretch the
 	 * old code drove blind before it started creeping.
+	 * Kush (11-Oct): remaining_dist is now the distance measured to obstacle 2
+	 * right after the dodge. It was dist_between - s_fwd + 200, and
+	 * dist_between had the back-off added in, so once the car had backed
+	 * off to the 30 cm standoff it came out the same (~430 mm) at every gap.
+	 * Simulated, that carried the car past obstacle 1 before it started
+	 * looking at gaps of 60-75 cm; the tested version's - 200 instead ran out
+	 * of search (T2_OBS1_MAX_MM) beside it at 85-100 cm. The measured
+	 * distance tracks the gap: the IR reaches obstacle 1 ~15 cm after the
+	 * car starts looking, at every gap, and it found it at 56-100 cm for all
+	 * four arrow pairs. Starts looking long before obstacle 1: add to it.
+	 * Still beside obstacle 1 when the search ends: subtract.
 	 * --------------------------------------------------------- */
 	t2_status("Find Obs 1!     ");
-	int32_t remaining_dist = dist_between - s_fwd + 200;
+	int32_t remaining_dist = d_after_dodge;
 	if (remaining_dist < 0) remaining_dist = 0;
-	w = (watch_t){ .kind = WATCH_IR_PASS, .ir_side = inner, .thresh_cm = T2_OBS1_CM,
+	/* How far the IR may look for obstacle 1 (T2_OBS1_FAR_CM): set from what
+	   it reads here, standing still, before obstacle 1 is beside it. */
+	const float ir_open = ir_filtered_cm(inner);
+	float obs1_cm = ir_open - T2_OBS1_MARGIN_CM;
+	if (obs1_cm > T2_OBS1_FAR_CM) obs1_cm = T2_OBS1_FAR_CM;
+	if (obs1_cm < T2_OBS1_CM)     obs1_cm = T2_OBS1_CM;
+	snprintf(u, sizeof u, "[T2] obs1 search: open %.1fcm, counts under %.1fcm\r\n",
+	         (double)ir_open, (double)obs1_cm);
+	command_send(u);
+	w = (watch_t){ .kind = WATCH_IR_PASS, .ir_side = inner, .thresh_cm = obs1_cm,
 	               .arm_mm = remaining_dist, .after_mm = T2_OBS1_AFTER_MM,
 	               .sense_speed = T2_SENSE_OBS1 };
 	move_straight_watch(remaining_dist + T2_OBS1_MAX_MM, &w);
