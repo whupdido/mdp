@@ -25,6 +25,7 @@
 #define CAL_SIX_BL    11
 #define CAL_SEQ       12   /* turns then a straight, as in a run: tilt check */
 #define CAL_TRACE     13   /* one straight traced tick by tick: why it turns */
+#define CAL_TASK2     14   /* all of Task 2 with no Pi: arrows from main.c   */
 
 /* Usable in #if. The kind is 0 FR, 1 FL, 2 BR, 3 BL: the order turn_test.c
    runs them in, and TT_FR..TT_BL in turn_test.h. */
@@ -52,5 +53,10 @@ void cal_seq_step(void);
 /* CAL_TRACE: FW100 watched from the control loop, 3 pages per run */
 void cal_trace_show_idle(void);
 void cal_trace_step(void);
+
+/* CAL_TASK2: the whole Task 2, arrows given (T2_ARROW_LEFT / T2_ARROW_RIGHT,
+   obstacle_nav.h) instead of read by the Pi. A tap runs it once. */
+void cal_task2_show_idle(uint8_t arrow_obs1, uint8_t arrow_obs2);
+void cal_task2_step(uint8_t arrow_obs1, uint8_t arrow_obs2);
 
 #endif /* CAL_PROGRAMS_H */

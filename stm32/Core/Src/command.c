@@ -356,7 +356,10 @@ static uint8_t gc_try(gc_window_t *w)
     return 1u;
 }
 
-static void gyro_zero_command(void)
+/* The whole GC. reply = 1 answers DONE / ERR as the Pi expects; a Task 2 run
+   started on the car (command_gyro_zero) passes 0, since nobody asked over
+   the UART. Returns 1 if a new zero was kept. */
+static uint8_t gyro_zero(uint8_t reply)
 {
     char u[128];
     char row[24];
@@ -389,7 +392,7 @@ static void gyro_zero_command(void)
         OLED_ShowString(0, 0,  (const uint8_t *)"GYRO ZERO STOPPED");
         OLED_ShowString(0, 20, (const uint8_t *)"old zero kept");
         OLED_Refresh_Gram();
-        return;
+        return 0u;
     }
 
     snprintf(u, sizeof u,
@@ -422,11 +425,35 @@ static void gyro_zero_command(void)
     if (ok) {
         calibrated = 1;
         gc_status  = "DONE";
-        command_send("DONE\r\n");
+        if (reply) command_send("DONE\r\n");
     } else {
         gc_status  = "ERR";
-        command_send("ERR\r\n");
+        if (reply) command_send("ERR\r\n");
     }
+    return ok;
+}
+
+static void gyro_zero_command(void)
+{
+    (void)gyro_zero(1u);
+}
+
+uint8_t command_gyro_zero(void)
+{
+    return gyro_zero(0u);
+}
+
+/* Kush (09-Oct): Task 2 started on the car (see command.h). Takes START2's
+   re-entry guard, so a START2 that arrives anyway is answered BUSY instead of
+   starting a second run inside this one. Leaves the abort latch alone: the
+   caller clears it before its own countdown, and a STOP or SW1 press since
+   then must still count. */
+void command_task2_local(uint8_t arrow_obs1, uint8_t arrow_obs2)
+{
+    if (task2_running) return;
+    task2_running = 1u;
+    task_2_with_arrows(arrow_obs1, arrow_obs2);
+    task2_running = 0u;
 }
 
 static void dispatch(const char *cmd)

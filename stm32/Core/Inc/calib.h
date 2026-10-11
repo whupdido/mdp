@@ -101,11 +101,42 @@
 
 /* Target speeds in ENCODER COUNTS PER 10 ms CONTROL TICK.
    A physical quantity, independent of PWM_MAX -- do NOT rescale these
-   if you change the PWM period.                                            */
-// Max 85 for left motor, 80 for right on my floor
-//#define SPEED_STRAIGHT      60
-#define SPEED_STRAIGHT      80
-#define SPEED_TURN          50
+   if you change the PWM period.
+
+   Kush (09-Oct): these are COMMANDS, not what the wheels do. The speed loop is
+   close to proportional only (feedforward 20 duty per count/tick against the
+   ~190 the motors need), so the wheels settle at about 45 % of the command:
+   CAL_TRACE measured 27 counts/tick (0.37 m/s) for a command of 60. That is
+   why commanding 80 does not saturate a motor that tops out at ~80.
+
+   Two sets, see motion_profile_t in control.h:
+     Task 1 (the Pi's FW/BW/FL/FR/BL/BR): SPEED_STRAIGHT / SPEED_CRAWL /
+       SPEED_TURN, exactly what ran Task 1 on 09-Oct (commit 570c4d6). WRT4's
+       80 / 50 from 0c37bfe are not used for Task 1 any more: a crawl of 50
+       makes the car brake from ~4x the speed BRAKE_LEAD_COUNTS was set at,
+       so every move ran long.
+     Task 2 (task_2() only): T2_*, the settings Task 2 was tested with on the
+       course before 0c37bfe (570c4d6 / 4879da0): cruise 60, crawl 15, the
+       original brake point, i.e. the same as Task 1. 0c37bfe (WRT4, 09-Oct
+       12:32) raised them to 80 / 50, and the faster Task 2 straights tried
+       later on 09-Oct went further still; with either, the car finished the
+       obstacle 1 dodge much closer to obstacle 2 than in the tested runs.
+       Only the sensing phases after obstacle 2 (move_straight_watch) use the
+       measured brake point their stops were tuned with. Turns are SPEED_TURN
+       in both.                                                              */
+// Max 85 for left motor, 80 for right on my floor (full PWM, see the note above)
+#define SPEED_STRAIGHT      60      /* Task 1 cruise                             */
+#define SPEED_CRAWL         15      /* commanded speed the brake goes on at      */
+#define SPEED_TURN          50      /* every turn, Task 1 and Task 2             */
+
+#define T2_SPEED_STRAIGHT   60      /* Task 2 cruise, as tested (pre-0c37bfe)    */
+#define T2_SPEED_CRAWL      15      /* Task 2 crawl, as tested (pre-0c37bfe)     */
+/* Extra feedforward for Task 2's forward straights, in duty per count/tick of
+   command above the crawl (see MODE_STRAIGHT in control.c). 0 = off, as in
+   the original. 250 made the wheels really do the command (0.82 m/s at 60
+   instead of 0.37 m/s); reverted on 09-Oct, see above. Do not turn it back on
+   without checking where Task 2's straights stop on the floor.             */
+#define T2_STRAIGHT_FF_EXTRA 0
 
 /* VERIFIED ON HARDWARE -- DO NOT CHANGE.
    Both motors drive the car backwards on positive duty, so both are 1.

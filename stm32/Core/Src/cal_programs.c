@@ -84,6 +84,22 @@
  *               crawl steering is R; and Iend small next to the duty.
  *               Every tick also goes to USART3 as "[TRS]" CSV lines.
  *
+ * CAL_TASK2     Kush (09-Oct): the whole Task 2 with no Pi and no image
+ *               recognition, for calibrating the run itself. The arrows are
+ *               CAL_T2_ARROW_OBS1 / CAL_T2_ARROW_OBS2 in main.c. A tap:
+ *                 1. waits CAL_START_MS so your hand is off the car,
+ *                 2. zeroes the gyro hands-off, the same GC the Pi runs in its
+ *                    pre-flight (about 2 s; it refuses if the car moved),
+ *                 3. runs task_2() exactly as START2 does, except that each
+ *                    arrow is taken as given at the standoff instead of being
+ *                    scanned (no SCAN, no wait, no retries),
+ *                 4. shows how long the run took.
+ *               SW1 at any point after the tap stops the car (the same
+ *               motion_stop() a STOP from the Pi calls). The time leaves out
+ *               the scans a real run waits for, so a real run is slower by
+ *               however long the Pi takes to answer, twice. "[T2]" lines for
+ *               every phase and a "[T2L]" summary go to USART3 as usual.
+ *
  * Nothing here changes how the car drives. As in a real run the brake stays
  * on after each move, and the readings keep running for CAL_SETTLE_MS
  * afterwards so the coast is included. Every result also goes to USART3:
@@ -101,6 +117,7 @@
 #include "calib.h"
 #include "oled.h"
 #include "icm20948.h"
+#include "obstacle_nav.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1022,4 +1039,158 @@ void cal_trace_step(void)
     tr_page1();
     tr_print();
     tr_page = 1u;
+}
+
+/* -------------------------------------------------------------- CAL_TASK2 */
+
+static uint8_t t2l_runs = 0u;            /* finished runs since power-up        */
+
+/* SW1 as STOP during a run, from the 100 Hz interrupt (control_tick_hook),
+   so a press is seen even while the car sits in a HAL_Delay() between moves.
+   Down on T2L_STOP_TICKS ticks in a row (10-20 ms), so a glitch on the line
+   cannot stop a good run. */
+#define T2L_STOP_TICKS  2u
+static volatile uint8_t t2l_low_ticks = 0u;   /* ticks in a row SW1 was down */
+static volatile uint8_t t2l_sw1       = 0u;   /* this run was stopped by SW1 */
+
+static void t2l_sw1_tick(void)                /* interrupt context */
+{
+    if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) != GPIO_PIN_RESET) {
+        t2l_low_ticks = 0u;
+        return;
+    }
+    if (t2l_low_ticks < T2L_STOP_TICKS) t2l_low_ticks++;
+    if (t2l_low_ticks >= T2L_STOP_TICKS && !t2l_sw1) {
+        t2l_sw1 = 1u;
+        motion_stop();
+    }
+}
+
+/* HAL_Delay that ends early once stopped, and keeps the UART answered. */
+static void t2l_wait_ms(uint32_t ms)
+{
+    const uint32_t t0 = HAL_GetTick();
+    while (HAL_GetTick() - t0 < ms && !motion_abort_requested()) {
+        command_poll();
+        HAL_Delay(2);
+    }
+}
+
+/* Returns once SW1 has been up for 60 ms, the same release main.c waits for,
+   so the press that stopped a run is not then taken as a tap to start one. */
+static void t2l_wait_release(void)
+{
+    uint32_t high_since = HAL_GetTick();
+    while (HAL_GetTick() - high_since < 60u) {
+        if (HAL_GPIO_ReadPin(BTN_USER_GPIO_Port, BTN_USER_Pin) == GPIO_PIN_RESET) {
+            high_since = HAL_GetTick();
+        }
+        HAL_Delay(2);
+    }
+}
+
+static const char *t2l_name(uint8_t arrow)
+{
+    if (arrow == T2_ARROW_LEFT)  return "LEFT";
+    if (arrow == T2_ARROW_RIGHT) return "RIGHT";
+    return "?";
+}
+
+static char t2l_letter(uint8_t arrow)
+{
+    return (arrow == T2_ARROW_LEFT) ? 'L' : (arrow == T2_ARROW_RIGHT) ? 'R' : '?';
+}
+
+void cal_task2_show_idle(uint8_t arrow_obs1, uint8_t arrow_obs2)
+{
+    OLED_Clear();
+    cal_line(0,  "TASK 2, NO PI");
+    cal_line(10, "obs1 arrow %s", t2l_name(arrow_obs1));
+    cal_line(20, "obs2 arrow %s", t2l_name(arrow_obs2));
+    cal_line(30, "SW1 = run");
+    cal_line(40, "SW1 again = STOP");
+    cal_line(50, "CAR WILL MOVE");
+    OLED_Refresh_Gram();
+}
+
+void cal_task2_step(uint8_t arrow_obs1, uint8_t arrow_obs2)
+{
+    char u[112];
+    const unsigned run = (unsigned)t2l_runs + 1u;
+    const char a1 = t2l_letter(arrow_obs1), a2 = t2l_letter(arrow_obs2);
+
+    /* From here on SW1 means STOP. */
+    motion_abort_clear();
+    t2l_low_ticks = 0u;
+    t2l_sw1       = 0u;
+    control_tick_hook = t2l_sw1_tick;
+
+    OLED_Clear();
+    cal_line(0,  "TASK 2 run %u", run);
+    cal_line(10, "obs1 %c, obs2 %c", a1, a2);
+    cal_line(30, "hands off...");
+    cal_line(50, "SW1 = STOP");
+    OLED_Refresh_Gram();
+    t2l_wait_ms(CAL_START_MS);
+
+    /* The Pi zeroes the gyro hands-off before every real run (GC); do the
+       same, so the run is calibrated under the same conditions. */
+    uint8_t zero_ok = 0u;
+    if (!motion_abort_requested()) zero_ok = command_gyro_zero();
+
+    uint32_t ms = 0u;
+    uint8_t  ran = 0u;
+    if (zero_ok && !motion_abort_requested()) {
+        OLED_Clear();
+        cal_line(0,  "TASK 2 run %u", run);
+        cal_line(10, "obs1 %c, obs2 %c", a1, a2);
+        cal_line(20, "RUNNING");
+        cal_line(50, "SW1 = STOP");
+        OLED_Refresh_Gram();
+        snprintf(u, sizeof u, "[T2L] run %u start obs1=%s obs2=%s\r\n",
+                 run, t2l_name(arrow_obs1), t2l_name(arrow_obs2));
+        command_send(u);
+
+        const uint32_t t0 = HAL_GetTick();
+        command_task2_local(arrow_obs1, arrow_obs2);
+        ms  = HAL_GetTick() - t0;
+        ran = 1u;
+    }
+
+    control_tick_hook = 0;
+    const uint8_t stopped = motion_abort_requested();
+
+    if (stopped) {
+        OLED_Clear();
+        cal_line(0,  "TASK 2 run %u", run);
+        cal_line(10, "STOPPED%s", t2l_sw1 ? " (SW1)" : "");
+        if (ran) cal_line(20, "after %.1f s", (double)ms * 0.001);
+        cal_line(50, "SW1 = run again");
+        OLED_Refresh_Gram();
+        snprintf(u, sizeof u, "[T2L] run %u stopped%s after %lu ms\r\n",
+                 run, t2l_sw1 ? " by SW1" : "", (unsigned long)ms);
+        command_send(u);
+    } else if (!ran) {
+        /* The gyro zero refused (the car moved): its screen says why. Nothing
+           drove. */
+        cal_line(50, "SW1 = try again");
+        OLED_Refresh_Gram();
+        snprintf(u, sizeof u, "[T2L] run %u not started: gyro zero failed\r\n", run);
+        command_send(u);
+    } else {
+        t2l_runs++;
+        OLED_Clear();
+        cal_line(0,  "TASK 2 run %u", run);
+        cal_line(10, "DONE %.2f s", (double)ms * 0.001);
+        cal_line(20, "obs1 %c, obs2 %c", a1, a2);
+        cal_line(30, "(no scan time)");
+        cal_line(50, "SW1 = run again");
+        OLED_Refresh_Gram();
+        snprintf(u, sizeof u, "[T2L] run %u done in %lu ms (no scan time) obs1=%s obs2=%s\r\n",
+                 run, (unsigned long)ms, t2l_name(arrow_obs1), t2l_name(arrow_obs2));
+        command_send(u);
+    }
+
+    t2l_wait_release();
+    motion_abort_clear();
 }
