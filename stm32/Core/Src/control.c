@@ -553,7 +553,10 @@ uint8_t move_straight_mm(int32_t mm)
      * could never fire. The hardware is already stopped; the settle delay
      * is all that is still needed.                                       */
     if (last_result == MOVE_NONE) stop_hardware(MOVE_DONE);
-    HAL_Delay(100); /* Final settle */
+    /* Final settle. Kush (12-Oct, STRAIGHT_SETTLE_FAST in calib.h): 50 ms
+       instead of 100 after a straight; it stops from its crawl, so there is
+       next to no coast left. Turns keep their 100 ms (move_turn_deg). */
+    HAL_Delay(STRAIGHT_SETTLE_FAST ? 50u : 100u);
 	return 1;
 }
 
@@ -990,11 +993,16 @@ void control_tick(void)
 				target_speed = (float)dir_forward * CRAWL_SPEED; /* Crawl speed */
 			}
 
+			/* Kush (12-Oct, STRAIGHT_FAST_START in calib.h): speeding up (the
+			 * command moving away from 0, either direction) goes
+			 * STRAIGHT_RAMP_UP_X times as fast; slowing is RAMP_STEP as before,
+			 * which is what the brake point (straight_stop_counts) works with. */
+			const float RAMP_UP = STRAIGHT_FAST_START ? STRAIGHT_RAMP_UP_X * RAMP_STEP : RAMP_STEP;
 			if (current_speed_ramp < target_speed) {
-				current_speed_ramp += RAMP_STEP;
+				current_speed_ramp += (current_speed_ramp >= 0.0f) ? RAMP_UP : RAMP_STEP;
 				if (current_speed_ramp > target_speed) current_speed_ramp = target_speed;
 			} else if (current_speed_ramp > target_speed) {
-				current_speed_ramp -= RAMP_STEP;
+				current_speed_ramp -= (current_speed_ramp <= 0.0f) ? RAMP_UP : RAMP_STEP;
 				if (current_speed_ramp < target_speed) current_speed_ramp = target_speed;
 			}
 

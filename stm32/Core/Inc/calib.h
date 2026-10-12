@@ -158,6 +158,38 @@
 #define TURN_FAST_RAMP_UP       2.4f    /* command steps per tick speeding up (1.2)  */
 #define TURN_FAST_HANDOVER_DEG  20.0f   /* back at SPEED_TURN this far before slowing */
 
+/* Kush (12-Oct): three more speed-ups, each with its own switch: 1 = on,
+   0 = exactly as before. None changes the path or how a move ends.
+     STRAIGHT_FAST_START  a straight speeds up STRAIGHT_RAMP_UP_X times as fast
+                          as before; slowing down, the brake point and the
+                          stop are unchanged. ~1.4 s a Task 2 run, simulated.
+                          If a straight wheelspins as it starts, set it to 0.
+     STRAIGHT_SETTLE_FAST the pause after a straight, before the next move,
+                          50 ms instead of 100 (the car stops from its crawl,
+                          so there is next to no coast left). After a turn it
+                          stays 100 ms: the steering is coming back from full
+                          lock then, and the next move's timing was tested
+                          with that. ~0.6 s a run, simulated.
+     T2_FEWER_PAUSES      task_2(): no steering pause before TURN 1 (the arrow
+                          read always ends on a straight, so the wheels are
+                          centred) or TURN 3 (same lock as TURN 2), nor the two
+                          before the parking reads (standing still, wheels
+                          centred). The pauses before a turn the opposite way
+                          stay. ~0.6 s a run, simulated.
+   Together, simulated over 200 layouts: same obstacle 1 detection, no
+   collisions, parked within ~1 cm of before on average. Applies to Task 1
+   too (the first two). */
+#ifndef STRAIGHT_FAST_START
+#define STRAIGHT_FAST_START     1
+#endif
+#define STRAIGHT_RAMP_UP_X      2.0f
+#ifndef STRAIGHT_SETTLE_FAST
+#define STRAIGHT_SETTLE_FAST    1
+#endif
+#ifndef T2_FEWER_PAUSES
+#define T2_FEWER_PAUSES         1
+#endif
+
 #define T2_SPEED_STRAIGHT   80      /* Task 2 cruise (60 as tested; 80 since 11-Oct) */
 #define T2_SPEED_CRAWL      15      /* Task 2 crawl, as tested (pre-0c37bfe)     */
 /* Extra feedforward for Task 2's forward straights, in duty per count/tick of

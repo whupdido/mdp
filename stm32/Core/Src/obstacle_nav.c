@@ -391,6 +391,19 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    or more away (its 50 cm clearance + obstacle 2 + the car's own offset). */
 #define T2_OBS1_FAR_CM          70.0f
 #define T2_OBS1_MARGIN_CM       10.0f
+/* Kush (12-Oct): the S-shift on the way home, before the search for
+   obstacle 1 (two 30 deg turns inward, undone by a reverse after the turn
+   behind obstacle 1). 1 = every run, as before. 0 = skipped when, just
+   before it, the inner IR reads open space to its full range (the search
+   can then see the ~85 mm further it needs without the shift) and the
+   outer IR has the side wall at least T2_RETURN_WALL_CM away (the car then
+   stays that much further out until it turns behind obstacle 1). 40 cm,
+   not less: under 10 cm the Sharp's curve folds back, and a wall a few cm
+   away can read as 20-30 cm. See RETURNING TO CARPARK. */
+#ifndef T2_RETURN_S_SHIFT
+#define T2_RETURN_S_SHIFT       0
+#endif
+#define T2_RETURN_WALL_CM       40.0f
 /* Behind obstacle 1, where the car stops sets where it lines up with the
    carpark. The old creep stopped 0-50 mm past the edge (25 on average),
    judged at a standstill. The watch confirms the edge a little late (sensor
@@ -814,8 +827,11 @@ static void task_2_run(void)
 	 * TURN 1: 90 Degrees Outward (North -> West/East)
 	 * --------------------------------------------------------- */
 	t2_status("Turn 1!         ");
+	/* Kush (12-Oct, T2_FEWER_PAUSES in calib.h): no pause here. The arrow
+	   read always ends on a straight (or standing still after the scans), so
+	   the wheels are centred already; the turn waits for its lock itself. */
 	servo_us(SERVO_CENTRE);
-	HAL_Delay(150);
+	if (!T2_FEWER_PAUSES) HAL_Delay(150);
 	move_turn_deg(turn_out, 1, 90);
 	accum_forward += R_out;
 	accum_left    += dodge_left_2 ? R_out : -R_out;
@@ -873,8 +889,10 @@ static void task_2_run(void)
 	 * TURN 3: 90 Degrees Inward (North -> East/West)
 	 * --------------------------------------------------------- */
 	t2_status("Turn 3!         ");
+	/* Kush (12-Oct, T2_FEWER_PAUSES): no pause here either: TURN 2 used the
+	   same lock (or CREEP 2 left the wheels centred). */
 	servo_us(SERVO_CENTRE);
-	HAL_Delay(150);
+	if (!T2_FEWER_PAUSES) HAL_Delay(150);
 	move_turn_deg(turn_in, 1, 90);
 	accum_forward += R_in;
 	accum_left    += dodge_left_2 ? -R_in : R_in;
@@ -930,16 +948,7 @@ static void task_2_run(void)
 	/* ======================================================================
 	 * RETURNING TO CARPARK
 	 * ====================================================================== */
-	/* Drive some distance down the track (South) */
-	accum_forward -= move_straight_measured(200);
-
-	/* ---------------------------------------------------------
-	 * THE INWARD S-SHIFT
-	 * --------------------------------------------------------- */
-	t2_status("S-Shift In!     ");
-	move_turn_deg(turn_in, 1, 30);
-	move_turn_deg(!turn_in, 1, 30);
-
+	/* The S-shift's size: s_fwd along the track, s_lat inward. */
 	float rad_30 = 30.0f * (3.14159f / 180.0f);
 	int32_t R_inward  = turn_in ? TURN_RADIUS_FL_MM : TURN_RADIUS_FR_MM;
 	int32_t R_outward = (!turn_in) ? TURN_RADIUS_FL_MM : TURN_RADIUS_FR_MM;
@@ -947,8 +956,51 @@ static void task_2_run(void)
 	int32_t s_fwd = (int32_t)((R_inward + R_outward) * sinf(rad_30));
 	int32_t s_lat = (int32_t)((R_inward + R_outward) * (1.0f - cosf(rad_30)));
 
-	accum_forward -= s_fwd;
-	if (dodge_left_2) accum_left += s_lat; else accum_left -= s_lat;
+	/* Drive some distance down the track (South) */
+	accum_forward -= move_straight_measured(200);
+
+	/* ---------------------------------------------------------
+	 * THE INWARD S-SHIFT, only when the IR needs it.
+	 * Kush (12-Oct): the shift moves the car s_lat (~85 mm) inward, and the
+	 * reverse of s_lat after the turn behind obstacle 1 moves it back out
+	 * again, so the search behind obstacle 1 starts at the same place with
+	 * or without it. What it does buy is range: the IR passes obstacle 1
+	 * ~37 cm away after it, ~45 cm without (60 cm obstacle 2, more if the car
+	 * is heading a little outward). Without it the search therefore needs
+	 * the full T2_OBS1_FAR_CM, which it only gets when the IR reads open
+	 * space to the end of its range here. Simulated over 200 layouts with
+	 * open space reading 80 / 70 / 65 cm: with the shift obstacle 1 was found
+	 * 200 / 200 / 200 times, without it 200 / 169 / 100. It also keeps the
+	 * car s_lat further from the side wall all the way to obstacle 1; with
+	 * the walls at the rules' 50 cm minimum the return line is only a few cm
+	 * from the wall without it (after a left arrow at obstacle 2). So it is
+	 * skipped, saving ~2.6 s (two 30 deg turns and the reverse), only when
+	 * the inner IR reads its full range AND the outer IR has the wall at
+	 * least T2_RETURN_WALL_CM away; otherwise it runs as before.
+	 * T2_RETURN_S_SHIFT 1 runs it every time.
+	 * --------------------------------------------------------- */
+	float ir_open = ir_filtered_cm(inner);   /* standing still, clear of obstacle 2 */
+	const float ir_wall = ir_filtered_cm((inner == IR_SIDE_LEFT) ? IR_SIDE_RIGHT : IR_SIDE_LEFT);
+	const uint8_t s_shift = (T2_RETURN_S_SHIFT ||
+	                         (ir_open - T2_OBS1_MARGIN_CM < T2_OBS1_FAR_CM) ||
+	                         (ir_wall < T2_RETURN_WALL_CM)) ? 1u : 0u;
+	int32_t remaining_dist = d_after_dodge;
+	if (remaining_dist < 0) remaining_dist = 0;
+
+	if (s_shift) {
+		t2_status("S-Shift In!     ");
+		move_turn_deg(turn_in, 1, 30);
+		move_turn_deg(!turn_in, 1, 30);
+
+		accum_forward -= s_fwd;
+		if (dodge_left_2) accum_left += s_lat; else accum_left -= s_lat;
+		ir_open = ir_filtered_cm(inner);   /* read again from here, as before */
+	} else {
+		/* Straight on instead: the shift's forward part joins the blind
+		   stretch of the search below, so it starts looking where it did. */
+		remaining_dist += s_fwd;
+		s_lat = 0;   /* nothing for the reverse after the turn to undo */
+	}
 
 	/* ---------------------------------------------------------
 	 * The rest of the gap, then FIND OBSTACLE 1 (forward pass) -- one move.
@@ -967,16 +1019,13 @@ static void task_2_run(void)
 	 * Still beside obstacle 1 when the search ends: subtract.
 	 * --------------------------------------------------------- */
 	t2_status("Find Obs 1!     ");
-	int32_t remaining_dist = d_after_dodge;
-	if (remaining_dist < 0) remaining_dist = 0;
 	/* How far the IR may look for obstacle 1 (T2_OBS1_FAR_CM): set from what
-	   it reads here, standing still, before obstacle 1 is beside it. */
-	const float ir_open = ir_filtered_cm(inner);
+	   it read above, standing still, before obstacle 1 is beside it. */
 	float obs1_cm = ir_open - T2_OBS1_MARGIN_CM;
 	if (obs1_cm > T2_OBS1_FAR_CM) obs1_cm = T2_OBS1_FAR_CM;
 	if (obs1_cm < T2_OBS1_CM)     obs1_cm = T2_OBS1_CM;
-	snprintf(u, sizeof u, "[T2] obs1 search: open %.1fcm, counts under %.1fcm\r\n",
-	         (double)ir_open, (double)obs1_cm);
+	snprintf(u, sizeof u, "[T2] obs1 search: open %.1fcm, counts under %.1fcm, wall %.1fcm, s-shift %s\r\n",
+	         (double)ir_open, (double)obs1_cm, (double)ir_wall, s_shift ? "yes" : "skipped");
 	command_send(u);
 	w = (watch_t){ .kind = WATCH_IR_PASS, .ir_side = inner, .thresh_cm = obs1_cm,
 	               .arm_mm = remaining_dist, .after_mm = T2_OBS1_AFTER_MM,
@@ -990,8 +1039,10 @@ static void task_2_run(void)
 	accum_forward -= R_in; /* Sweeps South */
 	accum_left    += dodge_left_2 ? R_in : -R_in;
 
-	/* Move back some distance before starting search for obstacle 1 */
-	{
+	/* Move back some distance before starting search for obstacle 1.
+	 * Kush (12-Oct): it only undid the S-shift, so with T2_RETURN_S_SHIFT 0
+	 * (s_lat = 0) there is nothing to do. */
+	if (s_lat > 0) {
 		int32_t d = move_straight_measured(-s_lat);
 		accum_left += dodge_left_2 ? d : -d;
 	}
@@ -1059,8 +1110,11 @@ static void task_2_run(void)
 	/* ---------------------------------------------------------
 	 * PARKING TIGHT FIT (Sideways Shift)
 	 * --------------------------------------------------------- */
+	/* Kush (12-Oct, T2_FEWER_PAUSES): no pause before these reads or before
+	   the pings below. The car is standing still with its wheels centred,
+	   and the move after them centres the steering and waits itself. */
 	servo_us(SERVO_CENTRE);
-	HAL_Delay(150);
+	if (!T2_FEWER_PAUSES) HAL_Delay(150);
 
 	float park_ir_left  = ir_filtered_cm(IR_SIDE_LEFT);
 	float park_ir_right = ir_filtered_cm(IR_SIDE_RIGHT);
@@ -1077,7 +1131,7 @@ static void task_2_run(void)
 	}
 
 	servo_us(SERVO_CENTRE);
-	HAL_Delay(150);
+	if (!T2_FEWER_PAUSES) HAL_Delay(150);
 
 	/* Precision ultrasonic stop at the back wall: one move to T2_PARK_STOP_CM
 	 * instead of 30 mm creeps, with the ultrasonic as a guard. */
