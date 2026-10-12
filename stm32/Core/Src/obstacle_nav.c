@@ -1089,6 +1089,16 @@ static void task_2_run(void)
 		               .after_mm = 0, .sense_speed = T2_SENSE_PARK };
 		move_straight_watch(go, &w);
 	}
+
+	/* Kush (12-Oct): PARKED, for main's tablet (Zhenxi's 67e6d5d there): the
+	 * rules stop the timing when the car is in the carpark and stopped, which
+	 * is now, as the move above has stopped and settled. Sent before the log
+	 * line below (it waits ~200 ms for fresh echoes) and before the DONE that
+	 * only comes once task_2() returns. The Pi relays it as STM,PARKED and the
+	 * tablet stops its clock on it (on DONE only for firmware without it). Not
+	 * sent after a STOP: the car is wherever it was stopped, not parked. */
+	if (!motion_abort_requested()) command_send("PARKED\r\n");
+
 	snprintf(u, sizeof u, "[T2] park us=%.1fcm drive=%ldmm, now %.1fcm\r\n",
 	         (double)usp, (long)go, (double)ultrasonic_read_cm(2u, 200u));
 	command_send(u);

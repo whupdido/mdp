@@ -463,6 +463,20 @@ static void dispatch(const char *cmd)
        BUSY. */
     if (strcmp(cmd, "?") == 0) { report_status(); return; }
     if (strncmp(cmd, "STOP", 4) == 0) { handle_stop(); return; }
+    /* Zhenxi: IM is not a move, so it must not go through report_result()
+       -- that would echo whatever the *previous* move's verdict was.
+       Kush (12-Oct): and it is answered before the busy guard. Main's Pi
+       bridge counts one DONE per IM it sends (a1_bridge.relay_stm_replies;
+       "each IM gets its own DONE" in main's STM32_motion_spec.md). An IM that
+       arrived while the car was already moving again got BUSY instead, which
+       the bridge takes as the routine's final reply: it stopped listening,
+       and the next SCAN went unanswered. A late arrow set here is cleared
+       when the next scan window opens (task_2_image_rec resets image_found). */
+    if (strncmp(cmd, "IM", 2) == 0) {
+        image_found = (uint8_t)((strlen(cmd) >= 5u) ? atoi(cmd + 2) : 0);
+        command_send("DONE\r\n");
+        return;
+    }
     if (motion_busy() || gc_running) { command_send("BUSY\r\n"); return; }
     if (strlen(cmd) < 2u) { command_send("ERR\r\n"); return; }
 
@@ -474,10 +488,7 @@ static void dispatch(const char *cmd)
     else if (!strncmp(cmd, "FR", 2)) { begin_motion(cmd); move_turn_deg(0, 1, arg); }
     else if (!strncmp(cmd, "BL", 2)) { begin_motion(cmd); move_turn_deg(1, 0, arg); }
     else if (!strncmp(cmd, "BR", 2)) { begin_motion(cmd); move_turn_deg(0, 0, arg); }
-    /* Zhenxi: IM is not a move, so it must not go through report_result()
-       -- that would echo whatever the *previous* move's verdict was. It
-       replied DONE before (by falling through) and still does.          */
-    else if (!strncmp(cmd, "IM", 2)) { image_found = (uint8_t)arg; command_send("DONE\r\n"); return; }
+    /* IM is answered above, before the busy guard. */
     /* Kush: GC replies DONE or ERR itself (see gyro_zero_command). Exact
        match, so report_status() can tell a GC from a move by name. */
     else if (!strcmp(cmd, "GC")) { begin_motion(cmd); gyro_zero_command(); return; }
