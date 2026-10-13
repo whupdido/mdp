@@ -209,8 +209,14 @@ for the supervisor, press **START**. The clock counts down from 3:00.
 |---|---|---|---|
 | 1 | **START** | `START2` | `STM,ACK`; at each obstacle `STM,SCAN` and an arrow `MSG`; then `STM,PARKED` |
 
-`a1_bridge.py` hands `START2` to the board, and `task_2()` drives the whole
-course by itself. At each obstacle the board stops and says `SCAN`. The Pi
+`a1_bridge.py` first zeroes the gyro with `GC` — hands off, about 2 s, up to
+6 s if the board retries — then hands `START2` to the board, and `task_2()`
+drives the whole course by itself. Task 2 has no PLAN press to do that in, so
+it costs run time; it is worth it, because a zero taken with a hand on SW1 can
+tilt the whole run. A failed zero keeps the old one and the run goes ahead
+(`MSG,Gyro zero failed - running on the old zero`). `TASK2_ZERO_GYRO = False`
+in `a1_bridge.py` skips it. `rpi/test_task2_no_tablet.py run` runs exactly the
+same `run_task2()`, with a stand-in for the tablet. At each obstacle the board stops and says `SCAN`. The Pi
 photographs the arrow, asks the laptop what it is, and answers `IM038` (go
 round the right) or `IM039` (go round the left) inside the board's 3 s window.
 A miss is retried, up to four scans per obstacle; after four misses the board
@@ -272,7 +278,8 @@ cd rpi
 #   by hand instead: sudo rfcomm bind 0 <tablet-mac>, then the program
 
 # Robot, during prep, inside the carpark
-long-press the board button to zero the gyro (rule 1 allows calibration)
+nothing -- PLAN (Task 1) and START (Task 2) zero the gyro hands-off with GC.
+The board-button long-press still works, but a hand on the car can skew it.
 
 # Tablet
 Connect -> pick the Pi -> green "Connected" -> TASK 1 or TASK 2

@@ -195,8 +195,8 @@ for cmd in ["START", "ROBOT,1,1,N", "ROBOT,18,3,E"]:
 # Wen Rong added START2 to command.c's dispatch, so unlike START this one is
 # ours to forward. The board answers ACK when it accepts and DONE when the
 # routine returns, minutes later.
-to_android, to_stm = run(["START2"], ["ACK", None, "DONE"])
-check("START2 is forwarded to the board", to_stm, ["START2"])
+to_android, to_stm = run(["START2"], ["ACK,GC", "[GC] ok", "DONE", "ACK", None, "DONE"])
+check("START2 is forwarded to the board, after a gyro zero", to_stm, ["GC", "START2"])
 check(
     "ACK then DONE are both relayed, and ACK does not end the wait",
     to_android,
@@ -214,8 +214,39 @@ check(
 
 # A second START2 mid-run is refused by the board's re-entrancy guard, and
 # BUSY is terminal, so the bridge must not sit waiting after it.
-to_android, to_stm = run(["START2"], ["BUSY"])
+to_android, to_stm = run(["START2"], ["ACK,GC", "[GC] ok", "DONE", "BUSY"])
 check("a refused START2 ends the wait", to_android[-1:], ["STM,BUSY"])
+
+# --- START2: the gyro zero first -----------------------------------------
+# Denzel: Task 2 has no PLAN press, so START2 zeroes the gyro (GC) before
+# handing over. GC's replies stay off the tablet -- its DONE would read as
+# Task 2 finished -- and START2 goes only once GC has answered.
+to_android, to_stm = run(["START2"], ["ACK,GC", "[GC] ok", "DONE", "ACK", "DONE"])
+check("GC goes before START2", to_stm, ["GC", "START2"])
+check(
+    "GC's own replies never reach the tablet",
+    to_android,
+    ["STATUS,RPi bridge ready", "STATUS,SENT,START2", "STM,ACK", "STM,DONE"],
+)
+
+# A failed zero keeps the old one; the clock is running, so drive anyway.
+to_android, to_stm = run(["START2"], ["ACK,GC", "[GC] car was bumped, old zero kept", "ERR", "ACK", "DONE"])
+check("a failed gyro zero still starts Task 2", to_stm, ["GC", "START2"])
+check(
+    "and says so on the tablet",
+    to_android,
+    ["STATUS,RPi bridge ready", "MSG,Gyro zero failed - running on the old zero",
+     "STATUS,SENT,START2", "STM,ACK", "STM,DONE"],
+)
+
+# STOP while the gyro zeroes: the board ACKs the STOP, Task 2 never starts.
+to_android, to_stm = run(["START2", "STOP"], ["ACK,GC", "ACK"])
+check("STOP during the gyro zero never sends START2", to_stm, ["GC", "STOP"])
+check(
+    "and the tablet hears it did not start",
+    to_android[-1:],
+    ["MSG,Task 2 stopped before it started"],
+)
 
 # --- START2: arrow read on SCAN -----------------------------------------
 # Denzel: task_2() says SCAN when it stops in front of an arrow, then waits
@@ -238,11 +269,11 @@ def fake_scan(arrow_ids):
 on_scan, calls = fake_scan([39, 38])
 to_android, to_stm = run(
     ["START2"],
-    ["ACK", "SCAN", "DONE", "SCAN", "DONE", None, "DONE"],
+    ["ACK,GC", "[GC] ok", "DONE", "ACK", "SCAN", "DONE", "SCAN", "DONE", None, "DONE"],
     on_scan=on_scan,
 )
 check("SCAN asks for an arrow once per obstacle", [str(c) for c in calls], ["39", "38"])
-check("the arrows reach the board after START2", to_stm, ["START2", "IM039", "IM038"])
+check("the arrows reach the board after START2", to_stm, ["GC", "START2", "IM039", "IM038"])
 check(
     "an IM's DONE does not end START2; the routine's DONE does",
     to_android,
@@ -253,8 +284,8 @@ check(
 # Nothing seen: nothing is sent, so there is no IM DONE to swallow, and the
 # board's next DONE really is the end of the routine.
 on_scan, calls = fake_scan([None])
-to_android, to_stm = run(["START2"], ["ACK", "SCAN", "DONE"], on_scan=on_scan)
-check("no arrow seen sends nothing to the board", to_stm, ["START2"])
+to_android, to_stm = run(["START2"], ["ACK,GC", "[GC] ok", "DONE", "ACK", "SCAN", "DONE"], on_scan=on_scan)
+check("no arrow seen sends nothing to the board", to_stm, ["GC", "START2"])
 check("no arrow seen still finishes on DONE", to_android[-1:], ["STM,DONE"])
 
 # --- START2: PARKED, Task 2's finish line --------------------------------
@@ -265,7 +296,7 @@ check("no arrow seen still finishes on DONE", to_android[-1:], ["STM,DONE"])
 on_scan, calls = fake_scan([38, 39])
 to_android, to_stm = run(
     ["START2"],
-    ["ACK", "SCAN", "DONE", "SCAN", "DONE", "PARKED", None, "DONE"],
+    ["ACK,GC", "[GC] ok", "DONE", "ACK", "SCAN", "DONE", "SCAN", "DONE", "PARKED", None, "DONE"],
     on_scan=on_scan,
 )
 check(
@@ -365,7 +396,7 @@ def collage_run(report):
     fake.report_task2_images = report
     sys.modules["capture_and_report"] = fake
     module, android, stm = load_bridge(
-        ["START2"], ["ACK", "SCAN", "DONE", "SCAN", "PARKED", "DONE"]
+        ["START2"], ["ACK,GC", "[GC] ok", "DONE", "ACK", "SCAN", "DONE", "SCAN", "PARKED", "DONE"]
     )
     reads = iter([38, None])
 

@@ -476,6 +476,70 @@ def show_task2_images(android):
     send_line(android, f"MSG,Task 2 images on the laptop ({len(numbered)} of {TASK2_OBSTACLES})")
 
 
+# Denzel: zero the gyro (GC) before START2, as test_task2_no_tablet.py does.
+# Task 2 has no PLAN press to do it in, so it happens after START, when
+# nobody may touch the robot anyway -- costing ~2 s of run time (up to 6 s if
+# the board retries). Without it the run relies on the SW1 long-press, which
+# a hand on the car can leave off by a degree a second (see GC in command.c).
+# Set False to skip it and trust the long-press instead.
+TASK2_ZERO_GYRO = True
+GC_TIMEOUT_SECONDS = 8
+
+
+def zero_gyro(stm, android):
+    """Denzel: send GC and wait for its own DONE/ERR, so START2 is neither
+    rejected as BUSY nor has GC's DONE taken for the end of the run.
+
+    Nothing is relayed as STM,...: the tablet would read GC's DONE as Task 2
+    finished and its ERR as an unknown command. Returns "DONE", "ERR",
+    "STOPPED" (a STOP from the tablet abandoned it) or "NO_REPLY".
+    """
+    send_line(stm, "GC")
+    print("RPi -> STM32: GC -- zeroing the gyro, hands off")
+    stop_requested = False
+    deadline = time.monotonic() + GC_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        stop_requested = forward_stop_if_pending(android, stm) or stop_requested
+        raw = stm.readline()
+        if not raw:
+            continue
+        reply = raw.decode("ascii", errors="replace").strip()
+        if not reply:
+            continue
+        print(f"STM32 -> RPi: {reply}")
+        if reply == "ACK" and stop_requested:
+            return "STOPPED"
+        if reply in ("DONE", "ERR"):
+            return reply
+    return "NO_REPLY"
+
+
+def run_task2(stm, android, on_scan=task2_scan):
+    """The tablet's START2: zero the gyro, hand Task 2 to the board, answer
+    its SCANs, then send the images for the collage. test_task2_no_tablet.py
+    runs exactly this, with a stand-in for the tablet."""
+    if TASK2_ZERO_GYRO:
+        result = zero_gyro(stm, android)
+        if result == "STOPPED":
+            send_line(android, "MSG,Task 2 stopped before it started")
+            return
+        if result != "DONE":
+            # The clock is already running: drive on the old zero rather
+            # than not drive at all.
+            print(f"[TASK2] Gyro zero answered {result}; running on the old zero")
+            send_line(android, "MSG,Gyro zero failed - running on the old zero")
+
+    send_line(stm, "START2")
+    send_line(android, "STATUS,SENT,START2")
+    print(f"RPi -> STM32: START2 (Task 2, up to {TASK2_TIMEOUT_SECONDS}s)")
+    task2_frames.clear()
+    relay_stm_replies(stm, android, TASK2_TIMEOUT_SECONDS, "START2", on_scan=on_scan)
+    # Zhenxi: only once the routine is over -- its DONE, a STOP, or the
+    # timeout. The tablet's clock has already stopped on PARKED, so the
+    # collage costs no run time.
+    show_task2_images(android)
+
+
 def main(on_face_known=None, on_scan=task2_scan):
     """Run the bridge. `on_face_known(stm, android, obstacle_number)`, if
     given, is called once -- not on every resend -- the moment an obstacle
@@ -571,17 +635,7 @@ def main(on_face_known=None, on_scan=task2_scan):
                 # DONE when the routine returns, which is why this waits on
                 # the Task 2 budget rather than the per-move one.
                 if command == "START2":
-                    send_line(stm, command)
-                    send_line(android, f"STATUS,SENT,{command}")
-                    print(f"RPi -> STM32: {command} (Task 2, up to {TASK2_TIMEOUT_SECONDS}s)")
-                    task2_frames.clear()
-                    relay_stm_replies(
-                        stm, android, TASK2_TIMEOUT_SECONDS, command, on_scan=on_scan
-                    )
-                    # Zhenxi: only once the routine is over -- its DONE, a
-                    # STOP, or the timeout. The tablet's clock has already
-                    # stopped on PARKED, so the collage costs no run time.
-                    show_task2_images(android)
+                    run_task2(stm, android, on_scan=on_scan)
                     continue
 
                 if not MOVE_PATTERN.fullmatch(command):
