@@ -236,7 +236,7 @@ TX  START2                                     <- the one press
 RX  STATUS,SENT,START2
 RX  STM,ACK                                    "Robot accepted Task 2."
 RX  STM,SCAN                                   "Robot stopped to read an arrow."
-RX  MSG,No arrow seen - board will use its default     <- it retries first
+RX  MSG,No arrow seen (1/4) - board will look again   <- 4 looks, then default
 RX  STM,SCAN
 RX  MSG,Arrow LEFT (39)                        obstacle 1: round the left
 RX  STM,SCAN
@@ -326,6 +326,7 @@ leaves B3 called B3, because the robot has already been told about B3.
 | `STM,<reply>` | relayed board reply | — |
 | `STM,PARKED` | Task 2 over: **stops the clock**. Bare `PARKED` and `STATUS,PARKED` work too | rules |
 | `STM,[WARN] <text>` | board diagnostic; a warning, not a status line | — |
+| `STM,[T2] <text>`, `STM,[GC] …`, `STM,>> …` | board tuning/debug output: **Traffic only**, so Status stays readable mid-run. Any bracketed tag except `[WARN]` and `[IMU]` | C.4 |
 | `ERR,<reason>` | warning — something we sent was refused | — |
 
 `STM,<reply>` covers `READY` `DONE` `ACK` `BUSY` `STALL` `TIMEOUT` `BLOCKED`
@@ -380,7 +381,7 @@ sdk.dir=C:/path/to/your/Android/Sdk
 ```bash
 ./gradlew installDebug     # build and push to a connected device
 ./gradlew assembleDebug    # just build the APK
-./gradlew test             # 94 unit tests, no device needed
+./gradlew test             # 96 unit tests, no device needed
 ```
 
 **Toolchain:** AGP 9.3.1, Gradle 9.5, JDK 25, `compileSdk` 37, `minSdk` 24.
@@ -573,9 +574,9 @@ in the app has to change.
 cd Android && ./gradlew test
 ```
 
-**94 JVM tests, no device needed.**
+**96 JVM tests, no device needed.**
 
-- `ProtocolTest` (39) — every inbound format, both `TARGET` spellings, the Pi
+- `ProtocolTest` (41) — every inbound format, both `TARGET` spellings, the Pi
   bridge's whole vocabulary including `STATUS,PLAN,…` and `PARKED`, and a pile
   of garbage that must not crash it.
 - `ArenaModelTest` (21) — obstacle numbering and reuse, collisions, bounds, the

@@ -68,6 +68,22 @@ sealed class Inbound {
          * map is no longer trustworthy — the same situation as STALL.
          */
         val stoppedShort: Boolean get() = isWarning && "COLLISION" in reply
+
+        /**
+         * Tuning and debug output, for Traffic only: `[T2] obs1 us=…` from
+         * Task 2 (about ten a run on Kush's tuned task_2), `[GC]`, the
+         * calibration programs' `[SEQ]` `[CS]` `[TRS]`…, and older routines'
+         * `>> …` lines. In Status they would bury the lines the operator
+         * actually needs mid-run — the arrows, PARKED, a warning — and C.4
+         * asks for selected information there, not the raw stream.
+         *
+         * Any bracketed tag counts, so a new one stays out of Status without
+         * a code change; `[WARN]` is a warning instead, and `[IMU]` stays
+         * visible because it confirms the gyro calibration done during prep.
+         */
+        val isDiagnostic: Boolean get() =
+            (reply.startsWith("[") && !isWarning && !reply.startsWith("[IMU]")) ||
+                reply.startsWith(">>")
     }
 
     /**

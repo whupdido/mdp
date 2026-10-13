@@ -378,6 +378,8 @@ class MdpViewModel(app: Application) : AndroidViewModel(app) {
                 warn("Robot stopped short of an obstacle. Its position on the map is no longer trustworthy.")
             }
             msg.isWarning -> warn("Robot: ${msg.reply}")
+            // Already in Traffic from onIncoming's note(); Status stays clear.
+            msg.isDiagnostic -> Unit
             else -> say("Robot: ${msg.reply}")
         }
     }
