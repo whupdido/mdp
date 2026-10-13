@@ -371,23 +371,46 @@ def task2_scan(stm, android):
     from capture_and_report import read_arrow
 
     windows_before = len(task2_frames)
+    failed = False
     try:
         class_id = read_arrow(stm, seen=task2_frames)
     except Exception as exc:  # camera or detection server down
         print(f"[TASK2] Arrow read failed: {exc}")
-        send_line(android, "MSG,Arrow read failed - board will use its default")
-        return None
-    finally:
-        # Zhenxi: every window counts, with a frame or without, so that
-        # pick_task2_frames() can tell where one obstacle's windows end.
-        if len(task2_frames) == windows_before:
-            task2_frames.append((None, None))
-    if class_id is None:
-        send_line(android, "MSG,No arrow seen - board will use its default")
-    else:
+        class_id, failed = None, True
+    # Zhenxi: every window counts, with a frame or without, so that
+    # pick_task2_frames() can tell where one obstacle's windows end.
+    if len(task2_frames) == windows_before:
+        task2_frames.append((None, None))
+    if class_id is not None:
         side = "RIGHT" if class_id == 38 else "LEFT"
         send_line(android, f"MSG,Arrow {side} ({class_id})")
-    return class_id
+        return class_id
+
+    # Zhenxi: was "board will use its default" on every miss, but the board
+    # only does that after its fourth -- the first three are followed by
+    # another look. Mid-run, on the tablet, the old line read as "the robot
+    # is about to guess", which is what tempts someone to press STOP.
+    what = "Arrow read failed" if failed else "No arrow seen"
+    scan = task2_scans_at_this_obstacle(task2_frames)
+    if scan >= TASK2_SCANS_PER_OBSTACLE:
+        send_line(android, f"MSG,{what} ({scan}/{TASK2_SCANS_PER_OBSTACLE}) - board takes its default side")
+    else:
+        send_line(android, f"MSG,{what} ({scan}/{TASK2_SCANS_PER_OBSTACLE}) - board will look again")
+    return None
+
+
+def task2_scans_at_this_obstacle(seen, scans=None):
+    """Zhenxi: which scan of the current obstacle the last window was, 1-based.
+
+    Same boundary as pick_task2_frames(): an obstacle's windows end at the
+    first arrow read, or after `scans` misses.
+    """
+    scans = TASK2_SCANS_PER_OBSTACLE if scans is None else scans
+    count, closed = 0, True
+    for class_id, _ in seen:
+        count = 1 if closed else count + 1
+        closed = class_id is not None or count >= scans
+    return count
 
 
 # Zhenxi: Task 2 has two obstacles, and task_2() scans each one at most four

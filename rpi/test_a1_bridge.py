@@ -326,9 +326,36 @@ fake_reader.read_arrow = camera_fault
 bridge.task2_scan(None, tablet)
 fake_reader.read_arrow = framed
 bridge.task2_scan(None, tablet)
-sys.modules.pop("capture_and_report", None)
 check("every scan window is counted once, with a frame or without",
       [str(entry) for entry in bridge.task2_frames], ["(None, None)", "(38, 'f')"])
+
+# Zhenxi: the tablet is told which look this was. Only the fourth miss means
+# the board falls back to its default; the first three get another look.
+def missed(stm, seen=None):
+    seen.append((None, "m"))
+    return None
+
+
+bridge.task2_frames.clear()
+tablet = FakePort("android", [])
+fake_reader.read_arrow = missed
+for _ in range(4):
+    bridge.task2_scan(None, tablet)  # obstacle 1: four misses
+fake_reader.read_arrow = camera_fault
+bridge.task2_scan(None, tablet)      # obstacle 2, first look: camera fault
+fake_reader.read_arrow = framed
+bridge.task2_scan(None, tablet)      # obstacle 2, second look: read
+sys.modules.pop("capture_and_report", None)
+check(
+    "a miss says whether the board looks again or takes its default",
+    tablet.written,
+    ["MSG,No arrow seen (1/4) - board will look again",
+     "MSG,No arrow seen (2/4) - board will look again",
+     "MSG,No arrow seen (3/4) - board will look again",
+     "MSG,No arrow seen (4/4) - board takes its default side",
+     "MSG,Arrow read failed (1/4) - board will look again",
+     "MSG,Arrow RIGHT (38)"],
+)
 
 
 def collage_run(report):

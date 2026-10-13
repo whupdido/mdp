@@ -217,6 +217,35 @@ class ProtocolTest {
         assertEquals(Inbound.StmReply("PARKED!"), parseInbound("STM,PARKED!"))
     }
 
+    // --- board chatter stays out of Status ----------------------------------
+
+    @Test fun `task 2 tuning lines are diagnostics, not status`() {
+        listOf(
+            "STM,[T2] obs1 us=41.3cm drive=213mm",
+            "STM,[T2] park turn=92 extra_back=0mm",
+            "STM,[GC] stopped, old zero kept",
+            "STM,[SEQ] run=3 end heading_err_deg=0.41",
+            "STM,>> Target Matched!",
+        ).forEach {
+            val reply = parseInbound(it) as Inbound.StmReply
+            assertTrue("failed on <$it>", reply.isDiagnostic)
+            assertFalse("failed on <$it>", reply.isWarning)
+        }
+    }
+
+    @Test fun `warnings, gyro calibration and replies are not diagnostics`() {
+        listOf(
+            "STM,[WARN] COLLISION AVOIDED! Stopping early.",
+            "STM,[IMU] Gyro bias locked.",
+            "STM,SCAN",
+            "STM,DONE",
+            "STM,READY",
+        ).forEach {
+            val reply = parseInbound(it) as Inbound.StmReply
+            assertFalse("failed on <$it>", reply.isDiagnostic)
+        }
+    }
+
     @Test fun `bare STM with no reply is not mistaken for a reply`() {
         assertTrue(parseInbound("STM,") is Inbound.Unknown)
     }
