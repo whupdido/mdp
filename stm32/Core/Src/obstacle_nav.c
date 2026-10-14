@@ -428,7 +428,7 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    right at 40-70 cm and IR_TO_CENTRE_MM (calib.h); CAL_IR measures both.
    If the pass did not see obstacle 1 it searches as before. */
 #ifndef T2_PARK_DIRECT
-#define T2_PARK_DIRECT          1
+#define T2_PARK_DIRECT          0
 uint8_t  t2_direct_used = 0u;
 float    t2_direct_side_cm = 0.0f;
 uint16_t t2_direct_n = 0u;
@@ -458,7 +458,7 @@ uint16_t t2_direct_n = 0u;
    T2_PARK_MAX_MM, T2_PARK_NO_ECHO_MM if there is no echo at all, and the
    ultrasonic stops it early below T2_PARK_GUARD_CM. */
 #define T2_PARK_STOP_CM         9.0f
-#define T2_PARK_GUARD_CM        7.0f
+#define T2_PARK_GUARD_CM        20.0f
 #define T2_PARK_MAX_MM          400
 #define T2_PARK_NO_ECHO_MM      150
 
@@ -1184,25 +1184,25 @@ static void task_2_run(void)
 	/* Kush (12-Oct, T2_FEWER_PAUSES): no pause before these reads or before
 	   the pings below. The car is standing still with its wheels centred,
 	   and the move after them centres the steering and waits itself. */
-	servo_us(SERVO_CENTRE);
-	if (!T2_FEWER_PAUSES) HAL_Delay(150);
-
-	float park_ir_left  = ir_filtered_cm(IR_SIDE_LEFT);
-	float park_ir_right = ir_filtered_cm(IR_SIDE_RIGHT);
-
-	if (park_ir_left < 15.0f && park_ir_right >= 20.0f) {
-		t2_status("Shift Right!    ");
-		move_turn_deg(0, 1, 10);
-		move_turn_deg(1, 1, 10);
-	}
-	else if (park_ir_right < 15.0f && park_ir_left >= 20.0f) {
-		t2_status("Shift Left!     ");
-		move_turn_deg(1, 1, 10);
-		move_turn_deg(0, 1, 10);
-	}
-
-	servo_us(SERVO_CENTRE);
-	if (!T2_FEWER_PAUSES) HAL_Delay(150);
+//	servo_us(SERVO_CENTRE);
+//	if (!T2_FEWER_PAUSES) HAL_Delay(150);
+//
+//	float park_ir_left  = ir_filtered_cm(IR_SIDE_LEFT);
+//	float park_ir_right = ir_filtered_cm(IR_SIDE_RIGHT);
+//
+//	if (park_ir_left < 15.0f && park_ir_right >= 20.0f) {
+//		t2_status("Shift Right!    ");
+//		move_turn_deg(0, 1, 10);
+//		move_turn_deg(1, 1, 10);
+//	}
+//	else if (park_ir_right < 15.0f && park_ir_left >= 20.0f) {
+//		t2_status("Shift Left!     ");
+//		move_turn_deg(1, 1, 10);
+//		move_turn_deg(0, 1, 10);
+//	}
+//
+//	servo_us(SERVO_CENTRE);
+//	if (!T2_FEWER_PAUSES) HAL_Delay(150);
 
 	/* Precision ultrasonic stop at the back wall: one move to T2_PARK_STOP_CM
 	 * instead of 30 mm creeps, with the ultrasonic as a guard. */

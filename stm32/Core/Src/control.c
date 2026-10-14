@@ -729,7 +729,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 
 			/* GYRO FIX: Let the physical crash shockwave dissipate so
 			 * the gyro returns to absolute 0 before calculating remaining angle! */
-			HAL_Delay(400);
+			HAL_Delay(200);
 
 			float remaining_deg = target_deg_total - accum_deg;
 
@@ -750,7 +750,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 				/* Physically swing the wheels to the opposite lock */
 				if (turn_left) servo_us(SERVO_LEFT);
 				else           servo_us(SERVO_RIGHT);
-				HAL_Delay(250);
+				HAL_Delay(100);
 
 				reset_speed_pid();
 
@@ -763,7 +763,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 				//stop_hardware(MOVE_BLOCKED);
 				stop_hardware(MOVE_DONE);
 				busy_flag = 0; /* Turn is basically complete, safe to abort */
-				HAL_Delay(250);
+				HAL_Delay(100);
 				command_send("\r\n[WARN] Turn almost complete. Aborting.\r\n");
 				return 0;
 			}
@@ -1117,8 +1117,8 @@ void control_tick(void)
 				/* --- The Direct Gains --- */
 				float HEADING_KP = 130.0f;
 				float POS_KP     = 0.0f;
-				float STEER_KI   = 0.0f;//2.0f;
-				float STEER_KD   = 3.5f;//5.0f;
+				float STEER_KI   = 1.0f;//2.0f;
+				float STEER_KD   = 4.0f;//5.0f;
 				const int16_t MAX_STEER_TRIM = 220;
 
 				/* 4. Integral Accumulation (Auto-Trim) */
@@ -1290,7 +1290,7 @@ void control_tick(void)
 			if (target_deg_total > 45.0f) {
 				const float DECEL_DEG = 20.0f;
 				if (remaining_deg < DECEL_DEG) {
-					target_base_speed = (float)(dir_forward * 30.0f); /* Crawl speed */
+					target_base_speed = (float)(dir_forward * 40.0f); /* Crawl speed */
 				}
 			}
 

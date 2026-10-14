@@ -448,7 +448,7 @@ uint8_t check_front_collision(void)
     const uint32_t now = HAL_GetTick();
     if ((now - t1) > 100u || (t1 - t0) > 100u) return 0;   /* not two fresh, consecutive pings */
 
-    if (d1 < 5.0f && d0 < 5.0f) {
+    if (d1 < 15.0f && d0 < 15.0f) {
     	OLED_Clear();
     	char buf[32];
     	snprintf(buf, sizeof(buf), "Object %fcm away!", d1);

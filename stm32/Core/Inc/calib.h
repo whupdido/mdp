@@ -154,8 +154,8 @@
 #ifndef TURN_FAST
 #define TURN_FAST               1
 #endif
-#define SPEED_TURN_FAST         65      /* commanded, middle of a turn               */
-#define TURN_FAST_RAMP_UP       2.4f    /* command steps per tick speeding up (1.2)  */
+#define SPEED_TURN_FAST         85      /* commanded, middle of a turn               */
+#define TURN_FAST_RAMP_UP       4.0f    /* command steps per tick speeding up (1.2)  */
 #define TURN_FAST_HANDOVER_DEG  20.0f   /* back at SPEED_TURN this far before slowing */
 
 /* Kush (12-Oct): three more speed-ups, each with its own switch: 1 = on,
@@ -182,7 +182,7 @@
 #ifndef STRAIGHT_FAST_START
 #define STRAIGHT_FAST_START     1
 #endif
-#define STRAIGHT_RAMP_UP_X      2.0f
+#define STRAIGHT_RAMP_UP_X      4.0f
 #ifndef STRAIGHT_SETTLE_FAST
 #define STRAIGHT_SETTLE_FAST    1
 #endif
@@ -190,8 +190,8 @@
 #define T2_FEWER_PAUSES         1
 #endif
 
-#define T2_SPEED_STRAIGHT   80      /* Task 2 cruise (60 as tested; 80 since 11-Oct) */
-#define T2_SPEED_CRAWL      15      /* Task 2 crawl, as tested (pre-0c37bfe)     */
+#define T2_SPEED_STRAIGHT   120      /* Task 2 cruise (60 as tested; 80 since 11-Oct) */
+#define T2_SPEED_CRAWL      50      /* Task 2 crawl, as tested (pre-0c37bfe)     */
 /* Extra feedforward for Task 2's forward straights, in duty per count/tick of
    command above the crawl (see MODE_STRAIGHT in control.c). 0 = off, as in
    the original. 250 made the wheels really do the command (0.82 m/s at 60
