@@ -95,6 +95,13 @@ class Server:
         self.main_model = self.models[self.main_model_idx]
         print(f"[SERVER] Main model = index {self.main_model_idx}: {model_configs[self.main_model_idx]['path']}")
 
+        # Denzel: the first predict takes ~1 s more than the rest (~0.1 s), so
+        # pay it now rather than at the first obstacle.
+        blank = np.zeros((480, 640, 3), np.uint8)
+        for model in self.models:
+            model.predict(blank, imgsz=(480, 640), verbose=False)
+        print("[SERVER] Models warmed up")
+
         # =========================
         # Socket setup
         # =========================
@@ -114,7 +121,6 @@ class Server:
     # ==========================================================
     def _run_model(self, model, obj, results_list, idx):
         try:
-            print(obj)
             if "frames" in obj:
                 frames = obj["frames"]
             elif "frame" in obj:
@@ -168,6 +174,13 @@ class Server:
                 if obj is None:
                     break
                 saved_filename = None
+                request_start = time.monotonic()
+                # Denzel: the Pi now sends a JPEG (~50 KB) instead of the raw
+                # frame (~900 KB). Decode it back; raw frames still work.
+                if "jpeg" in obj and "frame" not in obj:
+                    obj["frame"] = cv2.imdecode(
+                        np.frombuffer(obj.pop("jpeg"), np.uint8), cv2.IMREAD_COLOR
+                    )
 
                 # ---- Run models in parallel ----
                 results = [None] * len(self.models)
@@ -178,6 +191,7 @@ class Server:
                     threads.append(t)
                 for t in threads:
                     t.join()
+                print(f"[SERVER] Detection took {time.monotonic() - request_start:.2f}s")
 
                 # ---- Pick the single closest image ----
                 # A frame can contain several images (e.g. a neighbouring

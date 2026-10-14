@@ -82,6 +82,7 @@ def load_bridge(android_script, stm_script):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.STM_TIMEOUT_SECONDS = 0.3  # keep the no-reply path quick
+    module.TASK2_WARM_CAMERA = False  # no camera here
     return module, android, stm
 
 

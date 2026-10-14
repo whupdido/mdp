@@ -1,13 +1,15 @@
 import struct, json, pickle
 
 def recv_exact(conn, n: int):
-    buf = b""
+    # bytearray, not bytes +=, which copied the whole buffer again for every
+    # small Wi-Fi chunk of a frame.
+    buf = bytearray()
     while len(buf) < n:
         chunk = conn.recv(n - len(buf))
         if not chunk:
             return None
         buf += chunk
-    return buf
+    return bytes(buf)
 
 def send_json(conn, obj: dict):
     data = json.dumps(obj).encode("utf-8")

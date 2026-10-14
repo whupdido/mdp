@@ -518,26 +518,52 @@ def run_task2(stm, android, on_scan=task2_scan):
     """The tablet's START2: zero the gyro, hand Task 2 to the board, answer
     its SCANs, then send the images for the collage. test_task2_no_tablet.py
     runs exactly this, with a stand-in for the tablet."""
-    if TASK2_ZERO_GYRO:
-        result = zero_gyro(stm, android)
-        if result == "STOPPED":
-            send_line(android, "MSG,Task 2 stopped before it started")
-            return
-        if result != "DONE":
-            # The clock is already running: drive on the old zero rather
-            # than not drive at all.
-            print(f"[TASK2] Gyro zero answered {result}; running on the old zero")
-            send_line(android, "MSG,Gyro zero failed - running on the old zero")
+    camera = start_warm_camera()
+    try:
+        if TASK2_ZERO_GYRO:
+            result = zero_gyro(stm, android)
+            if result == "STOPPED":
+                send_line(android, "MSG,Task 2 stopped before it started")
+                return
+            if result != "DONE":
+                # The clock is already running: drive on the old zero rather
+                # than not drive at all.
+                print(f"[TASK2] Gyro zero answered {result}; running on the old zero")
+                send_line(android, "MSG,Gyro zero failed - running on the old zero")
 
-    send_line(stm, "START2")
-    send_line(android, "STATUS,SENT,START2")
-    print(f"RPi -> STM32: START2 (Task 2, up to {TASK2_TIMEOUT_SECONDS}s)")
-    task2_frames.clear()
-    relay_stm_replies(stm, android, TASK2_TIMEOUT_SECONDS, "START2", on_scan=on_scan)
+        send_line(stm, "START2")
+        send_line(android, "STATUS,SENT,START2")
+        print(f"RPi -> STM32: START2 (Task 2, up to {TASK2_TIMEOUT_SECONDS}s)")
+        task2_frames.clear()
+        relay_stm_replies(stm, android, TASK2_TIMEOUT_SECONDS, "START2", on_scan=on_scan)
+    finally:
+        if camera is not None:
+            camera.stop()
     # Zhenxi: only once the routine is over -- its DONE, a STOP, or the
     # timeout. The tablet's clock has already stopped on PARKED, so the
     # collage costs no run time.
     show_task2_images(android)
+
+
+# Denzel: open the camera at START2 and keep it reading for the whole run,
+# so a SCAN does not pay ~0.6 s to open it and wait for its first frame.
+# It starts before the gyro zero, so it warms up during those ~2 s.
+TASK2_WARM_CAMERA = True
+
+
+def start_warm_camera():
+    """The started capture_and_report.warm_camera, or None if it could not
+    start -- then each scan opens the camera itself, as before."""
+    if not TASK2_WARM_CAMERA:
+        return None
+    try:
+        from capture_and_report import warm_camera
+        warm_camera.start()
+    except Exception as exc:  # no camera, no cv2: scans fall back
+        print(f"[TASK2] Warm camera not started ({exc}); each scan opens its own")
+        return None
+    print("[TASK2] Camera warm for the run")
+    return warm_camera
 
 
 def main(on_face_known=None, on_scan=task2_scan):
