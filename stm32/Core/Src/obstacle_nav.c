@@ -429,6 +429,9 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    If the pass did not see obstacle 1 it searches as before. */
 #ifndef T2_PARK_DIRECT
 #define T2_PARK_DIRECT          1
+uint8_t  t2_direct_used = 0u;
+float    t2_direct_side_cm = 0.0f;
+uint16_t t2_direct_n = 0u;
 #endif
 #define T2_DIRECT_MIN_N         6u      /* IR samples along obstacle 1's side, at least */
 #define T2_DIRECT_MIN_MM        15      /* a middle straight shorter than this is skipped */
@@ -1081,7 +1084,9 @@ static void task_2_run(void)
 	uint16_t side_n = 0u;
 	const uint8_t direct = (T2_PARK_DIRECT && w.triggered &&
 	                        watch_face_level(T2_FIT_TRIM, T2_DIRECT_MIN_N, &side_cm, &side_n)) ? 1u : 0u;
-
+	t2_direct_used = direct;
+	t2_direct_side_cm = side_cm;
+	t2_direct_n = side_n;
 	/* Turn into behind obstacle 1 (South -> East/West) */
 	move_turn_deg(turn_in, 1, 90);
 	accum_forward -= R_in; /* Sweeps South */

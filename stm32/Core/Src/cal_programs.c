@@ -156,6 +156,10 @@
 #define CAL_DEG2RAD     (3.14159265f / 180.0f)
 
 extern int calibrated;         /* main.c: set once the gyro bias is locked       */
+ extern uint8_t  t2_direct_used;
+ extern float    t2_direct_side_cm;
+ extern uint16_t t2_direct_n;
+
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -1209,8 +1213,10 @@ void cal_task2_step(uint8_t arrow_obs1, uint8_t arrow_obs2)
         OLED_Clear();
         cal_line(0,  "TASK 2 run %u", run);
         cal_line(10, "DONE %.2f s", (double)ms * 0.001);
-        cal_line(20, "obs1 %c, obs2 %c", a1, a2);
-        cal_line(30, "(no scan time)");
+        cal_line(20, "direct=%u s=%.1fcm n=%u",
+                 (unsigned)t2_direct_used, (double)t2_direct_side_cm,
+                 (unsigned)t2_direct_n);
+        cal_line(30, "obs1 %c, obs2 %c", a1, a2);
         cal_line(50, "SW1 = run again");
         OLED_Refresh_Gram();
         snprintf(u, sizeof u, "[T2L] run %u done in %lu ms (no scan time) obs1=%s obs2=%s\r\n",
