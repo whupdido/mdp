@@ -222,6 +222,11 @@ float ir_filtered_cm(uint8_t side)
     return ir_filt[(side == IR_LEFT) ? IR_LEFT : IR_RIGHT];
 }
 
+float ir_voltage(uint8_t side)
+{
+    return ir_volts((side == IR_LEFT) ? IR_LEFT : IR_RIGHT);
+}
+
 /**
  * @brief Formats the voltages into strings for your OLED screen.
  */

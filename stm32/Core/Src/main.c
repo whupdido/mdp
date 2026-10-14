@@ -87,11 +87,15 @@
                     waits 0.8 s, zeroes the gyro hands-off (as the Pi's GC
                     does), then runs; SW1 again stops the car. The OLED shows
                     the run time at the end. No long press needed first.
+     CAL_IR         the side IRs, nothing drives: a board at 10-70 cm on each
+                    side in turn (fits the IR_*_M/_B/_K in calib.h), then the
+                    car in the carpark (IR_TO_CENTRE_MM), then a live view.
+                    Results and #define lines on USART3.
 
-   A tap drives the car in every program except CAL_OFF and CAL_ODOMETER
-   (which free-wheels the motors instead), so set CAL_PROGRAM back to CAL_OFF
-   before a real run. */
-#define CAL_PROGRAM      CAL_TASK2
+   A tap drives the car in every program except CAL_OFF, CAL_ODOMETER
+   (which free-wheels the motors instead) and CAL_IR, so set CAL_PROGRAM back
+   to CAL_OFF before a real run. */
+#define CAL_PROGRAM      CAL_IR
 
 /* Kush (09-Oct): 1 = run the calibration programs (and any FW/BW/FL/... from
    the Pi) on the Task 2 speed profile instead of the Task 1 one, so CAL_TRACE,
@@ -219,6 +223,8 @@ static void cal_ready_screen(void)
     cal_trace_show_idle();
 #elif CAL_PROGRAM == CAL_TASK2
     cal_task2_show_idle(CAL_T2_ARROW_OBS1, CAL_T2_ARROW_OBS2);
+#elif CAL_PROGRAM == CAL_IR
+    cal_ir_show_idle();
 #endif
 }
 /* USER CODE END 0 */
@@ -297,6 +303,8 @@ int main(void)
       command_poll();
 #if CAL_PROGRAM == CAL_ODOMETER
       cal_odometer_poll();   /* redraws the live reading every 200 ms */
+#elif CAL_PROGRAM == CAL_IR
+      cal_ir_poll();         /* the live view at the end, every 200 ms */
 #endif
       /* --- User Button (SW1 / PE0) --- *
        * Debounced, and waits for release before acting. The original read the
@@ -367,6 +375,8 @@ int main(void)
                   cal_trace_step();
 #elif CAL_PROGRAM == CAL_TASK2
                   cal_task2_step(CAL_T2_ARROW_OBS1, CAL_T2_ARROW_OBS2);
+#elif CAL_PROGRAM == CAL_IR
+                  cal_ir_step();
 #else
                   display_both_sensors_oled();
 #endif

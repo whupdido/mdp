@@ -218,19 +218,23 @@
    offset, and it pays for the bend at the near end of the range, which is
    exactly where the readings are being used to avoid hitting things.
 
-   These are the values measured on this car. The on-car calibration UI that
-   produced them has been removed, so they are now fixed here.               */
-#define IR_LEFT_M           19.22f
-#define IR_LEFT_B           0.210f
-#define IR_LEFT_K           0.0f
-#define IR_RIGHT_M          20.80f
-#define IR_RIGHT_B          0.073f
-#define IR_RIGHT_K          0.0f
+   Kush (14-Oct): measured with CAL_IR (cal_programs.c), a board 10 to 70 cm
+   from each lens. Worst errors left over: -2.8 cm (left) and -3.9 cm (right),
+   both at 60 cm. The values before (left 19.22 / 0.210 / 0, right
+   20.80 / 0.073 / 0, from a sweep to ~60 cm) were off by up to +8.8 cm at
+   70 cm (left) and -16.0 cm at 60 cm (right). Run CAL_IR again if a sensor
+   is moved or swapped.                                                      */
+#define IR_LEFT_M           27.20f
+#define IR_LEFT_B           0.081f
+#define IR_LEFT_K           2.04f
+#define IR_RIGHT_M          42.93f
+#define IR_RIGHT_B          (-0.110f)
+#define IR_RIGHT_K          9.40f
 
 /* Range the readings are trusted over. Below IR_MIN_CM the response curve
    folds back on itself, so a 5 cm target reads the same as a 20 cm one.
-   The calibration sweep went to about 60 cm; past that the curve is flat, so
-   a reading of 60-80 cm only says roughly how far, not exactly.
+   CAL_IR's sweep goes to 70 cm; past that the curve is flat, so a reading of
+   70-80 cm only says roughly how far, not exactly.
    Kush (11-Oct): IR_MAX_CM 60 -> 80 (the sensor's rated range) so the Task 2
    search for obstacle 1 on the way back can tell "something at 60-70 cm"
    from open space (obstacle_nav.c, T2_OBS1_FAR_CM). Every other IR check
@@ -238,6 +242,15 @@
    (60, clamped) as it does now (60-80).                                      */
 #define IR_MIN_CM           10.0f
 #define IR_MAX_CM           80.0f
+
+/* Kush (14-Oct): from each side IR's lens to the car's centre line, mm. What
+   a side IR reads plus this is how far the centre line is from what it sees;
+   T2_PARK_DIRECT (obstacle_nav.c) works out how far out the car is from it.
+   CAL_IR's last step, between the carpark walls with the values above: 55,
+   which puts the lenses about 11 cm apart, ~4 cm in from the sides of the
+   188 mm body (it was 94, the simulator's guess). Measure it again with
+   CAL_IR whenever the IR values change. */
+#define IR_TO_CENTRE_MM     55
 
 /* --- safety limits, in 10 ms control ticks ---
    These exist because a stalled motor held at full duty is what tripped the

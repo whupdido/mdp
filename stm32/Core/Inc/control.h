@@ -132,6 +132,9 @@ typedef struct {
                               car slows to it before the arm point.               */
     uint8_t  log_face;     /* record (distance, IR) while the IR sees something,
                               for watch_face_fit()                                */
+    int32_t  min_seen_mm;  /* WATCH_IR_PASS: something seen over less than this
+                              much driving, then lost, was noise: forget it and
+                              keep looking (0 = off, as before)                   */
     /* --- filled in by the move --- */
     uint8_t  triggered;
     uint8_t  seen;         /* WATCH_IR_PASS: it did see something                 */
@@ -139,6 +142,7 @@ typedef struct {
     int32_t  trigger_mm;   /* where the condition was confirmed                   */
     float    trigger_speed_mm_tick; /* measured speed then, mm per 10 ms tick     */
     int32_t  driven_mm;    /* encoder distance actually covered, coast included   */
+    uint8_t  blips;        /* WATCH_IR_PASS: flickers min_seen_mm threw away      */
 } watch_t;
 
 #define WATCH_CONFIRM_TICKS  2u
@@ -153,6 +157,10 @@ uint8_t move_straight_watch(int32_t max_mm, watch_t *w);
    Returns 0 if fewer than min_n samples or less than min_span_mm remain. */
 uint8_t watch_face_fit(float trim, uint16_t min_n, float min_span_mm,
                        float *slope_cm_per_mm, uint16_t *n_used, float *span_mm);
+
+/* Kush (14-Oct): median IR distance over the same samples, trimmed the same
+   way: how far away the face was. Returns 0 if fewer than min_n remain. */
+uint8_t watch_face_level(float trim, uint16_t min_n, float *level_cm, uint16_t *n_used);
 
 /* Raw form: counts is the arc length in encoder counts. Used for calibration. */
 void move_turn(int8_t left, int8_t forward, int32_t counts);

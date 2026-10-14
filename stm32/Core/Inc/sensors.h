@@ -86,6 +86,10 @@ float get_sharp_ir_right_cm(void);
    it. This is what the Task 2 sensing uses. side = IR_SIDE_LEFT / _RIGHT. */
 float ir_filtered_cm(uint8_t side);
 
+/* Kush (14-Oct): the voltage one sensor gives right now (the mean of its
+   IR_OVERSAMPLE DMA samples), before the conversion to cm. For CAL_IR. */
+float ir_voltage(uint8_t side);
+
 /**
  * @brief Formats the voltages into strings for your OLED screen.
  */

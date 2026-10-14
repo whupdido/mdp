@@ -26,6 +26,7 @@
 #define CAL_SEQ       12   /* turns then a straight, as in a run: tilt check */
 #define CAL_TRACE     13   /* one straight traced tick by tick: why it turns */
 #define CAL_TASK2     14   /* all of Task 2 with no Pi: arrows from main.c   */
+#define CAL_IR        15   /* side IRs: fit each, IR_TO_CENTRE_MM, live view */
 
 /* Usable in #if. The kind is 0 FR, 1 FL, 2 BR, 3 BL: the order turn_test.c
    runs them in, and TT_FR..TT_BL in turn_test.h. */
@@ -58,5 +59,11 @@ void cal_trace_step(void);
    obstacle_nav.h) instead of read by the Pi. A tap runs it once. */
 void cal_task2_show_idle(uint8_t arrow_obs1, uint8_t arrow_obs2);
 void cal_task2_step(uint8_t arrow_obs1, uint8_t arrow_obs2);
+
+/* CAL_IR: nothing drives. show_idle starts it over; poll redraws the live
+   view at the end (call every main-loop pass). */
+void cal_ir_show_idle(void);
+void cal_ir_step(void);
+void cal_ir_poll(void);
 
 #endif /* CAL_PROGRAMS_H */

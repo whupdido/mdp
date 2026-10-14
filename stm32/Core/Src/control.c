@@ -183,6 +183,8 @@ typedef struct {
     int32_t  arm_counts;    /* in accum_counts units, like the move's target   */
     int32_t  after_counts;
     int32_t  l0, r0;        /* encoder totals at the start of the move         */
+    int32_t  min_seen_mm;
+    uint8_t  blips;
     int32_t  seen_mm;       /* positions reported back are encoder distance:   */
     int32_t  trigger_mm;    /*  accum_counts halves (L+R) in integers and runs */
     float    trigger_speed; /*  ~1 % short, driven_mm does not                  */
@@ -392,6 +394,18 @@ static void straight_watch_tick(void)
     if (!cond) { watch_rt.cond_ticks = 0u; return; }
     if (++watch_rt.cond_ticks < WATCH_CONFIRM_TICKS) return;
 
+    /* Kush (14-Oct): seen over less than min_seen_mm, then lost: a flicker
+       of noise, not a face. Forget it (and what the face log took from it)
+       and keep looking. */
+    if (watch_rt.kind == WATCH_IR_PASS && (mm - watch_rt.seen_mm) < watch_rt.min_seen_mm) {
+        watch_rt.seen       = 0u;
+        watch_rt.seen_ticks = 0u;
+        watch_rt.cond_ticks = 0u;
+        if (watch_rt.blips < 255u) watch_rt.blips++;
+        if (watch_rt.log_face) face_log_n = 0u;
+        return;
+    }
+
     /* Confirmed. Stop after_counts from here -- or further, if the car needs
        more room than that to slow to its crawl, so it always stops the
        normal way instead of braking hard from speed. */
@@ -581,6 +595,7 @@ uint8_t move_straight_watch(int32_t max_mm, watch_t *w)
     w->trigger_mm = 0;
     w->trigger_speed_mm_tick = 0.0f;
     w->driven_mm = 0;
+    w->blips     = 0u;
     if (max_mm <= 0 || motion_abort_requested()) return 0;
 
     const int32_t l0 = enc_left_total, r0 = enc_right_total;
@@ -591,6 +606,8 @@ uint8_t move_straight_watch(int32_t max_mm, watch_t *w)
     watch_rt.kind          = (uint8_t)w->kind;
     watch_rt.side          = w->ir_side;
     watch_rt.log_face      = w->log_face;
+    watch_rt.min_seen_mm   = (w->kind == WATCH_IR_PASS) ? w->min_seen_mm : 0;
+    watch_rt.blips         = 0u;
     watch_rt.thresh_cm     = w->thresh_cm;
     watch_rt.sense_speed   = w->sense_speed;
     watch_rt.arm_counts    = (w->arm_mm > 0) ? (int32_t)((float)w->arm_mm / MM_PER_COUNT) : 0;
@@ -618,6 +635,7 @@ uint8_t move_straight_watch(int32_t max_mm, watch_t *w)
     w->triggered  = watch_rt.triggered;
     w->seen       = watch_rt.seen;
     w->seen_mm    = watch_rt.seen_mm;
+    w->blips      = watch_rt.blips;
     w->trigger_mm = watch_rt.trigger_mm;
     w->trigger_speed_mm_tick = watch_rt.trigger_speed * MM_PER_COUNT;
     w->driven_mm  = wheels_mm_since(l0, r0);
@@ -649,6 +667,30 @@ uint8_t watch_face_fit(float trim, uint16_t min_n, float min_span_mm,
     const float den = m * sxx - sx * sx;
     if (den <= 1e-3f) return 0u;
     *slope_cm_per_mm = (m * sxy - sx * sy) / den;
+    return 1u;
+}
+
+uint8_t watch_face_level(float trim, uint16_t min_n, float *level_cm, uint16_t *n_used)
+{
+    static float s[FACE_LOG_MAX];
+    const uint16_t n = face_log_n;
+    const uint16_t cut = (uint16_t)((float)n * trim);
+    const uint16_t lo = cut;
+    const uint16_t hi = (n > cut) ? (uint16_t)(n - cut) : 0u;   /* exclusive */
+    uint16_t m = 0u;
+
+    for (uint16_t i = lo; i < hi; i++) s[m++] = face_log_cm[i];
+    *n_used   = m;
+    *level_cm = 0.0f;
+    if (m == 0u || m < min_n) return 0u;
+
+    for (uint16_t i = 1u; i < m; i++) {          /* insertion sort, m <= 256 */
+        const float v = s[i];
+        int16_t j = (int16_t)(i - 1u);
+        while (j >= 0 && s[j] > v) { s[j + 1] = s[j]; j--; }
+        s[j + 1] = v;
+    }
+    *level_cm = (m & 1u) ? s[m / 2u] : 0.5f * (s[m / 2u - 1u] + s[m / 2u]);
     return 1u;
 }
 

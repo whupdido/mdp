@@ -388,9 +388,21 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    the search starts (open space, or a wall on the far side of the course),
    and never less than T2_OBS1_CM. With the rules' layout the next thing that
    side IR could see is the wall beyond the far end of obstacle 2, about 1 m
-   or more away (its 50 cm clearance + obstacle 2 + the car's own offset). */
-#define T2_OBS1_FAR_CM          70.0f
+   or more away (its 50 cm clearance + obstacle 2 + the car's own offset).
+   Kush (14-Oct): with the IRs calibrated by CAL_IR and their lenses 5.5 cm
+   from the centre line (4 cm further in than the simulator had them),
+   obstacle 1 reads ~4 cm further away than it did there: up to ~73 cm with
+   a 1 m wide obstacle 2, past the old 70. So T2_OBS1_FAR_CM 70 -> 75. To
+   reach it, an open-space reading (80, the cap) only loses
+   T2_OBS1_OPEN_MARGIN_CM; anything nearer (a wall) still loses 10. Past
+   70 cm the curve is flat and noise is worth a few cm, so the search also
+   ignores anything seen over less than T2_OBS1_MIN_SEEN_MM of driving
+   before it is lost: obstacle 1's side is 10 cm long, a noise flicker a few
+   mm. An obstacle 2 wider than ~1.05 m still puts obstacle 1 out of reach. */
+#define T2_OBS1_FAR_CM          75.0f
 #define T2_OBS1_MARGIN_CM       10.0f
+#define T2_OBS1_OPEN_MARGIN_CM  5.0f
+#define T2_OBS1_MIN_SEEN_MM     30
 /* Kush (12-Oct): the S-shift on the way home, before the search for
    obstacle 1 (two 30 deg turns inward, undone by a reverse after the turn
    behind obstacle 1). 1 = every run, as before. 0 = skipped when, just
@@ -404,6 +416,22 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
 #define T2_RETURN_S_SHIFT       0
 #endif
 #define T2_RETURN_WALL_CM       40.0f
+/* Kush (14-Oct): park straight off the pass by obstacle 1 on the way home.
+   1 = the inner IR's distance to obstacle 1's side face as the car drives
+   past it (the median of what the watch logged along it) gives how far out
+   the car is. It turns in behind obstacle 1 as before, drives whatever that
+   leaves over the two turns (R_in + R_out, ~63 cm, so often nothing) and
+   turns out straight into the carpark. 0 = the search along obstacle 1's
+   back face, its tilt fit and the reverse after it, as before. Simulated
+   over 200 layouts: ~4.5 s quicker, same clearances, parked closer to the
+   centre line (3 cm off on average against 4.5). It needs the side IRs
+   right at 40-70 cm and IR_TO_CENTRE_MM (calib.h); CAL_IR measures both.
+   If the pass did not see obstacle 1 it searches as before. */
+#ifndef T2_PARK_DIRECT
+#define T2_PARK_DIRECT          1
+#endif
+#define T2_DIRECT_MIN_N         6u      /* IR samples along obstacle 1's side, at least */
+#define T2_DIRECT_MIN_MM        15      /* a middle straight shorter than this is skipped */
 /* Behind obstacle 1, where the car stops sets where it lines up with the
    carpark. The old creep stopped 0-50 mm past the edge (25 on average),
    judged at a standstill. The watch confirms the edge a little late (sensor
@@ -445,10 +473,24 @@ static uint8_t t2_given_arrow[2] = { 0u, 0u };
 static void t2_log_watch(const char *name, const watch_t *w)
 {
     char u[112];
-    snprintf(u, sizeof u, "[T2] %s trig=%u seen=%u at=%ldmm drove=%ldmm v=%.2fmm/tick\r\n",
+    snprintf(u, sizeof u, "[T2] %s trig=%u seen=%u at=%ldmm drove=%ldmm v=%.2fmm/tick%s\r\n",
              name, (unsigned)w->triggered, (unsigned)w->seen, (long)w->trigger_mm,
-             (long)w->driven_mm, (double)w->trigger_speed_mm_tick);
+             (long)w->driven_mm, (double)w->trigger_speed_mm_tick,
+             w->blips ? " (ignored a flicker)" : "");
     command_send(u);
+}
+
+/* How far the search for obstacle 1 may look, from what the inner IR reads
+   standing still beforehand: T2_OBS1_OPEN_MARGIN_CM short of an open-space
+   reading (the cap), T2_OBS1_MARGIN_CM short of anything else, never more
+   than T2_OBS1_FAR_CM or less than T2_OBS1_CM. */
+static float t2_obs1_range_cm(float ir_open)
+{
+    const float margin = (ir_open >= IR_MAX_CM - 0.5f) ? T2_OBS1_OPEN_MARGIN_CM : T2_OBS1_MARGIN_CM;
+    float r = ir_open - margin;
+    if (r > T2_OBS1_FAR_CM) r = T2_OBS1_FAR_CM;
+    if (r < T2_OBS1_CM)     r = T2_OBS1_CM;
+    return r;
 }
 
 static void t2_status(const char *s)
@@ -982,7 +1024,7 @@ static void task_2_run(void)
 	float ir_open = ir_filtered_cm(inner);   /* standing still, clear of obstacle 2 */
 	const float ir_wall = ir_filtered_cm((inner == IR_SIDE_LEFT) ? IR_SIDE_RIGHT : IR_SIDE_LEFT);
 	const uint8_t s_shift = (T2_RETURN_S_SHIFT ||
-	                         (ir_open - T2_OBS1_MARGIN_CM < T2_OBS1_FAR_CM) ||
+	                         (t2_obs1_range_cm(ir_open) < T2_OBS1_FAR_CM) ||
 	                         (ir_wall < T2_RETURN_WALL_CM)) ? 1u : 0u;
 	int32_t remaining_dist = d_after_dodge;
 	if (remaining_dist < 0) remaining_dist = 0;
@@ -1021,69 +1063,93 @@ static void task_2_run(void)
 	t2_status("Find Obs 1!     ");
 	/* How far the IR may look for obstacle 1 (T2_OBS1_FAR_CM): set from what
 	   it read above, standing still, before obstacle 1 is beside it. */
-	float obs1_cm = ir_open - T2_OBS1_MARGIN_CM;
-	if (obs1_cm > T2_OBS1_FAR_CM) obs1_cm = T2_OBS1_FAR_CM;
-	if (obs1_cm < T2_OBS1_CM)     obs1_cm = T2_OBS1_CM;
+	const float obs1_cm = t2_obs1_range_cm(ir_open);
 	snprintf(u, sizeof u, "[T2] obs1 search: open %.1fcm, counts under %.1fcm, wall %.1fcm, s-shift %s\r\n",
 	         (double)ir_open, (double)obs1_cm, (double)ir_wall, s_shift ? "yes" : "skipped");
 	command_send(u);
 	w = (watch_t){ .kind = WATCH_IR_PASS, .ir_side = inner, .thresh_cm = obs1_cm,
 	               .arm_mm = remaining_dist, .after_mm = T2_OBS1_AFTER_MM,
-	               .sense_speed = T2_SENSE_OBS1 };
+	               .sense_speed = T2_SENSE_OBS1, .log_face = T2_PARK_DIRECT ? 1u : 0u,
+	               .min_seen_mm = T2_OBS1_MIN_SEEN_MM };
 	move_straight_watch(remaining_dist + T2_OBS1_MAX_MM, &w);
 	accum_forward -= w.driven_mm;
 	t2_log_watch("obs1-pass", &w);
+
+	/* Kush (14-Oct, T2_PARK_DIRECT): how far the IR was from obstacle 1's
+	   side face as the car went past. */
+	float side_cm = 0.0f;
+	uint16_t side_n = 0u;
+	const uint8_t direct = (T2_PARK_DIRECT && w.triggered &&
+	                        watch_face_level(T2_FIT_TRIM, T2_DIRECT_MIN_N, &side_cm, &side_n)) ? 1u : 0u;
 
 	/* Turn into behind obstacle 1 (South -> East/West) */
 	move_turn_deg(turn_in, 1, 90);
 	accum_forward -= R_in; /* Sweeps South */
 	accum_left    += dodge_left_2 ? R_in : -R_in;
 
-	/* Move back some distance before starting search for obstacle 1.
-	 * Kush (12-Oct): it only undid the S-shift, so with T2_RETURN_S_SHIFT 0
-	 * (s_lat = 0) there is nothing to do. */
-	if (s_lat > 0) {
-		int32_t d = move_straight_measured(-s_lat);
-		accum_left += dodge_left_2 ? d : -d;
-	}
-
-	/* ---------------------------------------------------------
-	 * FIND OBS 1 AGAIN & DYNAMIC TILT CORRECTION
-	 * --------------------------------------------------------- */
-	t2_status("Obs 1 Again!    ");
-	w = (watch_t){ .kind = WATCH_IR_PASS, .ir_side = inner, .thresh_cm = T2_OBS1_CM,
-	               .after_mm = 0, .sense_speed = T2_SENSE_OBS1, .log_face = 1u };
-	move_straight_watch(T2_OBS1_MAX_MM, &w);
-	/* Facing lateral. Forward moves Left or Right. */
-	accum_left += dodge_left_2 ? w.driven_mm : -w.driven_mm;
-	t2_log_watch("obs1-back", &w);
-
-	/* TILT MATH FOR FINAL PARKING TURN */
-	int tilt_obs1 = t2_face_tilt_deg(T2_FIT_MIN_SPAN_OBS1_MM, "obs1");
 	int final_turn_angle = 90;
-	if (tilt_obs1 != 0) {
-		t2_status("Align Final!    ");
-		/* If distance increased, we drifted away.
-		 * We need to turn MORE to perfectly face South. */
-		final_turn_angle = 90 + tilt_obs1;
-	}
+	if (direct) {
+		/* The rear-axle centre's distance from obstacle 1's centre line, less
+		   what the two 90s cover, is what is left to drive between them
+		   (negative: back). No tilt fit without the search, so the parking
+		   turn below is a plain 90: the car comes out at the heading it
+		   passed obstacle 1 with, plus whatever the two 90s differ by. */
+		t2_status("Park Direct!    ");
+		const int32_t lat = PILLAR_HALF_WIDTH + (int32_t)(side_cm * 10.0f) + IR_TO_CENTRE_MM;
+		const int32_t mid = lat - (R_in + R_out);
+		snprintf(u, sizeof u, "[T2] direct park: obs1 side %.1fcm (n=%u), axle %ldmm out, middle %ldmm\r\n",
+		         (double)side_cm, (unsigned)side_n, (long)lat, (long)mid);
+		command_send(u);
+		if (mid >= T2_DIRECT_MIN_MM || mid <= -T2_DIRECT_MIN_MM) {
+			int32_t d = move_straight_measured(mid);
+			accum_left += dodge_left_2 ? d : -d;
+		}
+	} else {
+		/* Move back some distance before starting search for obstacle 1.
+		 * Kush (12-Oct): it only undid the S-shift, so with T2_RETURN_S_SHIFT 0
+		 * (s_lat = 0) there is nothing to do. */
+		if (s_lat > 0) {
+			int32_t d = move_straight_measured(-s_lat);
+			accum_left += dodge_left_2 ? d : -d;
+		}
 
-	/* Reverse by Radius to give space to turn into carpark, plus whatever the
-	 * watch drove past where the old creep would have stopped. */
-	int32_t extra = 0;
-	if (w.triggered) {
-		int32_t lag_mm   = (int32_t)(w.trigger_speed_mm_tick * T2_IR_LAG_TICKS);
-		int32_t old_stop = w.trigger_mm - lag_mm + T2_OBS1_STOP_PAST_EDGE_MM;
-		extra = w.driven_mm - old_stop;
-		if (extra < 0) extra = 0;
-		if (extra > T2_OBS1_EXTRA_MAX_MM) extra = T2_OBS1_EXTRA_MAX_MM;
+		/* ---------------------------------------------------------
+		 * FIND OBS 1 AGAIN & DYNAMIC TILT CORRECTION
+		 * --------------------------------------------------------- */
+		t2_status("Obs 1 Again!    ");
+		w = (watch_t){ .kind = WATCH_IR_PASS, .ir_side = inner, .thresh_cm = T2_OBS1_CM,
+		               .after_mm = 0, .sense_speed = T2_SENSE_OBS1, .log_face = 1u };
+		move_straight_watch(T2_OBS1_MAX_MM, &w);
+		/* Facing lateral. Forward moves Left or Right. */
+		accum_left += dodge_left_2 ? w.driven_mm : -w.driven_mm;
+		t2_log_watch("obs1-back", &w);
+
+		/* TILT MATH FOR FINAL PARKING TURN */
+		int tilt_obs1 = t2_face_tilt_deg(T2_FIT_MIN_SPAN_OBS1_MM, "obs1");
+		if (tilt_obs1 != 0) {
+			t2_status("Align Final!    ");
+			/* If distance increased, we drifted away.
+			 * We need to turn MORE to perfectly face South. */
+			final_turn_angle = 90 + tilt_obs1;
+		}
+
+		/* Reverse by Radius to give space to turn into carpark, plus whatever the
+		 * watch drove past where the old creep would have stopped. */
+		int32_t extra = 0;
+		if (w.triggered) {
+			int32_t lag_mm   = (int32_t)(w.trigger_speed_mm_tick * T2_IR_LAG_TICKS);
+			int32_t old_stop = w.trigger_mm - lag_mm + T2_OBS1_STOP_PAST_EDGE_MM;
+			extra = w.driven_mm - old_stop;
+			if (extra < 0) extra = 0;
+			if (extra > T2_OBS1_EXTRA_MAX_MM) extra = T2_OBS1_EXTRA_MAX_MM;
+		}
+		{
+			int32_t d = move_straight_measured(-((R_out - PILLAR_HALF_WIDTH) + extra));
+			accum_left += dodge_left_2 ? d : -d;
+		}
+		snprintf(u, sizeof u, "[T2] park turn=%d extra_back=%ldmm\r\n", final_turn_angle, (long)extra);
+		command_send(u);
 	}
-	{
-		int32_t d = move_straight_measured(-((R_out - PILLAR_HALF_WIDTH) + extra));
-		accum_left += dodge_left_2 ? d : -d;
-	}
-	snprintf(u, sizeof u, "[T2] park turn=%d extra_back=%ldmm\r\n", final_turn_angle, (long)extra);
-	command_send(u);
 
 	/* Turn to face the carpark (East/West -> South) using the CORRECTED angle! */
 	move_turn_deg(turn_out, 1, final_turn_angle);

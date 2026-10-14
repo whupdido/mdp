@@ -100,11 +100,37 @@
  *               however long the Pi takes to answer, twice. "[T2]" lines for
  *               every phase and a "[T2L]" summary go to USART3 as usual.
  *
+ * CAL_IR        Kush (14-Oct): the two side IRs. Nothing drives. You need a
+ *               flat board (an obstacle face will do), a tape and the
+ *               carpark (or two walls IRC_GAP_CM apart).
+ *                 1. Stand the board upright beside the car, parallel to
+ *                    its LEFT side, the distance the OLED asks for from the
+ *                    left IR's lens (IRC_POINTS_CM: 10 to 70 cm), measured
+ *                    square to the board, and tap; one tap per distance. It
+ *                    averages that IR for 1 s and shows what it reads now.
+ *                 2. After the last one it fits V = m/(d + k) + b to that
+ *                    side and shows the fit's worst error (w, cm at cm) and
+ *                    calib.h's ("now w"). USART3 gets every point, both
+ *                    errors, and the three #define lines for calib.h.
+ *                 3. The same for the RIGHT side.
+ *                 4. Put the car in the carpark, square to the walls,
+ *                    anywhere across, and tap: from both readings it works
+ *                    out IR_TO_CENTRE_MM (each IR's lens to the car's centre
+ *                    line), which T2_PARK_DIRECT needs. With the new fits, and
+ *                    with calib.h's in brackets: use the one that goes with
+ *                    the IR values you keep.
+ *                 5. Live view: both sides now (calib.h) and with the new
+ *                    fits, so a board moved about can be checked against the
+ *                    tape. A tap starts over; so does a 2 s hold.
+ *               Paste the new values only if the fit's errors are clearly
+ *               smaller than calib.h's, mostly at 40-70 cm. IRC_DO_SWEEP 0
+ *               goes straight to step 4 with the calib.h values.
+ *
  * Nothing here changes how the car drives. As in a real run the brake stays
  * on after each move, and the readings keep running for CAL_SETTLE_MS
  * afterwards so the coast is included. Every result also goes to USART3:
  * "[CS]" straight, "[OD]" odometer, "[T30]" six turns, "[SEQ]" sequence,
- * "[TR]"/"[TRS]" trace.
+ * "[TR]"/"[TRS]" trace, "[IRC]" IR calibration.
  */
 
 #include "main.h"
@@ -118,6 +144,7 @@
 #include "oled.h"
 #include "icm20948.h"
 #include "obstacle_nav.h"
+#include "sensors.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1193,4 +1220,395 @@ void cal_task2_step(uint8_t arrow_obs1, uint8_t arrow_obs2)
 
     t2l_wait_release();
     motion_abort_clear();
+}
+
+/* ----------------------------------------------------------------- CAL_IR */
+
+/* Distances each side is read at, cm from the IR's lens to the board,
+   nearest first. Edit freely (3 to IRC_MAX_PTS of them). 40-70 is where
+   T2_PARK_DIRECT reads obstacle 1; the near ones are the parking checks. */
+static const float IRC_POINTS_CM[] = { 10.0f, 15.0f, 20.0f, 30.0f, 40.0f, 50.0f, 60.0f, 70.0f };
+#define IRC_NPTS      ((uint8_t)(sizeof IRC_POINTS_CM / sizeof IRC_POINTS_CM[0]))
+#define IRC_MAX_PTS   16u
+#define IRC_SAMPLES   100u     /* voltages averaged per reading, 10 ms apart: 1 s */
+#define IRC_GAP_CM    60.0f    /* carpark, inside of one wall to the other        */
+#define IRC_K_MIN     (-5.0f)  /* range searched for the fit's k, cm              */
+#define IRC_K_MAX     10.0f
+/* 1 = both sweeps, then the carpark. 0 = straight to the carpark step and the
+   live readings, with the calib.h model only (to measure IR_TO_CENTRE_MM or
+   check the IRs without fitting them again). */
+#define IRC_DO_SWEEP  1
+
+_Static_assert(sizeof IRC_POINTS_CM / sizeof IRC_POINTS_CM[0] >= 3u &&
+               sizeof IRC_POINTS_CM / sizeof IRC_POINTS_CM[0] <= IRC_MAX_PTS,
+               "IRC_POINTS_CM needs 3 to IRC_MAX_PTS distances");
+
+typedef struct {
+    float   m, b, k;            /* V = m / (d + k) + b                           */
+    float   rms, max_err, max_at;
+    uint8_t ok;
+} irc_fit_t;
+
+typedef enum { IRC_SWEEP = 0, IRC_GAP, IRC_GAP_SHOWN, IRC_LIVE } irc_phase_t;
+
+static irc_phase_t irc_phase = IRC_SWEEP;
+static uint8_t     irc_side  = IR_SIDE_LEFT;       /* the side being swept      */
+static uint8_t     irc_i     = 0u;                 /* its next point            */
+static float       irc_v[2][IRC_MAX_PTS];          /* volts, [side][point]      */
+static irc_fit_t   irc_fit[2];                     /* [IR_SIDE_RIGHT/_LEFT]     */
+static uint32_t    irc_last_draw = 0u, irc_last_log = 0u;
+
+static char irc_letter(uint8_t side) { return (side == IR_SIDE_LEFT) ? 'L' : 'R'; }
+static const char *irc_name(uint8_t side) { return (side == IR_SIDE_LEFT) ? "LEFT" : "RIGHT"; }
+
+/* d = m / (V - b) - k. clamp = 1: limited exactly as sensors.c does it, so
+   what the car would read; 0: the model itself, for the fit. */
+static float irc_model(float m, float b, float k, float v, uint8_t clamp)
+{
+    const float den = v - b;
+    if (den < 0.01f) return clamp ? IR_MAX_CM : 1000.0f;
+    float d = m / den - k;
+    if (clamp && d > IR_MAX_CM) d = IR_MAX_CM;
+    if (clamp && d < IR_MIN_CM) d = IR_MIN_CM;
+    return d;
+}
+
+static float irc_model_cm(float m, float b, float k, float v) { return irc_model(m, b, k, v, 1u); }
+
+/* What the car reads now, with the calib.h values. */
+static float irc_now_cm(uint8_t side, float v)
+{
+    if (side == IR_SIDE_LEFT) return irc_model_cm(IR_LEFT_M, IR_LEFT_B, IR_LEFT_K, v);
+    return irc_model_cm(IR_RIGHT_M, IR_RIGHT_B, IR_RIGHT_K, v);
+}
+
+/* What it would read with this side's new fit. */
+static float irc_fit_cm(uint8_t side, float v)
+{
+    const irc_fit_t *f = &irc_fit[side];
+    return irc_model_cm(f->m, f->b, f->k, v);
+}
+
+/* Mean and spread of both sensors' voltages over IRC_SAMPLES readings. */
+static void irc_measure(float mean[2], float sd[2])
+{
+    float sum[2] = { 0.0f, 0.0f }, sq[2] = { 0.0f, 0.0f };
+    for (uint16_t i = 0u; i < IRC_SAMPLES; i++) {
+        for (uint8_t s = 0u; s < 2u; s++) {
+            const float v = ir_voltage(s);
+            sum[s] += v;
+            sq[s]  += v * v;
+        }
+        HAL_Delay(10);
+    }
+    for (uint8_t s = 0u; s < 2u; s++) {
+        mean[s] = sum[s] / (float)IRC_SAMPLES;
+        const float var = sq[s] / (float)IRC_SAMPLES - mean[s] * mean[s];
+        sd[s] = (var > 0.0f) ? sqrtf(var) : 0.0f;
+    }
+}
+
+/* For one k: m and b from a straight-line fit of V against 1/(d + k), each
+   point weighted by (d + k)^4. A voltage error at distance d is a distance
+   error (d + k)^2 / m times as big, so the weights make the fit about the
+   distance errors, not the voltage ones (far points would barely count). */
+static uint8_t irc_fit_mb(const float *v, float k, float *m, float *b)
+{
+    double sw = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+    for (uint8_t i = 0u; i < IRC_NPTS; i++) {
+        const double dk = (double)IRC_POINTS_CM[i] + (double)k;
+        if (dk < 1.0) return 0u;
+        const double x = 1.0 / dk, w = dk * dk * dk * dk;
+        sw += w; sx += w * x; sy += w * v[i]; sxx += w * x * x; sxy += w * x * v[i];
+    }
+    const double den = sw * sxx - sx * sx;
+    if (den <= 1e-9 * sw * sxx) return 0u;
+    const double mm = (sw * sxy - sx * sy) / den;
+    if (mm <= 0.0) return 0u;
+    *m = (float)mm;
+    *b = (float)((sy - mm * sx) / sw);
+    return 1u;
+}
+
+/* RMS and worst distance error of a model over one side's points (clamp as
+   in irc_model()). */
+static float irc_errors(const float *v, float m, float b, float k, uint8_t clamp,
+                        float *max_err, float *max_at)
+{
+    float sq = 0.0f;
+    *max_err = 0.0f;
+    *max_at  = IRC_POINTS_CM[0];
+    for (uint8_t i = 0u; i < IRC_NPTS; i++) {
+        const float e = irc_model(m, b, k, v[i], clamp) - IRC_POINTS_CM[i];
+        sq += e * e;
+        if (fabsf(e) > fabsf(*max_err)) { *max_err = e; *max_at = IRC_POINTS_CM[i]; }
+    }
+    return sqrtf(sq / (float)IRC_NPTS);
+}
+
+/* The k with the smallest RMS distance error: every 0.5 cm over
+   IRC_K_MIN..IRC_K_MAX, then every 0.02 cm around the best of those. Chosen
+   on the model's own errors (the clamp would let the 10 cm point read 8 for
+   free); the errors kept for the report are what the car would read. */
+static void irc_fit_side(uint8_t side)
+{
+    irc_fit_t best = { 0 };
+    best.rms = 1e9f;
+    for (uint8_t pass = 0u; pass < 2u; pass++) {
+        if (pass && !best.ok) break;
+        const float lo   = pass ? best.k - 0.5f : IRC_K_MIN;
+        const float step = pass ? 0.02f : 0.5f;
+        const int   n    = pass ? 50 : (int)((IRC_K_MAX - IRC_K_MIN) / 0.5f + 0.5f);
+        for (int j = 0; j <= n; j++) {
+            const float k = lo + (float)j * step;
+            float m, b, me, ma;
+            if (!irc_fit_mb(irc_v[side], k, &m, &b)) continue;
+            const float r = irc_errors(irc_v[side], m, b, k, 0u, &me, &ma);
+            if (r < best.rms) {
+                best = (irc_fit_t){ .m = m, .b = b, .k = k, .rms = r, .ok = 1u };
+            }
+        }
+    }
+    if (best.ok) best.rms = irc_errors(irc_v[side], best.m, best.b, best.k, 1u, &best.max_err, &best.max_at);
+    irc_fit[side] = best;
+}
+
+static void irc_prompt_point(uint8_t y)
+{
+    cal_line(y,      "next %c %.0f cm", irc_letter(irc_side), (double)IRC_POINTS_CM[irc_i]);
+    cal_line(y + 10, "board, then tap");
+}
+
+static void irc_prompt_gap(uint8_t y)
+{
+    cal_line(y,      "next: carpark");
+    cal_line(y + 10, "square, then tap");
+}
+
+void cal_ir_show_idle(void)
+{
+    irc_phase = IRC_DO_SWEEP ? IRC_SWEEP : IRC_GAP;
+    irc_side  = IR_SIDE_LEFT;
+    irc_i     = 0u;
+    irc_fit[0].ok = irc_fit[1].ok = 0u;
+
+    OLED_Clear();
+    if (irc_phase == IRC_SWEEP) {
+        cal_line(0,  "IR CAL  no drive");
+        cal_line(10, "flat board, side");
+        cal_line(20, "parallel, from");
+        cal_line(30, "the IR's lens:");
+        irc_prompt_point(40);
+    } else {
+        cal_line(0,  "IR CAL  no drive");
+        cal_line(10, "car square in");
+        cal_line(20, "the carpark,");
+        cal_line(30, "walls %.0f cm", (double)IRC_GAP_CM);
+        cal_line(50, "tap = read");
+    }
+    OLED_Refresh_Gram();
+    command_send("[IRC] start\r\n");
+}
+
+static void irc_sweep_tap(void)
+{
+    char u[200];
+    float mean[2], sd[2];
+    const uint8_t s = irc_side, i = irc_i;
+    const float d = IRC_POINTS_CM[i];
+
+    OLED_Clear();
+    cal_line(0,  "%c %.0f cm", irc_letter(s), (double)d);
+    cal_line(10, "reading 1 s...");
+    OLED_Refresh_Gram();
+    irc_measure(mean, sd);
+    irc_v[s][i] = mean[s];
+
+    const float now = irc_now_cm(s, mean[s]);
+    snprintf(u, sizeof u, "[IRC] %s %.0fcm: %.4f V (sd %.1f mV), reads %.1f cm now (%+.1f)\r\n",
+             irc_name(s), (double)d, (double)mean[s], (double)(sd[s] * 1000.0f),
+             (double)now, (double)(now - d));
+    command_send(u);
+
+    irc_i++;
+    if (irc_i < IRC_NPTS) {
+        OLED_Clear();
+        cal_line(0,  "%c %.0f cm  %u/%u", irc_letter(s), (double)d, (unsigned)irc_i, (unsigned)IRC_NPTS);
+        cal_line(10, "%.3f V sd %.0fmV", (double)mean[s], (double)(sd[s] * 1000.0f));
+        cal_line(20, "reads %.1f now", (double)now);
+        irc_prompt_point(40);
+        OLED_Refresh_Gram();
+        return;
+    }
+
+    /* That side is done: fit it, and compare with what calib.h gives now. */
+    irc_fit_side(s);
+    const irc_fit_t *f = &irc_fit[s];
+    float now_max, now_at;
+    const float m_now = (s == IR_SIDE_LEFT) ? IR_LEFT_M : IR_RIGHT_M;
+    const float b_now = (s == IR_SIDE_LEFT) ? IR_LEFT_B : IR_RIGHT_B;
+    const float k_now = (s == IR_SIDE_LEFT) ? IR_LEFT_K : IR_RIGHT_K;
+    const float now_rms = irc_errors(irc_v[s], m_now, b_now, k_now, 1u, &now_max, &now_at);
+
+    command_send("[IRC]   cm     volts   now_cm   err  fit_cm   err\r\n");
+    for (uint8_t j = 0u; j < IRC_NPTS; j++) {
+        const float a = irc_now_cm(s, irc_v[s][j]);
+        const float c = f->ok ? irc_fit_cm(s, irc_v[s][j]) : 0.0f;
+        snprintf(u, sizeof u, "[IRC] %5.1f  %7.4f  %6.1f %+5.1f  %6.1f %+5.1f\r\n",
+                 (double)IRC_POINTS_CM[j], (double)irc_v[s][j], (double)a,
+                 (double)(a - IRC_POINTS_CM[j]), (double)c, (double)(c - IRC_POINTS_CM[j]));
+        command_send(u);
+    }
+    snprintf(u, sizeof u, "[IRC] %s calib.h now: rms %.2f cm, worst %+.1f cm at %.0f cm\r\n",
+             irc_name(s), (double)now_rms, (double)now_max, (double)now_at);
+    command_send(u);
+
+    if (f->ok) {
+        snprintf(u, sizeof u, "[IRC] %s fit: m %.3f b %.4f k %.2f, rms %.2f cm, worst %+.1f cm at %.0f cm\r\n",
+                 irc_name(s), (double)f->m, (double)f->b, (double)f->k, (double)f->rms,
+                 (double)f->max_err, (double)f->max_at);
+        command_send(u);
+        char nm[3][16];
+        snprintf(nm[0], sizeof nm[0], "IR_%s_M", irc_name(s));
+        snprintf(nm[1], sizeof nm[1], "IR_%s_B", irc_name(s));
+        snprintf(nm[2], sizeof nm[2], "IR_%s_K", irc_name(s));
+        snprintf(u, sizeof u, "[IRC] for calib.h:\r\n#define %-20s%.3ff\r\n#define %-20s%.4ff\r\n"
+                              "#define %-20s%.2ff\r\n",
+                 nm[0], (double)f->m, nm[1], (double)f->b, nm[2], (double)f->k);
+        command_send(u);
+    } else {
+        snprintf(u, sizeof u, "[IRC] %s: no fit (do the readings fall as the board moves away?)\r\n",
+                 irc_name(s));
+        command_send(u);
+    }
+
+    /* Fit, its worst point, and calib.h's worst point for comparison. */
+    OLED_Clear();
+    if (f->ok) {
+        cal_line(0,  "%s fit rms%.1f", irc_name(s), (double)f->rms);
+        cal_line(10, "m%.2f b%.3f", (double)f->m, (double)f->b);
+        cal_line(20, "k%+.2f w%+.1f@%.0f", (double)f->k, (double)f->max_err, (double)f->max_at);
+    } else {
+        cal_line(0,  "%s: NO FIT", irc_name(s));
+        cal_line(10, "see USART3");
+    }
+    cal_line(30, "now w%+.1f@%.0f", (double)now_max, (double)now_at);
+
+    if (s == IR_SIDE_LEFT) {
+        irc_side = IR_SIDE_RIGHT;
+        irc_i    = 0u;
+        irc_prompt_point(40);
+    } else {
+        irc_phase = IRC_GAP;
+        irc_prompt_gap(40);
+    }
+    OLED_Refresh_Gram();
+}
+
+/* The carpark: both IRs at once. Whatever the car's position across, as long
+   as it is square to the walls, left + right + 2 x IR_TO_CENTRE_MM is the
+   gap between them. With the new fits when there are some, else calib.h's. */
+static void irc_gap_tap(void)
+{
+    char u[200];
+    float mean[2], sd[2];
+
+    OLED_Clear();
+    cal_line(0,  "CARPARK");
+    cal_line(10, "reading 1 s...");
+    OLED_Refresh_Gram();
+    irc_measure(mean, sd);
+
+    const uint8_t L = IR_SIDE_LEFT, R = IR_SIDE_RIGHT;
+    const float nl = irc_now_cm(L, mean[L]), nr = irc_now_cm(R, mean[R]);
+    const float c_now = (IRC_GAP_CM - nl - nr) * 5.0f;          /* cm -> mm, halved */
+    const uint8_t have_fit = irc_fit[L].ok && irc_fit[R].ok;
+    const float fl = have_fit ? irc_fit_cm(L, mean[L]) : nl;
+    const float fr = have_fit ? irc_fit_cm(R, mean[R]) : nr;
+    const float c_fit = (IRC_GAP_CM - fl - fr) * 5.0f;
+
+    snprintf(u, sizeof u, "[IRC] carpark %.0f cm: L %.4f V R %.4f V; calib.h now L %.1f R %.1f cm"
+                          " -> IR_TO_CENTRE_MM %.0f\r\n",
+             (double)IRC_GAP_CM, (double)mean[L], (double)mean[R], (double)nl, (double)nr, (double)c_now);
+    command_send(u);
+    if (have_fit) {
+        snprintf(u, sizeof u, "[IRC] carpark with the new fits: L %.1f R %.1f cm -> IR_TO_CENTRE_MM %.0f\r\n",
+                 (double)fl, (double)fr, (double)c_fit);
+        command_send(u);
+    }
+    snprintf(u, sizeof u, "[IRC] for calib.h (%s):\r\n#define %-20s%.0f\r\n",
+             have_fit ? "with the new IR_*_M/_B/_K" : "with the IR values in calib.h now",
+             "IR_TO_CENTRE_MM", (double)(have_fit ? c_fit : c_now));
+    command_send(u);
+    /* Both IRs see their wall from 10 to ~25 cm in a 60 cm carpark; a reading
+       at either end of the range means one of them is not looking at one. */
+    const uint8_t odd = (fl <= IR_MIN_CM + 0.5f || fr <= IR_MIN_CM + 0.5f ||
+                         fl > 0.6f * IRC_GAP_CM || fr > 0.6f * IRC_GAP_CM ||
+                         c_fit < 30.0f || c_fit > 200.0f);
+    if (odd) command_send("[IRC] check: is the car between the walls, square to them?\r\n");
+
+    OLED_Clear();
+    cal_line(0,  "CARPARK %.0f cm", (double)IRC_GAP_CM);
+    cal_line(10, "L %.1f  R %.1f", (double)fl, (double)fr);
+    cal_line(20, "centre %.0f mm", (double)c_fit);
+    if (have_fit) cal_line(30, "(calib.h: %.0f)", (double)c_now);
+    if (odd) cal_line(40, "CHECK: square?");
+    else     cal_line(40, "(%d in calib.h)", IR_TO_CENTRE_MM);
+    cal_line(50, "tap = live view");
+    OLED_Refresh_Gram();
+
+    irc_phase = IRC_GAP_SHOWN;
+}
+
+void cal_ir_step(void)
+{
+    switch (irc_phase) {
+        case IRC_SWEEP: irc_sweep_tap(); break;
+        case IRC_GAP:   irc_gap_tap();   break;
+        case IRC_GAP_SHOWN:                          /* on to the live view */
+            irc_phase = IRC_LIVE;
+            irc_last_draw = HAL_GetTick() - 1000u;
+            OLED_Clear();
+            break;
+        default:        cal_ir_show_idle(); break;   /* live view: start over */
+    }
+}
+
+/* Live view: what each side reads now (calib.h, as Task 2 sees it) and with
+   its new fit, every 200 ms. Move a board about to check them. */
+void cal_ir_poll(void)
+{
+    if (irc_phase != IRC_LIVE) return;
+    const uint32_t now = HAL_GetTick();
+    if (now - irc_last_draw < 200u) return;
+    irc_last_draw = now;
+
+    float v[2] = { 0.0f, 0.0f };
+    for (uint8_t i = 0u; i < 8u; i++) {             /* 8 ms of ADC noise out */
+        v[0] += ir_voltage(0u);
+        v[1] += ir_voltage(1u);
+        HAL_Delay(1);
+    }
+    v[0] *= 0.125f;
+    v[1] *= 0.125f;
+
+    const uint8_t L = IR_SIDE_LEFT, R = IR_SIDE_RIGHT;
+    cal_line(0,  "IR LIVE tap=redo");
+    cal_line(10, "L now %5.1f", (double)ir_filtered_cm(L));
+    cal_line(20, "R now %5.1f", (double)ir_filtered_cm(R));
+    if (irc_fit[L].ok) cal_line(30, "L fit %5.1f", (double)irc_fit_cm(L, v[L]));
+    else               cal_line(30, " ");
+    if (irc_fit[R].ok) cal_line(40, "R fit %5.1f", (double)irc_fit_cm(R, v[R]));
+    else               cal_line(40, " ");
+    cal_line(50, "%.3fV %.3fV", (double)v[L], (double)v[R]);
+    OLED_Refresh_Gram();
+
+    if (now - irc_last_log >= 1000u) {
+        char u[128];
+        irc_last_log = now;
+        snprintf(u, sizeof u, "[IRC] live L %.4f V now %.1f fit %.1f | R %.4f V now %.1f fit %.1f\r\n",
+                 (double)v[L], (double)irc_now_cm(L, v[L]), (double)(irc_fit[L].ok ? irc_fit_cm(L, v[L]) : 0.0f),
+                 (double)v[R], (double)irc_now_cm(R, v[R]), (double)(irc_fit[R].ok ? irc_fit_cm(R, v[R]) : 0.0f));
+        command_send(u);
+    }
 }
