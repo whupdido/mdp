@@ -272,10 +272,12 @@ python -m server.algo_server      # route planning, port 5002 -- Task 1 only
 
 # Pi -- once; Denzel's autostart picks the program and restarts it if it dies
 cd rpi
-./install_autostart.sh <tablet-mac> task1 <laptop-ip>   # Task 1: run_task1.py
-./install_autostart.sh <tablet-mac> task2 <laptop-ip>   # Task 2: a1_bridge.py
+./install_autostart.sh task1 <laptop-ip>   # Task 1: run_task1.py
+./install_autostart.sh task2 <laptop-ip>   # Task 2: a1_bridge.py
+#   the Pi listens on RFCOMM channel 1 and the tablet dials in -- no MAC
 #   switch task: run it again with the other one.  Logs: journalctl -u mdp -f
-#   by hand instead: sudo rfcomm bind 0 <tablet-mac>, then the program
+#   by hand instead: sudo systemctl stop mdp; sudo rfcomm listen /dev/rfcomm0 1,
+#   Connect on the tablet, then the program in a second terminal
 
 # Robot, during prep, inside the carpark
 nothing -- PLAN (Task 1) and START (Task 2) zero the gyro hands-off with GC.

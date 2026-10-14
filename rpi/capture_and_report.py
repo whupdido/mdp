@@ -27,6 +27,7 @@ import os
 import pickle
 import socket
 import struct
+import threading
 import time
 
 import cv2
@@ -40,6 +41,7 @@ import a1_bridge
 DETECTION_SERVER_IP = os.environ.get("MDP_LAPTOP_IP", "192.168.4.40")
 DETECTION_SERVER_PORT = 5001
 CAMERA_INDEX = 0  # matches /dev/video0, same as rpi_camera_server.py
+JPEG_QUALITY = 90  # high enough that detection does not notice
 
 # The bullseye/marker class -- confirms the camera is facing the obstacle,
 # but is NOT a real face image and must never be reported as one.
@@ -47,13 +49,15 @@ BULLSEYE_ID = 0
 
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
-    buf = b""
+    # Denzel: bytearray, not bytes +=, which copied the whole buffer again for
+    # every small Wi-Fi chunk.
+    buf = bytearray()
     while len(buf) < n:
         chunk = sock.recv(n - len(buf))
         if not chunk:
             raise ConnectionError("Detection server closed the connection")
         buf += chunk
-    return buf
+    return bytes(buf)
 
 
 def _recv_json(sock: socket.socket) -> dict:
@@ -106,6 +110,12 @@ def detect(
     """Send one frame to the detection server. Returns the official Image ID
     (11-40), or None if nothing was confidently detected."""
     height, width = frame.shape[:2]
+    # Denzel: send a JPEG, not the raw frame -- ~50 KB instead of ~900 KB over
+    # the Pi's Wi-Fi, which was most of a scan's time. Needs the server from
+    # the same commit, which decodes it back into a frame.
+    ok, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+    if not ok:
+        raise RuntimeError("Could not JPEG-encode the frame")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # Denzel: None blocks forever (Task 1's behaviour). Task 2 passes what is
@@ -116,7 +126,7 @@ def detect(
     try:
         _recv_json(sock)  # class-name metadata, sent on connect -- not needed here
         request = {
-            "frame": frame,
+            "jpeg": jpeg.tobytes(),
             "height": height,
             "width": width,
             "conf": conf,
@@ -176,6 +186,69 @@ RIGHT_ARROW_ID = 38
 LEFT_ARROW_ID = 39
 TASK2_ARROW_IDS = (RIGHT_ARROW_ID, LEFT_ARROW_ID)
 
+class WarmCamera:
+    """Denzel: keeps the camera open and reading for a whole Task 2 run.
+
+    Opening it at every SCAN cost ~0.2 s, and its first frame ~0.4 s more
+    while it settled. A thread reads frames non-stop instead, so the driver's
+    buffer never holds stale ones, and a scan just takes the first frame that
+    finished after the board stopped.
+    """
+
+    def __init__(self):
+        self._cap = None
+        self._thread = None
+        self._cond = threading.Condition()
+        self._frame = None
+        self._stamp = 0.0
+        self.running = False
+
+    def start(self):
+        if self.running:
+            return
+        cap = cv2.VideoCapture(CAMERA_INDEX)
+        if not cap.isOpened():
+            raise RuntimeError("Could not open camera for the Task 2 run")
+        self._cap = cap
+        self.running = True
+        self._thread = threading.Thread(target=self._read_forever, daemon=True)
+        self._thread.start()
+
+    def _read_forever(self):
+        while self.running:
+            ok, frame = self._cap.read()
+            if not ok:
+                time.sleep(0.01)
+                continue
+            with self._cond:
+                self._frame, self._stamp = frame, time.monotonic()
+                self._cond.notify_all()
+
+    def frame_after(self, t: float, timeout: float):
+        """The first frame read after monotonic time `t`, or None if none
+        arrives within `timeout` seconds."""
+        deadline = time.monotonic() + timeout
+        with self._cond:
+            while self._stamp <= t:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._cond.wait(remaining)
+            return self._frame
+
+    def stop(self):
+        self.running = False
+        if self._thread is not None:
+            self._thread.join(timeout=1)
+        if self._cap is not None:
+            self._cap.release()
+        self._cap = self._thread = self._frame = None
+        self._stamp = 0.0
+
+
+warm_camera = WarmCamera()
+
+
 # The board waits 3 s after SCAN (task_2_image_rec in obstacle_nav.c). Stop
 # a little short so the IM line lands inside that window, not after it.
 TASK2_SCAN_BUDGET_SECONDS = 2.5
@@ -193,15 +266,26 @@ def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS, seen=Non
     Zhenxi: `seen`, if given, is a list this appends one (arrow ID or None,
     frame) to: the frame the arrow was read from, or else the last one tried.
     a1_bridge keeps them for the end-of-run collage (report_task2_images)."""
-    deadline = time.monotonic() + budget_s
-    cap = cv2.VideoCapture(CAMERA_INDEX)
-    if not cap.isOpened():
-        raise RuntimeError("Could not open camera for the Task 2 arrow read")
+    started = time.monotonic()
+    deadline = started + budget_s
+    # Denzel: the warm camera when a run has started it, else open one here.
+    cap = None
+    if not warm_camera.running:
+        cap = cv2.VideoCapture(CAMERA_INDEX)
+        if not cap.isOpened():
+            raise RuntimeError("Could not open camera for the Task 2 arrow read")
+        # Timings, to see where a slow scan's time goes.
+        print(f"[TASK2] camera open {time.monotonic() - started:.2f}s")
     last = None
     try:
         attempt = 0
         while time.monotonic() < deadline:
-            ok, frame = cap.read()
+            grab_start = time.monotonic()
+            if cap is None:
+                frame = warm_camera.frame_after(grab_start, deadline - grab_start)
+                ok = frame is not None
+            else:
+                ok, frame = cap.read()
             if not ok:
                 continue
             attempt += 1
@@ -210,6 +294,8 @@ def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS, seen=Non
                 break
             frame = cv2.rotate(frame, cv2.ROTATE_180)
             last = (None, frame)
+            detect_start = time.monotonic()
+            print(f"[TASK2] Attempt {attempt}: frame {detect_start - grab_start:.2f}s")
             try:
                 class_id = detect(frame, timeout=remaining)
             except socket.timeout:
@@ -218,13 +304,16 @@ def read_arrow(stm_serial, budget_s: float = TASK2_SCAN_BUDGET_SECONDS, seen=Non
             except OSError as exc:
                 print(f"[TASK2] Attempt {attempt}: detection server unreachable ({exc})")
                 break
-            print(f"[TASK2] Attempt {attempt}: detected {class_id}")
+            print(f"[TASK2] Attempt {attempt}: detected {class_id}"
+                  f" (laptop {time.monotonic() - detect_start:.2f}s,"
+                  f" scan so far {time.monotonic() - started:.2f}s)")
             if class_id in TASK2_ARROW_IDS:
                 send_to_stm(class_id, stm_serial)
                 last = (class_id, frame)
                 return class_id
     finally:
-        cap.release()
+        if cap is not None:
+            cap.release()
         if seen is not None and last is not None:
             seen.append(last)
     print("[TASK2] No arrow seen within the scan window")

@@ -44,7 +44,14 @@ class NoTablet:
 
 
 def scan_only(stm):
-    class_id = read_arrow(stm)
+    # Denzel: warm camera, as in a real run, so the timings printed match it.
+    camera = a1_bridge.start_warm_camera()
+    time.sleep(1)  # in a run it warms up during the ~2 s gyro zero
+    try:
+        class_id = read_arrow(stm)
+    finally:
+        if camera is not None:
+            camera.stop()
     if class_id is None:
         print("No arrow seen. Is it ~30 cm in front of the camera, and is the server running?")
         return
