@@ -21,6 +21,7 @@ typedef enum {
     MODE_TURN_RAW,
 	MODE_PIVOT_DEG
 } control_mode_t;
+uint8_t t2_no_collision = 0;  // set by obstacle_nav.c during the obs2 dodge
 
 static volatile control_mode_t current_mode = MODE_IDLE;
 static volatile move_result_t  last_result  = MOVE_NONE;
@@ -86,7 +87,7 @@ static float right_pid_integral = 0.0f;
  * Check with CAL_TRACE (hdg per phase) and CAL_STRAIGHT. */
 #define STRAIGHT_STEER_V2   1
 #define STEER_V2_KP         110.0f  /* us per deg of heading error (was 130)         */
-#define STEER_V2_KD         10.0f   /* us per deg/s of yaw rate, from the gyro       */
+#define STEER_V2_KD         3.5f   /* us per deg/s of yaw rate, from the gyro       */
 #define STEER_V2_RATE_SMOOTH 0.35f  /* share of each new gyro reading in that rate   */
 #define STEER_REF_SPEED     27.0f   /* counts/tick the gains hold at: the cruise
                                        speed CAL_TRACE measured on 08-Oct            */
@@ -538,7 +539,7 @@ uint8_t move_straight_mm(int32_t mm)
 		command_poll();
 
 		/* Only check for front collisions if we are driving forward */
-		if (dir_forward == 1 && check_front_collision()) {
+		if (dir_forward == 1 && check_front_collision() ) {
 			/* Zhenxi: was MOVE_DONE, which made a 15 cm move that stopped at
 			 * 3 cm indistinguishable from one that completed. The [WARN]
 			 * line below still goes out; BLOCKED is what the Pi and tablet
@@ -724,7 +725,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 		command_poll();
 
 		/* Only check for front collisions if driving FORWARD in the turn */
-		if (dir_forward == 1 && check_front_collision()) {
+		if (!t2_no_collision && dir_forward == 1 && check_front_collision()) {
 			stop_hardware(MOVE_DONE);
 
 			/* GYRO FIX: Let the physical crash shockwave dissipate so
@@ -1244,7 +1245,7 @@ void control_tick(void)
 			/* 2. Direction-Aware Inertia Lead:
 			 * Forward coasts ~2.5 deg on momentum.
 			 * Reverse has heavy tire scrub and zero coast, so lead must be much smaller. */
-			float braking_lead = 2.5f;
+			float braking_lead = 6.5f;
 			if (target_deg_total <= 45){
 				if (turn_left)
 					braking_lead = (dir_forward == 1) ? 4.7f : 4.4f;

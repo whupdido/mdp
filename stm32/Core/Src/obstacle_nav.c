@@ -13,7 +13,7 @@
 #define STANDOFF_DIST_MM    150
 #define PILLAR_HALF_WIDTH   50
 
-
+extern uint8_t t2_no_collision;
 /* ------------------------------------------------------------------------- */
 /* The Box Bypass Maneuver                                                */
 /* ------------------------------------------------------------------------- */
@@ -320,7 +320,7 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
  */
 
 /* --- Approaches ---------------------------------------------------------- */
-#define T2_STANDOFF_OBS1_MM     300     /* front ultrasonic to obstacle 1 to read it */
+#define T2_STANDOFF_OBS1_MM     350     /* front ultrasonic to obstacle 1 to read it */
 #define T2_STANDOFF_OBS2_MM     300     /* and to obstacle 2                         */
 /* No echo at all: obstacle 1 is at least 600 mm out, so 300 still leaves 300. */
 #define T2_NO_ECHO_OBS1_MM      300
@@ -359,7 +359,7 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    ending the back face ~35 mm further out (from 60 the car needs ~135 mm to
    slow), which swings TURN 4 that much closer to the side wall. SIDE made
    no difference: with the end only 10 cm deep, CREEP 2 never moved. */
-#define T2_SENSE_FACE           50.0f   /* along obstacle 2's front and back faces */
+#define T2_SENSE_FACE           70.0f   /* along obstacle 2's front and back faces */
 #define T2_SENSE_SIDE           45.0f   /* along its 10 cm end                     */
 #define T2_SENSE_OBS1           42.0f   /* finding obstacle 1 on the way back (was 30) */
 #define T2_SENSE_PARK           49.0f   /* last ultrasonic approach in the carpark (was 35) */
@@ -428,7 +428,7 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    right at 40-70 cm and IR_TO_CENTRE_MM (calib.h); CAL_IR measures both.
    If the pass did not see obstacle 1 it searches as before. */
 #ifndef T2_PARK_DIRECT
-#define T2_PARK_DIRECT          0
+#define T2_PARK_DIRECT          1
 uint8_t  t2_direct_used = 0u;
 float    t2_direct_side_cm = 0.0f;
 uint16_t t2_direct_n = 0u;
@@ -853,6 +853,7 @@ static void task_2_run(void)
 	 * OBSTACLE 2: The Perfect Orthogonal Box-Wrap
 	 * ====================================================================== */
 	uint8_t id2 = t2_read_arrow(2u, &accum_forward, &accum_left);
+	t2_no_collision = 1;
 	int dodge_left_2 = (id2 == 38) ? 0 : 1;
 
 	int turn_out = dodge_left_2 ? 1 : 0;
@@ -894,7 +895,7 @@ static void task_2_run(void)
 		int32_t d = move_straight_measured(-100);
 		accum_left += dodge_left_2 ? d : -d;
 	}
-
+	t2_no_collision = 0;
 	/* ---------------------------------------------------------
 	 * CREEP 1: The Front Face -- now one move, until the inner IR loses it
 	 * --------------------------------------------------------- */

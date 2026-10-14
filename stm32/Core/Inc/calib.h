@@ -197,7 +197,7 @@
    the original. 250 made the wheels really do the command (0.82 m/s at 60
    instead of 0.37 m/s); reverted on 09-Oct, see above. Do not turn it back on
    without checking where Task 2's straights stop on the floor.             */
-#define T2_STRAIGHT_FF_EXTRA 0
+#define T2_STRAIGHT_FF_EXTRA 250
 
 /* VERIFIED ON HARDWARE -- DO NOT CHANGE.
    Both motors drive the car backwards on positive duty, so both are 1.
