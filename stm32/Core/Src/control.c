@@ -103,8 +103,105 @@ static float gz_smooth     = 0.0f;  /* smoothed gyro rate for the damping, deg/s
 #define BRAKE_MARGIN_COUNTS 100
 float steer_integral = 0.0f;
 
+/* Accelerates/decelerates the commanded speed by this much per tick. */
+#define STRAIGHT_RAMP_STEP  1.2f
+
+/* Kush (09-Oct): where a straight move starts slowing, worked out from the
+ * speed the wheels are really doing (profile.brake_measured = 1).
+ *
+ * The old formula, (cmd^2 - crawl^2) / (2 * RAMP_STEP), is the distance the
+ * COMMAND covers while it ramps down. The wheels only do ~45 % of the command
+ * (27 counts/tick measured at a command of 60), so they cover about 45 % of
+ * that, and the car then crawled the rest: ~10 cm, 0.6-2.4 s, at the end of
+ * every move. From a cruise of 80 it was worse (~20 cm, up to ~3.8 s), which
+ * is why 0c37bfe raised the crawl to 50 -- but that makes the car stop from
+ * ~20 counts/tick instead of ~6, ~5-10 mm long.
+ *
+ * Here the ramp-down distance comes from the speed the wheels really do and
+ * how fast they really follow the command down (ramp_down_counts), plus their
+ * lag behind the command and a safety factor. The crawl speed, the crawl
+ * margin and BRAKE_LEAD_COUNTS are untouched, so the car still reaches the
+ * same crawl and stops the same way. This file's control_tick() was run on
+ * the host against a simulated car (motor fitted to 27/tick at 60), for time
+ * constants of 50-150 ms and deadbands of 600-1500 duty, with and without the
+ * Task 2 extra feedforward: the speed at the brake stayed inside Task 1's own
+ * range (3-11 counts/tick) and the stop error within a few mm of it, with
+ * the crawl cut from ~10 cm to a few cm.
+ * To check on the floor: CAL_TRACE page 2 (crawl length) and CAL_STRAIGHT,
+ * with CAL_USE_TASK2_PROFILE = 1 in main.c. Crawl too short or stops long:
+ * raise BRAKE_SAFETY (1.2-1.4) or BRAKE_LAG_TICKS.                          */
+#ifndef BRAKE_SAFETY
+#define BRAKE_SAFETY        1.1f   /* x the ideal ramp-down distance          */
+#endif
+#ifndef BRAKE_LAG_TICKS
+#define BRAKE_LAG_TICKS     6.0f   /* wheels lag the command by about this    */
+#endif
+#define BRAKE_TO_ACTUAL     0.25f  /* wheel speed at the command being ramped
+                                      to, as a share of it (~0.25-0.4 at the
+                                      crawl); low is the safe side           */
+/* Motor duty per count/tick of wheel speed: full PWM (16799) gives ~82
+   counts/tick on the floor (testMaxSpeed note in calib.h). */
+#define MOTOR_DUTY_PER_COUNT 193.0f
+
+/* --- Speed profiles (control.h) --- */
+const motion_profile_t MOTION_PROFILE_TASK1 = {
+    .straight_cruise   = (float)SPEED_STRAIGHT,
+    .straight_crawl    = (float)SPEED_CRAWL,
+    .brake_measured    = 0u,
+    .straight_ff_extra = 0.0f,
+};
+/* Kush (11-Oct, speed step 5): brake_measured 0 -> 1 with the cruise raised to
+   80 (calib.h): from 80 the commanded-speed brake point would leave ~20 cm of
+   crawl at the end of every move. Same crawl (15) and brake lead as before. */
+const motion_profile_t MOTION_PROFILE_TASK2 = {
+    .straight_cruise   = (float)T2_SPEED_STRAIGHT,
+    .straight_crawl    = (float)T2_SPEED_CRAWL,
+    .brake_measured    = 1u,
+    .straight_ff_extra = (float)T2_STRAIGHT_FF_EXTRA,
+};
+static const motion_profile_t *volatile profile = &MOTION_PROFILE_TASK1;
+
+/* Smoothed measured wheel speed during a straight move, counts/tick. */
+static float straight_v_meas = 0.0f;
+
+/* --- Sensor watch for move_straight_watch() (control.h) --- */
+typedef struct {
+    uint8_t  active;
+    uint8_t  kind;
+    uint8_t  side;
+    uint8_t  log_face;
+    uint8_t  armed;
+    uint8_t  triggered;
+    uint8_t  seen;
+    uint8_t  seen_ticks;
+    uint8_t  cond_ticks;
+    uint8_t  slowed;        /* cruise has dropped to sense_speed (latched) */
+    float    thresh_cm;
+    float    sense_speed;
+    float    ff_fade_from;  /* command when it slowed: the Task 2 extra
+                               feedforward fades out from here            */
+    int32_t  arm_counts;    /* in accum_counts units, like the move's target   */
+    int32_t  after_counts;
+    int32_t  l0, r0;        /* encoder totals at the start of the move         */
+    int32_t  min_seen_mm;
+    uint8_t  blips;
+    int32_t  seen_mm;       /* positions reported back are encoder distance:   */
+    int32_t  trigger_mm;    /*  accum_counts halves (L+R) in integers and runs */
+    float    trigger_speed; /*  ~1 % short, driven_mm does not                  */
+} watch_rt_t;
+static volatile watch_rt_t watch_rt;
+
+/* Face log for watch_face_fit(): one sample per FACE_LOG_STEP_MM driven. */
+#define FACE_LOG_MAX        256u
+#define FACE_LOG_STEP_MM    4
+static volatile int16_t  face_log_mm[FACE_LOG_MAX];
+static volatile float    face_log_cm[FACE_LOG_MAX];
+static volatile uint16_t face_log_n = 0u;
+static volatile int32_t  face_log_last_mm = 0;
+
 /* Kush: see control.h. Only CAL_TRACE sets it, and only for one move. */
 void (*volatile straight_tick_hook)(const straight_tick_t *t) = 0;
+void (*volatile control_tick_hook)(void) = 0;
 
 /* ------------------------------------------------------------------------- */
 /* Helper Functions                                                          */
@@ -129,9 +226,210 @@ static void stop_hardware(move_result_t result)
     reset_speed_pid();
 }
 
+/* Kush (09-Oct): starts the move the caller has set up, unless a stop came in
+ * since the caller's own check at the top. Every move checks for an abort,
+ * then waits (servo to full lock, or to centre) before it starts. A
+ * motion_stop() from an interrupt inside that wait ran stop_hardware() while
+ * no move was running, which centred the wheels, and the move then started
+ * anyway. A STOP from the Pi got away with it: command_poll() handles it a
+ * second time from inside the move's loop and stops the move there. An SW1
+ * stop (CAL_TASK2, control_tick_hook) has no second chance: a turn then drove
+ * straight on centred wheels, never reached its angle, and ran on to the
+ * 20 s timeout (simulated: about one tap in six). Interrupts are off between
+ * the check and the start, so a stop lands either before (no move, verdict
+ * ABORT) or after (stopped as usual). Returns 1 if the move started. */
+static uint8_t start_move(control_mode_t mode)
+{
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    const uint8_t go = abort_latched ? 0u : 1u;
+    if (go) {
+        busy_flag    = 1;
+        current_mode = mode;
+    }
+    __set_PRIMASK(primask);
+    if (!go) stop_hardware(MOVE_ABORT);    /* wheels back to centre */
+    return go;
+}
+
+/* 1 while the Task 2 extra feedforward is fully in (see MODE_STRAIGHT). */
+static uint8_t straight_ff_extra_on(void)
+{
+    return (profile->straight_ff_extra > 0.0f && dir_forward == 1 &&
+            !(watch_rt.active && watch_rt.slowed)) ? 1u : 0u;
+}
+
+/* Counts a straight move covers while its command ramps from `from` down to
+   `to` (both commanded counts/tick), given the wheels are really doing
+   v_meas. See BRAKE_SAFETY at the top.
+   The wheel speed settles on a straight line against the command,
+       v = v_to + b * (cmd - to),
+   whose slope follows from the controller's own numbers: duty is
+   (20 + KP) * cmd + extra * (cmd - crawl) - KP * v, and the motors need about
+   MOTOR_DUTY_PER_COUNT per count/tick, so b = (20 + KP + extra) / (193 + KP):
+   0.45 on the plain feedforward (matches 27 counts/tick at a command of 60)
+   and 1.25 with Task 2's extra. While the command falls at STRAIGHT_RAMP_STEP
+   per tick the wheels slow at b times that. The speed used is the larger of
+   the measured one and the one the wheels are heading for at this command, so
+   a short move that starts braking while the wheels are still catching up
+   allows for the speed they are about to reach. */
+static int32_t ramp_down_counts(float from, float to, float v_meas)
+{
+    const float extra = straight_ff_extra_on() ? profile->straight_ff_extra : 0.0f;
+    const float b     = (20.0f + SPEED_KP + extra) / (MOTOR_DUTY_PER_COUNT + SPEED_KP);
+    const float v_to  = BRAKE_TO_ACTUAL * to;
+    float v = v_to + b * (from - to);          /* where the wheels are heading */
+    if (v_meas > v) v = v_meas;
+    const float lag = BRAKE_LAG_TICKS * v;
+    if (from <= to + 1.0f) return (int32_t)lag;
+    float dv2 = v * v - v_to * v_to;
+    if (dv2 < 0.0f) dv2 = 0.0f;
+    return (int32_t)(BRAKE_SAFETY * dv2 / (2.0f * b * STRAIGHT_RAMP_STEP) + lag);
+}
+
+/* Counts a straight move needs, from now, to be down to a watch's sense speed
+   by its arm point (the slow-down latch in MODE_STRAIGHT). Without the Task 2
+   extra feedforward this is ramp_down_counts(), as before. With it, the car
+   can still be accelerating when the latch is due (a watch that arms after a
+   short run), with the wheels already well above the speed they will do at
+   the sense command, because the extra fades to nothing there. So both speeds
+   are worked out from the crawl up, on the same straight lines as above:
+   heading for v_c + b * (cmd - crawl) now, slowing to v_c + b0 * (sense -
+   crawl), b0 being the slope without the extra. */
+static int32_t sense_slow_counts(float from, float sense, float v_meas)
+{
+    if (!straight_ff_extra_on()) return ramp_down_counts(from, sense, v_meas);
+    const float crawl = profile->straight_crawl;
+    const float b0    = (20.0f + SPEED_KP) / (MOTOR_DUTY_PER_COUNT + SPEED_KP);
+    const float b     = (20.0f + SPEED_KP + profile->straight_ff_extra) /
+                        (MOTOR_DUTY_PER_COUNT + SPEED_KP);
+    const float v_c   = BRAKE_TO_ACTUAL * crawl;
+    const float v_to  = v_c + b0 * ((sense > crawl) ? (sense - crawl) : 0.0f);
+    float v = v_c + b * ((from > crawl) ? (from - crawl) : 0.0f);
+    if (v_meas > v) v = v_meas;
+    const float lag = BRAKE_LAG_TICKS * v;
+    if (v <= v_to) return (int32_t)lag;
+    return (int32_t)(BRAKE_SAFETY * (v * v - v_to * v_to) / (2.0f * b * STRAIGHT_RAMP_STEP) + lag);
+}
+
+/* Counts a straight move needs, from now, to come down to its crawl and stop
+   the normal way. The Task 1 profile keeps the original formula. */
+static int32_t straight_stop_counts(void)
+{
+    const float sp    = fabsf(current_speed_ramp);
+    /* Kush (09-Oct): a move_straight_watch() keeps the crawl (SPEED_CRAWL) and
+       the measured brake point its stops were tuned with, whatever the
+       profile. Every other straight follows the profile. */
+    if (watch_rt.active) {
+        return ramp_down_counts(sp, (float)SPEED_CRAWL, straight_v_meas) + BRAKE_MARGIN_COUNTS;
+    }
+    const float crawl = profile->straight_crawl;
+    if (profile->brake_measured) {
+        return ramp_down_counts(sp, crawl, straight_v_meas) + BRAKE_MARGIN_COUNTS;
+    }
+    return (int32_t)((sp * sp - crawl * crawl) / (2.0f * STRAIGHT_RAMP_STEP)) + BRAKE_MARGIN_COUNTS;
+}
+
+/* One tick of a move_straight_watch() watch, from MODE_STRAIGHT once
+   accum_counts is up to date. May pull target_counts_total in. */
+static void straight_watch_tick(void)
+{
+    if (!watch_rt.active || watch_rt.triggered) return;
+
+    const int32_t pos = accum_counts;
+    if (!watch_rt.armed) {
+        if (pos < watch_rt.arm_counts) return;
+        watch_rt.armed = 1u;
+    }
+
+    float v;
+    if (watch_rt.kind == WATCH_US_BELOW) {
+        if (ultrasonic_age_ms() > 100u) {      /* no fresh echo: no decision */
+            watch_rt.cond_ticks = 0u;
+            return;
+        }
+        v = ultrasonic_distance_cm;
+    } else {
+        v = ir_filtered_cm(watch_rt.side);
+    }
+
+    /* Distance driven so far by the encoders (what driven_mm is measured in). */
+    const int32_t mm = (int32_t)(0.5f * (float)((enc_left_total - watch_rt.l0) +
+                                                (enc_right_total - watch_rt.r0)) * MM_PER_COUNT);
+
+    /* Face log: while the IR sees something, one sample per FACE_LOG_STEP_MM. */
+    if (watch_rt.log_face && watch_rt.kind != WATCH_US_BELOW && v < watch_rt.thresh_cm) {
+        if (face_log_n < FACE_LOG_MAX &&
+            (face_log_n == 0u || (mm - face_log_last_mm) >= FACE_LOG_STEP_MM)) {
+            face_log_mm[face_log_n] = (int16_t)mm;
+            face_log_cm[face_log_n] = v;
+            face_log_n++;
+            face_log_last_mm = mm;
+        }
+    }
+
+    uint8_t cond = 0u;
+    switch (watch_rt.kind) {
+        case WATCH_IR_ABOVE: cond = (v >= watch_rt.thresh_cm); break;
+        case WATCH_IR_BELOW:
+        case WATCH_US_BELOW: cond = (v <= watch_rt.thresh_cm); break;
+        case WATCH_IR_PASS:
+            if (!watch_rt.seen) {
+                if (v <= watch_rt.thresh_cm) {
+                    if (++watch_rt.seen_ticks >= WATCH_CONFIRM_TICKS) {
+                        watch_rt.seen    = 1u;
+                        watch_rt.seen_mm = mm;
+                    }
+                } else {
+                    watch_rt.seen_ticks = 0u;
+                }
+            } else {
+                cond = (v >= watch_rt.thresh_cm);
+            }
+            break;
+        default:
+            break;
+    }
+
+    if (!cond) { watch_rt.cond_ticks = 0u; return; }
+    if (++watch_rt.cond_ticks < WATCH_CONFIRM_TICKS) return;
+
+    /* Kush (14-Oct): seen over less than min_seen_mm, then lost: a flicker
+       of noise, not a face. Forget it (and what the face log took from it)
+       and keep looking. */
+    if (watch_rt.kind == WATCH_IR_PASS && (mm - watch_rt.seen_mm) < watch_rt.min_seen_mm) {
+        watch_rt.seen       = 0u;
+        watch_rt.seen_ticks = 0u;
+        watch_rt.cond_ticks = 0u;
+        if (watch_rt.blips < 255u) watch_rt.blips++;
+        if (watch_rt.log_face) face_log_n = 0u;
+        return;
+    }
+
+    /* Confirmed. Stop after_counts from here -- or further, if the car needs
+       more room than that to slow to its crawl, so it always stops the
+       normal way instead of braking hard from speed. */
+    watch_rt.triggered      = 1u;
+    watch_rt.trigger_mm     = mm;
+    watch_rt.trigger_speed  = straight_v_meas;
+    int32_t room = straight_stop_counts();
+    if (room < watch_rt.after_counts) room = watch_rt.after_counts;
+    if (pos + room < target_counts_total) target_counts_total = pos + room;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Public API                                                                */
 /* ------------------------------------------------------------------------- */
+
+void motion_set_profile(const motion_profile_t *p)
+{
+    if (p != 0) profile = p;
+}
+
+const motion_profile_t *motion_get_profile(void)
+{
+    return profile;
+}
 
 void control_init(void)
 {
@@ -216,14 +514,14 @@ uint8_t move_straight_mm(int32_t mm)
 	right_pid_integral        = 0.0f;
 	current_speed_ramp        = 0.0f;
 	straight_braking          = 0u;
+	straight_v_meas           = 0.0f;
     move_ticks                = 0;
     stall_ticks_count         = 0;
     locked_heading_deg        = global_yaw_deg;
     last_result               = MOVE_NONE; /* Zhenxi: this move has no verdict yet */
 
     reset_speed_pid();
-    busy_flag    = 1;
-    current_mode = MODE_STRAIGHT;
+    if (!start_move(MODE_STRAIGHT)) return 0;   /* stopped during the wait above */
 
     /* Monitor sensors while moving */
 	while (busy_flag) {
@@ -269,8 +567,131 @@ uint8_t move_straight_mm(int32_t mm)
      * could never fire. The hardware is already stopped; the settle delay
      * is all that is still needed.                                       */
     if (last_result == MOVE_NONE) stop_hardware(MOVE_DONE);
-    HAL_Delay(100); /* Final settle */
+    /* Final settle. Kush (12-Oct, STRAIGHT_SETTLE_FAST in calib.h): 50 ms
+       instead of 100 after a straight; it stops from its crawl, so there is
+       next to no coast left. Turns keep their 100 ms (move_turn_deg). */
+    HAL_Delay(STRAIGHT_SETTLE_FAST ? 50u : 100u);
 	return 1;
+}
+
+/* Signed distance the rear wheels have covered since (l0, r0), mm. */
+static int32_t wheels_mm_since(int32_t l0, int32_t r0)
+{
+    return (int32_t)(0.5f * (float)((enc_left_total - l0) + (enc_right_total - r0)) * MM_PER_COUNT);
+}
+
+int32_t move_straight_measured(int32_t mm)
+{
+    const int32_t l0 = enc_left_total, r0 = enc_right_total;
+    move_straight_mm(mm);
+    return wheels_mm_since(l0, r0);   /* after move_straight_mm's settle: coast included */
+}
+
+uint8_t move_straight_watch(int32_t max_mm, watch_t *w)
+{
+    w->triggered = 0u;
+    w->seen      = 0u;
+    w->seen_mm   = 0;
+    w->trigger_mm = 0;
+    w->trigger_speed_mm_tick = 0.0f;
+    w->driven_mm = 0;
+    w->blips     = 0u;
+    if (max_mm <= 0 || motion_abort_requested()) return 0;
+
+    const int32_t l0 = enc_left_total, r0 = enc_right_total;
+
+    /* The ISR only looks at the watch while a straight move is running, and
+       move_straight_mm() does not start one until it has reset everything. */
+    watch_rt.active        = 0u;
+    watch_rt.kind          = (uint8_t)w->kind;
+    watch_rt.side          = w->ir_side;
+    watch_rt.log_face      = w->log_face;
+    watch_rt.min_seen_mm   = (w->kind == WATCH_IR_PASS) ? w->min_seen_mm : 0;
+    watch_rt.blips         = 0u;
+    watch_rt.thresh_cm     = w->thresh_cm;
+    watch_rt.sense_speed   = w->sense_speed;
+    watch_rt.arm_counts    = (w->arm_mm > 0) ? (int32_t)((float)w->arm_mm / MM_PER_COUNT) : 0;
+    watch_rt.after_counts  = (w->after_mm > 0) ? (int32_t)((float)w->after_mm / MM_PER_COUNT) : 0;
+    watch_rt.armed         = (watch_rt.arm_counts == 0) ? 1u : 0u;
+    watch_rt.triggered     = 0u;
+    watch_rt.seen          = 0u;
+    watch_rt.seen_ticks    = 0u;
+    watch_rt.cond_ticks    = 0u;
+    watch_rt.slowed        = 0u;
+    watch_rt.ff_fade_from  = 0.0f;
+    watch_rt.l0            = l0;
+    watch_rt.r0            = r0;
+    watch_rt.seen_mm       = 0;
+    watch_rt.trigger_mm    = 0;
+    watch_rt.trigger_speed = 0.0f;
+    face_log_n             = 0u;
+    face_log_last_mm       = 0;
+    watch_rt.active        = 1u;
+
+    uint8_t ok = move_straight_mm(max_mm);
+
+    watch_rt.active = 0u;
+
+    w->triggered  = watch_rt.triggered;
+    w->seen       = watch_rt.seen;
+    w->seen_mm    = watch_rt.seen_mm;
+    w->blips      = watch_rt.blips;
+    w->trigger_mm = watch_rt.trigger_mm;
+    w->trigger_speed_mm_tick = watch_rt.trigger_speed * MM_PER_COUNT;
+    w->driven_mm  = wheels_mm_since(l0, r0);
+    return ok;
+}
+
+uint8_t watch_face_fit(float trim, uint16_t min_n, float min_span_mm,
+                       float *slope_cm_per_mm, uint16_t *n_used, float *span_mm)
+{
+    const uint16_t n = face_log_n;
+    const uint16_t cut = (uint16_t)((float)n * trim);
+    const uint16_t lo = cut;
+    const uint16_t hi = (n > cut) ? (uint16_t)(n - cut) : 0u;   /* exclusive */
+
+    *slope_cm_per_mm = 0.0f;
+    *n_used = (hi > lo) ? (uint16_t)(hi - lo) : 0u;
+    *span_mm = (hi > lo) ? (float)(face_log_mm[hi - 1u] - face_log_mm[lo]) : 0.0f;
+    if (*n_used < min_n || *span_mm < min_span_mm) return 0u;
+
+    /* Least squares, x relative to the first sample to keep the sums small. */
+    const float x0 = (float)face_log_mm[lo];
+    float sx = 0.0f, sy = 0.0f, sxx = 0.0f, sxy = 0.0f;
+    for (uint16_t i = lo; i < hi; i++) {
+        const float x = (float)face_log_mm[i] - x0;
+        const float y = face_log_cm[i];
+        sx += x; sy += y; sxx += x * x; sxy += x * y;
+    }
+    const float m   = (float)(*n_used);
+    const float den = m * sxx - sx * sx;
+    if (den <= 1e-3f) return 0u;
+    *slope_cm_per_mm = (m * sxy - sx * sy) / den;
+    return 1u;
+}
+
+uint8_t watch_face_level(float trim, uint16_t min_n, float *level_cm, uint16_t *n_used)
+{
+    static float s[FACE_LOG_MAX];
+    const uint16_t n = face_log_n;
+    const uint16_t cut = (uint16_t)((float)n * trim);
+    const uint16_t lo = cut;
+    const uint16_t hi = (n > cut) ? (uint16_t)(n - cut) : 0u;   /* exclusive */
+    uint16_t m = 0u;
+
+    for (uint16_t i = lo; i < hi; i++) s[m++] = face_log_cm[i];
+    *n_used   = m;
+    *level_cm = 0.0f;
+    if (m == 0u || m < min_n) return 0u;
+
+    for (uint16_t i = 1u; i < m; i++) {          /* insertion sort, m <= 256 */
+        const float v = s[i];
+        int16_t j = (int16_t)(i - 1u);
+        while (j >= 0 && s[j] > v) { s[j + 1] = s[j]; j--; }
+        s[j + 1] = v;
+    }
+    *level_cm = (m & 1u) ? s[m / 2u] : 0.5f * (s[m / 2u - 1u] + s[m / 2u]);
+    return 1u;
 }
 
 uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
@@ -295,8 +716,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
     HAL_Delay(SERVO_SETTLE_MS); /* Allow servo to reach mechanical position (calib.h) */
 
     reset_speed_pid();
-    busy_flag    = 1;
-    current_mode = MODE_TURN_DEG;
+    if (!start_move(MODE_TURN_DEG)) return 0;   /* stopped during the wait above */
 
     /* Monitor sensors while turning */
 	while (busy_flag) {
@@ -335,10 +755,10 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 				reset_speed_pid();
 
 				/* THE CRITICAL FIX: Wake the motor ISR back up!
-				 * stop_hardware() turned it off, so we must re-arm it. */
-				current_mode = MODE_TURN_DEG;
-
-				busy_flag = 1; /* Continue the while loop, now in reverse! */
+				 * stop_hardware() turned it off, so we must re-arm it.
+				 * Kush (09-Oct): through start_move(), so a STOP during
+				 * the waits above is not lost (see start_move). */
+				if (!start_move(MODE_TURN_DEG)) return 0;  /* Continue the while loop, now in reverse! */
 			} else {
 				//stop_hardware(MOVE_BLOCKED);
 				stop_hardware(MOVE_DONE);
@@ -387,8 +807,7 @@ void move_pivot_deg(int8_t left, int32_t degrees)
     HAL_Delay(220);
 
     reset_speed_pid();
-    busy_flag    = 1;
-    current_mode = MODE_PIVOT_DEG;
+    if (!start_move(MODE_PIVOT_DEG)) return;    /* stopped during the wait above */
 
     while (busy_flag) {
         command_poll();
@@ -457,8 +876,7 @@ void move_turn(int8_t left, int8_t forward, int32_t counts)
     HAL_Delay(200);
 
     reset_speed_pid();
-    busy_flag    = 1;
-    current_mode = MODE_TURN_RAW;
+    if (!start_move(MODE_TURN_RAW)) return;     /* stopped during the wait above */
 
     while (busy_flag) {
         command_poll();
@@ -503,6 +921,17 @@ void control_tick(void)
         odo_y_mm += ds_mm * sinf(hd_rad);
     }
 
+    /* Kush (09-Oct): IR filtering and ultrasonic pings, every tick, idle too,
+       so a filtered reading is always ready between moves (sensors.h). */
+    sensors_tick();
+
+    /* Kush (09-Oct): every tick, idle too (control.h). If it calls
+       motion_stop(), the mode is idle by the check below. */
+    {
+        void (*hook)(void) = control_tick_hook;
+        if (hook != 0) hook();
+    }
+
     if (current_mode == MODE_IDLE) {
         return;
     }
@@ -536,13 +965,37 @@ void control_tick(void)
 			accum_counts += avg_delta;
 			const int32_t BRAKE_LEAD_COUNTS = 5/MM_PER_COUNT;
 
+			/* Kush (09-Oct): measured speed for the brake point, and the sensor
+			 * watch of move_straight_watch(), which can pull the target in. */
+			straight_v_meas += 0.3f * (0.5f * (float)(abs(left_delta) + abs(right_delta)) - straight_v_meas);
+			straight_watch_tick();
+
 			if (accum_counts >= target_counts_total - BRAKE_LEAD_COUNTS) {
 				stop_hardware(MOVE_DONE);
 				return;
 			}
 
 			/* --- Slew-Rate Acceleration & Deceleration Ramp --- */
-			float target_speed = (float)(dir_forward * SPEED_STRAIGHT);
+			/* Kush (09-Oct): cruise from the speed profile. While a watch is
+			 * armed it runs at the watch's sense speed, and slows to it in
+			 * time for the arm point (latched, so it cannot hunt). With the
+			 * Task 2 extra feedforward it always does, even if the sense speed
+			 * is not below the cruise: the cruise is then a real speed and the
+			 * sense speed a command the wheels do ~45 % of. */
+			float cruise = profile->straight_cruise;
+			if (watch_rt.active && watch_rt.sense_speed > 0.0f &&
+			    (watch_rt.slowed || watch_rt.sense_speed < cruise || straight_ff_extra_on())) {
+				if (!watch_rt.slowed) {
+					int32_t to_arm = watch_rt.arm_counts - accum_counts;
+					if (watch_rt.armed ||
+					    to_arm <= sense_slow_counts(fabsf(current_speed_ramp), watch_rt.sense_speed, straight_v_meas)) {
+						watch_rt.ff_fade_from = fabsf(current_speed_ramp);
+						watch_rt.slowed = 1u;
+					}
+				}
+				if (watch_rt.slowed) cruise = watch_rt.sense_speed;
+			}
+			float target_speed = (float)dir_forward * cruise;
 			int32_t remaining_counts = target_counts_total - accum_counts;
 			const int32_t DECEL_TICKS = 250; /* Tune this! Distance to start braking */
 
@@ -559,8 +1012,11 @@ void control_tick(void)
 			    }
 			}
 
-			const float RAMP_STEP = 1.2f; /* Accelerates/Decelerates smoothly */
-			const float CRAWL_SPEED = 50.0f;
+			const float RAMP_STEP = STRAIGHT_RAMP_STEP; /* Accelerates/Decelerates smoothly */
+			/* Kush (09-Oct): from the profile: 15 in both Task 1 and Task 2,
+			 * the value Task 2 was tested with before 0c37bfe made it 50. A
+			 * watch move always uses SPEED_CRAWL (see straight_stop_counts). */
+			const float CRAWL_SPEED = watch_rt.active ? (float)SPEED_CRAWL : profile->straight_crawl;
 
 			/* Kush: start slowing early enough to reach crawl speed before the
 			 * target. Ramping down from speed v to crawl at RAMP_STEP per tick
@@ -569,20 +1025,26 @@ void control_tick(void)
 			 * from the 60 counts/tick cruise the car reached the target still
 			 * doing ~55 and ran on past it. That started to show once the planner
 			 * began joining FW010s into long FW moves. Latched, so a wheel that
-			 * lags the ramp cannot flip it back to cruise speed. */
-			float speed_now = fabsf(current_speed_ramp);
-			int32_t brake_counts = (int32_t)((speed_now * speed_now - CRAWL_SPEED * CRAWL_SPEED)
-			                                 / (2.0f * RAMP_STEP)) + BRAKE_MARGIN_COUNTS;
+			 * lags the ramp cannot flip it back to cruise speed.
+			 * Kush (09-Oct): that formula is still what the Task 1 profile uses;
+			 * the Task 2 profile works it out from the measured speed instead
+			 * (straight_stop_counts / ramp_down_counts at the top). */
+			int32_t brake_counts = straight_stop_counts();
 			if (straight_braking || remaining_counts < DECEL_TICKS || remaining_counts < brake_counts) {
 				straight_braking = 1u;
 				target_speed = (float)dir_forward * CRAWL_SPEED; /* Crawl speed */
 			}
 
+			/* Kush (12-Oct, STRAIGHT_FAST_START in calib.h): speeding up (the
+			 * command moving away from 0, either direction) goes
+			 * STRAIGHT_RAMP_UP_X times as fast; slowing is RAMP_STEP as before,
+			 * which is what the brake point (straight_stop_counts) works with. */
+			const float RAMP_UP = STRAIGHT_FAST_START ? STRAIGHT_RAMP_UP_X * RAMP_STEP : RAMP_STEP;
 			if (current_speed_ramp < target_speed) {
-				current_speed_ramp += RAMP_STEP;
+				current_speed_ramp += (current_speed_ramp >= 0.0f) ? RAMP_UP : RAMP_STEP;
 				if (current_speed_ramp > target_speed) current_speed_ramp = target_speed;
 			} else if (current_speed_ramp > target_speed) {
-				current_speed_ramp -= RAMP_STEP;
+				current_speed_ramp -= (current_speed_ramp <= 0.0f) ? RAMP_UP : RAMP_STEP;
 				if (current_speed_ramp < target_speed) current_speed_ramp = target_speed;
 			}
 
@@ -714,6 +1176,36 @@ void control_tick(void)
 			/* Pushes baseline power so the weaker left motor doesn't stall when braking */
 			int32_t ff = (int32_t)(dir_forward * (fabsf(current_speed_ramp) * 20.0f));
 
+			/* Kush (09-Oct): the rest of the feedforward, Task 2 only.
+			 * 20 duty per count/tick is about a tenth of what the motors need
+			 * (~190: full PWM gives ~82), so the wheels only ever reached ~45 %
+			 * of the command. This adds what is missing, but only for the part
+			 * of the command ABOVE the crawl: at the crawl it adds nothing, so
+			 * the crawl and the stop are exactly the Task 1 ones. It is also
+			 * off while a sensing phase holds its sense speed (move_straight_
+			 * watch), so those run as tuned, and when reversing, so the reverse
+			 * steering trim keeps the speeds it was set at. MODE_TURN_DEG has
+			 * its own feedforward below and is not touched. */
+			if (profile->straight_ff_extra > 0.0f && dir_forward == 1) {
+				const float sp = fabsf(current_speed_ramp);
+				float extra = 0.0f;
+				if (watch_rt.active && watch_rt.slowed) {
+					/* A sensing phase has taken over: fade the extra out as the
+					 * command falls from where it took over to the sense speed,
+					 * so it is gone (and the phase runs as tuned) by then,
+					 * without a step in the duty. A watch armed from the start
+					 * takes over at 0 and never gets any. */
+					const float hi = watch_rt.ff_fade_from, lo = watch_rt.sense_speed;
+					if (hi > lo + 1.0f && sp > lo) {
+						const float s = (sp < hi) ? sp : hi;
+						extra = profile->straight_ff_extra * (hi - profile->straight_crawl) * (s - lo) / (hi - lo);
+					}
+				} else if (sp > profile->straight_crawl) {
+					extra = profile->straight_ff_extra * (sp - profile->straight_crawl);
+				}
+				ff += (int32_t)extra;
+			}
+
 			int32_t duty_l = ff + (int32_t)(SPEED_KP * err_l + SPEED_KI * left_pid_integral);
 			int32_t duty_r = ff + (int32_t)(SPEED_KP * err_r + SPEED_KI * right_pid_integral);
 
@@ -778,6 +1270,20 @@ void control_tick(void)
 
 			/* --- Slew-Rate Acceleration & Deceleration Ramp --- */
 			float target_base_speed = (float)(dir_forward * SPEED_TURN);
+			float ramp_up_step      = 1.2f;   /* RAMP_STEP below, while speeding up */
+#if TURN_FAST
+			/* Kush (11-Oct, speed step 6, TURN_FAST in calib.h): faster in the
+			 * middle of the turn only. Back at SPEED_TURN TURN_FAST_HANDOVER_DEG
+			 * before the slow-down below starts, so from there the end of the
+			 * turn is the same as before. */
+			{
+				const float slow_from_deg = (target_deg_total > 45.0f) ? 20.0f : 6.0f; /* DECEL_DEG / SHORT_DECEL_DEG */
+				if (remaining_deg >= slow_from_deg + TURN_FAST_HANDOVER_DEG) {
+					target_base_speed = (float)(dir_forward * SPEED_TURN_FAST);
+					ramp_up_step      = TURN_FAST_RAMP_UP;
+				}
+			}
+#endif
 
 			/* FIX: Change '>=' to '>' so 45-deg turns carry clean, constant speed
 			 * without losing momentum over a 20-deg crawl window. */
@@ -797,11 +1303,14 @@ void control_tick(void)
 
 			const float RAMP_STEP = 1.2f;
 
+			/* Kush (11-Oct): ramp_up_step only while moving away from 0
+			 * (speeding up, either direction); slowing is always RAMP_STEP.
+			 * With TURN_FAST 0 both are 1.2, as before. */
 			if (current_speed_ramp < target_base_speed) {
-				current_speed_ramp += RAMP_STEP;
+				current_speed_ramp += (current_speed_ramp >= 0.0f) ? ramp_up_step : RAMP_STEP;
 				if (current_speed_ramp > target_base_speed) current_speed_ramp = target_base_speed;
 			} else if (current_speed_ramp > target_base_speed) {
-				current_speed_ramp -= RAMP_STEP;
+				current_speed_ramp -= (current_speed_ramp <= 0.0f) ? ramp_up_step : RAMP_STEP;
 				if (current_speed_ramp < target_base_speed) current_speed_ramp = target_base_speed;
 			}
 

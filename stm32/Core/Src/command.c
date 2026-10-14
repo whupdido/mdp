@@ -136,12 +136,6 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
  *   ACK       STOP acknowledged, or START2 accepted
  *   BUSY      a move was already running; this command was DISCARDED
  *   ERR       unrecognised command
- *
- * Task 2 also says, unprompted, while START2 runs
- *   SCAN      stopped in front of an arrow; answer IM038/IM039 within 3 s
- *             (each IM gets its own DONE, which is not the routine's)
- *   PARKED    in the carpark and stopped -- the tablet stops its clock here
- *             (Zhenxi). The routine's DONE follows when task_2() returns.
  */
 
 /* Zhenxi: guards task_2() against re-entering itself.
@@ -362,7 +356,10 @@ static uint8_t gc_try(gc_window_t *w)
     return 1u;
 }
 
-static void gyro_zero_command(void)
+/* The whole GC. reply = 1 answers DONE / ERR as the Pi expects; a Task 2 run
+   started on the car (command_gyro_zero) passes 0, since nobody asked over
+   the UART. Returns 1 if a new zero was kept. */
+static uint8_t gyro_zero(uint8_t reply)
 {
     char u[128];
     char row[24];
@@ -395,7 +392,7 @@ static void gyro_zero_command(void)
         OLED_ShowString(0, 0,  (const uint8_t *)"GYRO ZERO STOPPED");
         OLED_ShowString(0, 20, (const uint8_t *)"old zero kept");
         OLED_Refresh_Gram();
-        return;
+        return 0u;
     }
 
     snprintf(u, sizeof u,
@@ -428,11 +425,35 @@ static void gyro_zero_command(void)
     if (ok) {
         calibrated = 1;
         gc_status  = "DONE";
-        command_send("DONE\r\n");
+        if (reply) command_send("DONE\r\n");
     } else {
         gc_status  = "ERR";
-        command_send("ERR\r\n");
+        if (reply) command_send("ERR\r\n");
     }
+    return ok;
+}
+
+static void gyro_zero_command(void)
+{
+    (void)gyro_zero(1u);
+}
+
+uint8_t command_gyro_zero(void)
+{
+    return gyro_zero(0u);
+}
+
+/* Kush (09-Oct): Task 2 started on the car (see command.h). Takes START2's
+   re-entry guard, so a START2 that arrives anyway is answered BUSY instead of
+   starting a second run inside this one. Leaves the abort latch alone: the
+   caller clears it before its own countdown, and a STOP or SW1 press since
+   then must still count. */
+void command_task2_local(uint8_t arrow_obs1, uint8_t arrow_obs2)
+{
+    if (task2_running) return;
+    task2_running = 1u;
+    task_2_with_arrows(arrow_obs1, arrow_obs2);
+    task2_running = 0u;
 }
 
 static void dispatch(const char *cmd)
@@ -442,6 +463,20 @@ static void dispatch(const char *cmd)
        BUSY. */
     if (strcmp(cmd, "?") == 0) { report_status(); return; }
     if (strncmp(cmd, "STOP", 4) == 0) { handle_stop(); return; }
+    /* Zhenxi: IM is not a move, so it must not go through report_result()
+       -- that would echo whatever the *previous* move's verdict was.
+       Kush (12-Oct): and it is answered before the busy guard. Main's Pi
+       bridge counts one DONE per IM it sends (a1_bridge.relay_stm_replies;
+       "each IM gets its own DONE" in main's STM32_motion_spec.md). An IM that
+       arrived while the car was already moving again got BUSY instead, which
+       the bridge takes as the routine's final reply: it stopped listening,
+       and the next SCAN went unanswered. A late arrow set here is cleared
+       when the next scan window opens (task_2_image_rec resets image_found). */
+    if (strncmp(cmd, "IM", 2) == 0) {
+        image_found = (uint8_t)((strlen(cmd) >= 5u) ? atoi(cmd + 2) : 0);
+        command_send("DONE\r\n");
+        return;
+    }
     if (motion_busy() || gc_running) { command_send("BUSY\r\n"); return; }
     if (strlen(cmd) < 2u) { command_send("ERR\r\n"); return; }
 
@@ -453,18 +488,14 @@ static void dispatch(const char *cmd)
     else if (!strncmp(cmd, "FR", 2)) { begin_motion(cmd); move_turn_deg(0, 1, arg); }
     else if (!strncmp(cmd, "BL", 2)) { begin_motion(cmd); move_turn_deg(1, 0, arg); }
     else if (!strncmp(cmd, "BR", 2)) { begin_motion(cmd); move_turn_deg(0, 0, arg); }
-    /* Zhenxi: IM is not a move, so it must not go through report_result()
-       -- that would echo whatever the *previous* move's verdict was. It
-       replied DONE before (by falling through) and still does.          */
-    else if (!strncmp(cmd, "IM", 2)) { image_found = (uint8_t)arg; command_send("DONE\r\n"); return; }
+    /* IM is answered above, before the busy guard. */
     /* Kush: GC replies DONE or ERR itself (see gyro_zero_command). Exact
        match, so report_status() can tell a GC from a move by name. */
     else if (!strcmp(cmd, "GC")) { begin_motion(cmd); gyro_zero_command(); return; }
     /* Zhenxi: Task 2. Answers on the same contract as everything else, so
        the Pi and the tablet are not left guessing for three minutes.
          ACK   accepted, the routine has begun
-         DONE  the routine returned (after PARKED, which task_2() sends
-               itself the moment the car stops in the carpark)
+         DONE  the routine returned
          BUSY  one is already running (see task2_running above)
        Without the ACK the bridge waits STM_TIMEOUT_SECONDS and reports
        NO_REPLY, which the tablet shows as a warning while the robot is in

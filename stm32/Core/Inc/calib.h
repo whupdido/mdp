@@ -101,11 +101,103 @@
 
 /* Target speeds in ENCODER COUNTS PER 10 ms CONTROL TICK.
    A physical quantity, independent of PWM_MAX -- do NOT rescale these
-   if you change the PWM period.                                            */
-// Max 85 for left motor, 80 for right on my floor
-//#define SPEED_STRAIGHT      60
-#define SPEED_STRAIGHT      80
-#define SPEED_TURN          50
+   if you change the PWM period.
+
+   Kush (09-Oct): these are COMMANDS, not what the wheels do. The speed loop is
+   close to proportional only (feedforward 20 duty per count/tick against the
+   ~190 the motors need), so the wheels settle at about 45 % of the command:
+   CAL_TRACE measured 27 counts/tick (0.37 m/s) for a command of 60. That is
+   why commanding 80 does not saturate a motor that tops out at ~80.
+
+   Two sets, see motion_profile_t in control.h:
+     Task 1 (the Pi's FW/BW/FL/FR/BL/BR): SPEED_STRAIGHT / SPEED_CRAWL /
+       SPEED_TURN, exactly what ran Task 1 on 09-Oct (commit 570c4d6). WRT4's
+       80 / 50 from 0c37bfe are not used for Task 1 any more: a crawl of 50
+       makes the car brake from ~4x the speed BRAKE_LEAD_COUNTS was set at,
+       so every move ran long.
+     Task 2 (task_2() only): T2_*, the settings Task 2 was tested with on the
+       course before 0c37bfe (570c4d6 / 4879da0): cruise 60, crawl 15, the
+       original brake point, i.e. the same as Task 1. 0c37bfe (WRT4, 09-Oct
+       12:32) raised them to 80 / 50, and the faster Task 2 straights tried
+       later on 09-Oct went further still; with either, the car finished the
+       obstacle 1 dodge much closer to obstacle 2 than in the tested runs.
+       Only the sensing phases after obstacle 2 (move_straight_watch) use the
+       measured brake point their stops were tuned with. Turns are SPEED_TURN
+       in both.
+       Kush (11-Oct, speed step 5): Task 2 cruise 60 -> 80, crawl kept at 15,
+       and every Task 2 straight now starts slowing from the measured wheel
+       speed (MOTION_PROFILE_TASK2.brake_measured = 1 in control.c), as the
+       sensing phases already did. The 09-Oct 80 kept the original brake
+       point, which from 80 left ~20 cm of crawl, so 0c37bfe raised the crawl
+       to 50 and the car then stopped from ~20 counts/tick and ran long. Here
+       the brake goes on at the same crawl as the tested runs, the crawl is cut
+       to a few cm, and the stop is the same. To go back: 60 here and
+       brake_measured 0u in control.c.                                       */
+// Max 85 for left motor, 80 for right on my floor (full PWM, see the note above)
+#define SPEED_STRAIGHT      60      /* Task 1 cruise                             */
+#define SPEED_CRAWL         15      /* commanded speed the brake goes on at      */
+#define SPEED_TURN          50      /* every turn, Task 1 and Task 2             */
+
+/* Kush (11-Oct, speed step 6): faster turns. TURN_FAST 1 = on, 0 = every turn
+   exactly as before.
+   When on, a turn speeds up twice as fast (TURN_FAST_RAMP_UP command steps a
+   tick instead of 1.2) to SPEED_TURN_FAST, and is back down at SPEED_TURN by
+   TURN_FAST_HANDOVER_DEG before the point where every turn starts slowing
+   (20 deg from the end of a turn over 45 deg, 6 deg from the end of a smaller
+   one). From there on the turn runs exactly as before, and that last part is
+   what sets the angle it ends at and the coast that is part of the measured
+   radii (TURN_RADIUS_*), so those still hold. A 90 is fast for its first
+   ~50 deg, a 45 for its first ~19, a 30 for its first ~4; anything under
+   26 deg (the arrow-scan retries, the parking shift) is unchanged. Applies
+   to every move_turn_deg(), Task 1 included.
+   If the turns start ending at a different angle, set TURN_FAST to 0 first. */
+#ifndef TURN_FAST
+#define TURN_FAST               1
+#endif
+#define SPEED_TURN_FAST         65      /* commanded, middle of a turn               */
+#define TURN_FAST_RAMP_UP       2.4f    /* command steps per tick speeding up (1.2)  */
+#define TURN_FAST_HANDOVER_DEG  20.0f   /* back at SPEED_TURN this far before slowing */
+
+/* Kush (12-Oct): three more speed-ups, each with its own switch: 1 = on,
+   0 = exactly as before. None changes the path or how a move ends.
+     STRAIGHT_FAST_START  a straight speeds up STRAIGHT_RAMP_UP_X times as fast
+                          as before; slowing down, the brake point and the
+                          stop are unchanged. ~1.4 s a Task 2 run, simulated.
+                          If a straight wheelspins as it starts, set it to 0.
+     STRAIGHT_SETTLE_FAST the pause after a straight, before the next move,
+                          50 ms instead of 100 (the car stops from its crawl,
+                          so there is next to no coast left). After a turn it
+                          stays 100 ms: the steering is coming back from full
+                          lock then, and the next move's timing was tested
+                          with that. ~0.6 s a run, simulated.
+     T2_FEWER_PAUSES      task_2(): no steering pause before TURN 1 (the arrow
+                          read always ends on a straight, so the wheels are
+                          centred) or TURN 3 (same lock as TURN 2), nor the two
+                          before the parking reads (standing still, wheels
+                          centred). The pauses before a turn the opposite way
+                          stay. ~0.6 s a run, simulated.
+   Together, simulated over 200 layouts: same obstacle 1 detection, no
+   collisions, parked within ~1 cm of before on average. Applies to Task 1
+   too (the first two). */
+#ifndef STRAIGHT_FAST_START
+#define STRAIGHT_FAST_START     1
+#endif
+#define STRAIGHT_RAMP_UP_X      2.0f
+#ifndef STRAIGHT_SETTLE_FAST
+#define STRAIGHT_SETTLE_FAST    1
+#endif
+#ifndef T2_FEWER_PAUSES
+#define T2_FEWER_PAUSES         1
+#endif
+
+#define T2_SPEED_STRAIGHT   80      /* Task 2 cruise (60 as tested; 80 since 11-Oct) */
+#define T2_SPEED_CRAWL      15      /* Task 2 crawl, as tested (pre-0c37bfe)     */
+/* Extra feedforward for Task 2's forward straights, in duty per count/tick of
+   command above the crawl (see MODE_STRAIGHT in control.c). 0 = off, as in
+   the original. 250 made the wheels really do the command (0.82 m/s at 60
+   instead of 0.37 m/s); reverted on 09-Oct, see above. Do not turn it back on
+   without checking where Task 2's straights stop on the floor.             */
+#define T2_STRAIGHT_FF_EXTRA 0
 
 /* VERIFIED ON HARDWARE -- DO NOT CHANGE.
    Both motors drive the car backwards on positive duty, so both are 1.
@@ -126,22 +218,39 @@
    offset, and it pays for the bend at the near end of the range, which is
    exactly where the readings are being used to avoid hitting things.
 
-   These are the values measured on this car. The on-car calibration UI that
-   produced them has been removed, so they are now fixed here.               */
-#define IR_LEFT_M           19.22f
-#define IR_LEFT_B           0.210f
-#define IR_LEFT_K           0.0f
-#define IR_RIGHT_M          20.80f
-#define IR_RIGHT_B          0.073f
-#define IR_RIGHT_K          0.0f
+   Kush (14-Oct): measured with CAL_IR (cal_programs.c), a board 10 to 70 cm
+   from each lens. Worst errors left over: -2.8 cm (left) and -3.9 cm (right),
+   both at 60 cm. The values before (left 19.22 / 0.210 / 0, right
+   20.80 / 0.073 / 0, from a sweep to ~60 cm) were off by up to +8.8 cm at
+   70 cm (left) and -16.0 cm at 60 cm (right). Run CAL_IR again if a sensor
+   is moved or swapped.                                                      */
+#define IR_LEFT_M           27.20f
+#define IR_LEFT_B           0.081f
+#define IR_LEFT_K           2.04f
+#define IR_RIGHT_M          42.93f
+#define IR_RIGHT_B          (-0.110f)
+#define IR_RIGHT_K          9.40f
 
 /* Range the readings are trusted over. Below IR_MIN_CM the response curve
    folds back on itself, so a 5 cm target reads the same as a 20 cm one.
-   IR_MAX_CM is deliberately just past the top of the calibration sweep: past
-   that the curve is too flat for the reading to mean much, so it saturates
-   instead of pretending to resolve 60 from 75.                              */
+   CAL_IR's sweep goes to 70 cm; past that the curve is flat, so a reading of
+   70-80 cm only says roughly how far, not exactly.
+   Kush (11-Oct): IR_MAX_CM 60 -> 80 (the sensor's rated range) so the Task 2
+   search for obstacle 1 on the way back can tell "something at 60-70 cm"
+   from open space (obstacle_nav.c, T2_OBS1_FAR_CM). Every other IR check
+   switches below 60 cm, so a reading above 60 meant the same to them before
+   (60, clamped) as it does now (60-80).                                      */
 #define IR_MIN_CM           10.0f
-#define IR_MAX_CM           60.0f
+#define IR_MAX_CM           80.0f
+
+/* Kush (14-Oct): from each side IR's lens to the car's centre line, mm. What
+   a side IR reads plus this is how far the centre line is from what it sees;
+   T2_PARK_DIRECT (obstacle_nav.c) works out how far out the car is from it.
+   CAL_IR's last step, between the carpark walls with the values above: 55,
+   which puts the lenses about 11 cm apart, ~4 cm in from the sides of the
+   188 mm body (it was 94, the simulator's guess). Measure it again with
+   CAL_IR whenever the IR values change. */
+#define IR_TO_CENTRE_MM     55
 
 /* --- safety limits, in 10 ms control ticks ---
    These exist because a stalled motor held at full duty is what tripped the
