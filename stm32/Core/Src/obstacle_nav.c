@@ -361,7 +361,7 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    no difference: with the end only 10 cm deep, CREEP 2 never moved. */
 #define T2_SENSE_FACE           70.0f   /* along obstacle 2's front and back faces */
 #define T2_SENSE_SIDE           45.0f   /* along its 10 cm end                     */
-#define T2_SENSE_OBS1           42.0f   /* finding obstacle 1 on the way back (was 30) */
+#define T2_SENSE_OBS1           70.0f   /* finding obstacle 1 on the way back (was 30) */
 #define T2_SENSE_PARK           49.0f   /* last ultrasonic approach in the carpark (was 35) */
 
 /* CREEP 1: along obstacle 2's front face until the inner IR loses it. */
@@ -378,7 +378,7 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
 #define T2_BACK_MAX_MM          1200
 /* Return: obstacle 1 seen then lost, heading home and then across behind it. */
 #define T2_OBS1_CM              55.0f
-#define T2_OBS1_AFTER_MM        25      /* old: 50 mm steps */
+#define T2_OBS1_AFTER_MM        10     /* old: 50 mm steps */
 #define T2_OBS1_MAX_MM          500
 /* Kush (11-Oct): heading home the car passes obstacle 1 at the side, its IR
    ~45 cm from it with a 60 cm wide obstacle 2, further with a wider one or
@@ -458,7 +458,7 @@ uint16_t t2_direct_n = 0u;
    T2_PARK_MAX_MM, T2_PARK_NO_ECHO_MM if there is no echo at all, and the
    ultrasonic stops it early below T2_PARK_GUARD_CM. */
 #define T2_PARK_STOP_CM         9.0f
-#define T2_PARK_GUARD_CM        20.0f
+#define T2_PARK_GUARD_CM        10.0f
 #define T2_PARK_MAX_MM          400
 #define T2_PARK_NO_ECHO_MM      150
 
@@ -891,10 +891,10 @@ static void task_2_run(void)
 	   come back from full lock (a turn gives it 250 ms to get there). The
 	   IR checks before CREEP 1 and 2 now come 100 ms after the turn stopped
 	   instead of 250 ms; the IR median covers only the last 50 ms. */
-	if (dodge_left == dodge_left_2){
+	/*if (dodge_left == dodge_left_2){
 		int32_t d = move_straight_measured(-100);
 		accum_left += dodge_left_2 ? d : -d;
-	}
+	}*/
 	t2_no_collision = 0;
 	/* ---------------------------------------------------------
 	 * CREEP 1: The Front Face -- now one move, until the inner IR loses it

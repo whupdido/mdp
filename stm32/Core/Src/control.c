@@ -86,8 +86,8 @@ static float right_pid_integral = 0.0f;
  *   STEER_V2_RATE_SMOOTH a little (more smoothing) and STEER_V2_KP with it.
  * Check with CAL_TRACE (hdg per phase) and CAL_STRAIGHT. */
 #define STRAIGHT_STEER_V2   1
-#define STEER_V2_KP         110.0f  /* us per deg of heading error (was 130)         */
-#define STEER_V2_KD         3.5f   /* us per deg/s of yaw rate, from the gyro       */
+#define STEER_V2_KP         80.0f  /* us per deg of heading error (was 130)         */
+#define STEER_V2_KD         0.0f   /* us per deg/s of yaw rate, from the gyro       */
 #define STEER_V2_RATE_SMOOTH 0.35f  /* share of each new gyro reading in that rate   */
 #define STEER_REF_SPEED     27.0f   /* counts/tick the gains hold at: the cruise
                                        speed CAL_TRACE measured on 08-Oct            */
@@ -539,7 +539,7 @@ uint8_t move_straight_mm(int32_t mm)
 		command_poll();
 
 		/* Only check for front collisions if we are driving forward */
-		if (dir_forward == 1 && check_front_collision() ) {
+		if (!t2_no_collision && dir_forward == 1 && check_front_collision() ) {
 			/* Zhenxi: was MOVE_DONE, which made a 15 cm move that stopped at
 			 * 3 cm indistinguishable from one that completed. The [WARN]
 			 * line below still goes out; BLOCKED is what the Pi and tablet
@@ -1245,7 +1245,7 @@ void control_tick(void)
 			/* 2. Direction-Aware Inertia Lead:
 			 * Forward coasts ~2.5 deg on momentum.
 			 * Reverse has heavy tire scrub and zero coast, so lead must be much smaller. */
-			float braking_lead = 6.5f;
+			float braking_lead = 5.0f;
 			if (target_deg_total <= 45){
 				if (turn_left)
 					braking_lead = (dir_forward == 1) ? 4.7f : 4.4f;
