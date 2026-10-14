@@ -82,11 +82,38 @@
      CAL_TRACE      one FW100 watched from inside the control loop: each
                     wheel's speed against its target, heading change and
                     steering phase by phase, the crawl. Tap for 3 pages.
+     CAL_TASK2      the whole Task 2 with no Pi and no image recognition. The
+                    arrows come from CAL_T2_ARROW_OBS1 / _OBS2 below. A tap
+                    waits 0.8 s, zeroes the gyro hands-off (as the Pi's GC
+                    does), then runs; SW1 again stops the car. The OLED shows
+                    the run time at the end. No long press needed first.
+     CAL_IR         the side IRs, nothing drives: a board at 10-70 cm on each
+                    side in turn (fits the IR_*_M/_B/_K in calib.h), then the
+                    car in the carpark (IR_TO_CENTRE_MM), then a live view.
+                    Results and #define lines on USART3.
 
-   A tap drives the car in every program except CAL_OFF and CAL_ODOMETER
-   (which free-wheels the motors instead), so set CAL_PROGRAM back to CAL_OFF
-   before a real run. */
-#define CAL_PROGRAM      CAL_OFF
+   A tap drives the car in every program except CAL_OFF, CAL_ODOMETER
+   (which free-wheels the motors instead) and CAL_IR, so set CAL_PROGRAM back
+   to CAL_OFF before a real run. */
+#define CAL_PROGRAM      CAL_IR
+
+/* Kush (09-Oct): 1 = run the calibration programs (and any FW/BW/FL/... from
+   the Pi) on the Task 2 speed profile instead of the Task 1 one, so CAL_TRACE,
+   CAL_STRAIGHT and CAL_TURN (TT_ANGLE 90) measure what task_2() actually does.
+   START2 always uses the Task 2 profile whatever this says. Back to 0 for a
+   Task 1 run. */
+#define CAL_USE_TASK2_PROFILE  0
+
+/* Kush (09-Oct): the arrows CAL_TASK2 acts on instead of scanning, one per
+   obstacle: T2_ARROW_LEFT or T2_ARROW_RIGHT (the side the car goes round it).
+   Only used when CAL_PROGRAM is CAL_TASK2; START2 from the Pi always scans. */
+#define CAL_T2_ARROW_OBS1      T2_ARROW_RIGHT
+#define CAL_T2_ARROW_OBS2      T2_ARROW_RIGHT
+
+#if (CAL_T2_ARROW_OBS1 != T2_ARROW_LEFT && CAL_T2_ARROW_OBS1 != T2_ARROW_RIGHT) || \
+    (CAL_T2_ARROW_OBS2 != T2_ARROW_LEFT && CAL_T2_ARROW_OBS2 != T2_ARROW_RIGHT)
+#error "CAL_T2_ARROW_OBS1 and CAL_T2_ARROW_OBS2 must each be T2_ARROW_LEFT or T2_ARROW_RIGHT"
+#endif
 
 /* USER CODE END PD */
 
@@ -194,6 +221,10 @@ static void cal_ready_screen(void)
     cal_seq_show_idle();
 #elif CAL_PROGRAM == CAL_TRACE
     cal_trace_show_idle();
+#elif CAL_PROGRAM == CAL_TASK2
+    cal_task2_show_idle(CAL_T2_ARROW_OBS1, CAL_T2_ARROW_OBS2);
+#elif CAL_PROGRAM == CAL_IR
+    cal_ir_show_idle();
 #endif
 }
 /* USER CODE END 0 */
@@ -246,6 +277,9 @@ int main(void)
   encoders_init();
   servo_init();
   control_init();
+#if CAL_USE_TASK2_PROFILE
+  motion_set_profile(&MOTION_PROFILE_TASK2);
+#endif
   command_init();
   OLED_Init();
   ir_sensors_init();
@@ -269,6 +303,8 @@ int main(void)
       command_poll();
 #if CAL_PROGRAM == CAL_ODOMETER
       cal_odometer_poll();   /* redraws the live reading every 200 ms */
+#elif CAL_PROGRAM == CAL_IR
+      cal_ir_poll();         /* the live view at the end, every 200 ms */
 #endif
       /* --- User Button (SW1 / PE0) --- *
        * Debounced, and waits for release before acting. The original read the
@@ -337,6 +373,10 @@ int main(void)
                   cal_seq_step();
 #elif CAL_PROGRAM == CAL_TRACE
                   cal_trace_step();
+#elif CAL_PROGRAM == CAL_TASK2
+                  cal_task2_step(CAL_T2_ARROW_OBS1, CAL_T2_ARROW_OBS2);
+#elif CAL_PROGRAM == CAL_IR
+                  cal_ir_step();
 #else
                   display_both_sensors_oled();
 #endif
