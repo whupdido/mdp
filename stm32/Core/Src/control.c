@@ -86,8 +86,8 @@ static float right_pid_integral = 0.0f;
  *   STEER_V2_RATE_SMOOTH a little (more smoothing) and STEER_V2_KP with it.
  * Check with CAL_TRACE (hdg per phase) and CAL_STRAIGHT. */
 #define STRAIGHT_STEER_V2   1
-#define STEER_V2_KP         80.0f  /* us per deg of heading error (was 130)         */
-#define STEER_V2_KD         0.0f   /* us per deg/s of yaw rate, from the gyro       */
+#define STEER_V2_KP         145.0f  /* us per deg of heading error (was 130)         */
+#define STEER_V2_KD         4.9f   /* us per deg/s of yaw rate, from the gyro       */
 #define STEER_V2_RATE_SMOOTH 0.35f  /* share of each new gyro reading in that rate   */
 #define STEER_REF_SPEED     27.0f   /* counts/tick the gains hold at: the cruise
                                        speed CAL_TRACE measured on 08-Oct            */

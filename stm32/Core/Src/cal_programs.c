@@ -276,7 +276,7 @@ typedef struct {
 
 /* Run order: case = run % CS_NCASES, so each round goes out and back. */
 static const cs_case_t CS_CASES[] = {
-    { "FW100",  500 },
+    { "FW100",  1500 },
 };
 /* Counts the list, so entries can be added or removed. It was a fixed 4: with
    one entry left, taps 2 to 4 read past the end of CS_CASES and drove
@@ -474,8 +474,8 @@ static const struct {
     int8_t      left;      /* 1 = left, 0 = right   */
     int8_t      forward;   /* 1 = forward, 0 = back */
 } SIX_KINDS[4] = {
-    { "FR030", 0, 1 },
-    { "FL030", 1, 1 },
+    { "FR045", 0, 1 },
+    { "FL045", 1, 1 },
     { "BR030", 0, 0 },
     { "BL030", 1, 0 },
 };

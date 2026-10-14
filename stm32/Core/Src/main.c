@@ -95,7 +95,7 @@
    A tap drives the car in every program except CAL_OFF, CAL_ODOMETER
    (which free-wheels the motors instead) and CAL_IR, so set CAL_PROGRAM back
    to CAL_OFF before a real run. */
-#define CAL_PROGRAM      CAL_STRAIGHT
+#define CAL_PROGRAM      CAL_TASK2
 /* Kush (09-Oct): 1 = run the calibration programs (and any FW/BW/FL/... from
    the Pi) on the Task 2 speed profile instead of the Task 1 one, so CAL_TRACE,
    CAL_STRAIGHT and CAL_TURN (TT_ANGLE 90) measure what task_2() actually does.
@@ -106,8 +106,8 @@
 /* Kush (09-Oct): the arrows CAL_TASK2 acts on instead of scanning, one per
    obstacle: T2_ARROW_LEFT or T2_ARROW_RIGHT (the side the car goes round it).
    Only used when CAL_PROGRAM is CAL_TASK2; START2 from the Pi always scans. */
-#define CAL_T2_ARROW_OBS1      T2_ARROW_LEFT
-#define CAL_T2_ARROW_OBS2      T2_ARROW_LEFT
+#define CAL_T2_ARROW_OBS1      T2_ARROW_RIGHT
+#define CAL_T2_ARROW_OBS2      T2_ARROW_RIGHT
 
 #if (CAL_T2_ARROW_OBS1 != T2_ARROW_LEFT && CAL_T2_ARROW_OBS1 != T2_ARROW_RIGHT) || \
     (CAL_T2_ARROW_OBS2 != T2_ARROW_LEFT && CAL_T2_ARROW_OBS2 != T2_ARROW_RIGHT)

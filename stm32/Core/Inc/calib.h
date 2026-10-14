@@ -191,7 +191,7 @@
 #endif
 
 #define T2_SPEED_STRAIGHT   120      /* Task 2 cruise (60 as tested; 80 since 11-Oct) */
-#define T2_SPEED_CRAWL      70      /* Task 2 crawl, as tested (pre-0c37bfe)     */
+#define T2_SPEED_CRAWL      50      /* Task 2 crawl, as tested (pre-0c37bfe)     */
 /* Extra feedforward for Task 2's forward straights, in duty per count/tick of
    command above the crawl (see MODE_STRAIGHT in control.c). 0 = off, as in
    the original. 250 made the wheels really do the command (0.82 m/s at 60

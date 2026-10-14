@@ -320,8 +320,8 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
  */
 
 /* --- Approaches ---------------------------------------------------------- */
-#define T2_STANDOFF_OBS1_MM     350     /* front ultrasonic to obstacle 1 to read it */
-#define T2_STANDOFF_OBS2_MM     300     /* and to obstacle 2                         */
+#define T2_STANDOFF_OBS1_MM     330     /* front ultrasonic to obstacle 1 to read it */
+#define T2_STANDOFF_OBS2_MM     330     /* and to obstacle 2                         */
 /* No echo at all: obstacle 1 is at least 600 mm out, so 300 still leaves 300. */
 #define T2_NO_ECHO_OBS1_MM      300
 /* Kush (11-Oct): obstacle 2 closer than its standoff after the dodge (at the
