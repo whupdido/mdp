@@ -196,6 +196,27 @@ static float steer_v2_int = 0.0f;   /* what STEER_V2_KI has added up, us        
 /* Accelerates/decelerates the commanded speed by this much per tick. */
 #define STRAIGHT_RAMP_STEP  1.2f
 
+/* Kush (15-Oct): how a move_straight_watch() with a blind stretch (arm_mm,
+   only the obstacle 1 search on the way home) hands over from the cruise to
+   its sense speed. The cruise runs on Task 2's extra feedforward and the
+   sense speed without it, and the extra used to fade out as the command fell
+   to the sense speed. With T2_SENSE_OBS1 above the cruise the command never
+   falls, so the extra went in one tick: the duty dropped from full to about a
+   quarter, and the motors (the AT8236 brakes in the off part of each PWM
+   cycle) braked the rear wheels from ~80 to ~45 counts/tick in ~0.1 s.
+   Simulated that is ~9 m/s2, far past what rear tyres grip, so on the floor
+   they skid, the rear steps out and the car weaves just as it reaches speed
+   heading home; the steering also scales its gains on the encoder speed,
+   which reads low while the wheels skid. Now the extra fades out by distance
+   over this share of the way from the takeover to the arm point (where the
+   watch starts looking), whatever the sense speed. Simulated with sense 120:
+   ~2.5 m/s2 at most, the same as the brake ramp at the end of every straight,
+   at the sense speed by the arm point as before, and ~0.1 s quicker. Lower
+   sense speeds now slow about that hard too (70 took ~4 m/s2 before, 95 the
+   same one-tick drop as 120). Car still above the sense speed when the watch
+   starts looking: lower to 0.75. */
+#define WATCH_FADE_SHARE    0.85f
+
 /* Kush (09-Oct): where a straight move starts slowing, worked out from the
  * speed the wheels are really doing (profile.brake_measured = 1).
  *
@@ -268,8 +289,9 @@ typedef struct {
     uint8_t  slowed;        /* cruise has dropped to sense_speed (latched) */
     float    thresh_cm;
     float    sense_speed;
-    float    ff_fade_from;  /* command when it slowed: the Task 2 extra
-                               feedforward fades out from here            */
+    float    ff_fade_extra; /* Task 2 extra feedforward when it slowed, duty:
+                               it fades out from there (WATCH_FADE_SHARE)  */
+    int32_t  fade_counts0;  /* accum_counts when it slowed                 */
     int32_t  arm_counts;    /* in accum_counts units, like the move's target   */
     int32_t  after_counts;
     int32_t  l0, r0;        /* encoder totals at the start of the move         */
@@ -726,7 +748,8 @@ uint8_t move_straight_watch(int32_t max_mm, watch_t *w)
     watch_rt.seen_ticks    = 0u;
     watch_rt.cond_ticks    = 0u;
     watch_rt.slowed        = 0u;
-    watch_rt.ff_fade_from  = 0.0f;
+    watch_rt.ff_fade_extra = 0.0f;
+    watch_rt.fade_counts0  = 0;
     watch_rt.l0            = l0;
     watch_rt.r0            = r0;
     watch_rt.seen_mm       = 0;
@@ -837,7 +860,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 
 			/* GYRO FIX: Let the physical crash shockwave dissipate so
 			 * the gyro returns to absolute 0 before calculating remaining angle! */
-			HAL_Delay(200);
+			//HAL_Delay(200);
 
 			float remaining_deg = target_deg_total - accum_deg;
 
@@ -858,7 +881,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 				/* Physically swing the wheels to the opposite lock */
 				if (turn_left) servo_us(SERVO_LEFT);
 				else           servo_us(SERVO_RIGHT);
-				HAL_Delay(100);
+				//HAL_Delay(100);
 
 				reset_speed_pid();
 
@@ -871,7 +894,7 @@ uint8_t move_turn_deg(int8_t left, int8_t forward, int32_t degrees)
 				//stop_hardware(MOVE_BLOCKED);
 				stop_hardware(MOVE_DONE);
 				busy_flag = 0; /* Turn is basically complete, safe to abort */
-				HAL_Delay(100);
+				//HAL_Delay(100);
 				command_send("\r\n[WARN] Turn almost complete. Aborting.\r\n");
 				return 0;
 			}
@@ -1097,7 +1120,12 @@ void control_tick(void)
 					int32_t to_arm = watch_rt.arm_counts - accum_counts;
 					if (watch_rt.armed ||
 					    to_arm <= sense_slow_counts(fabsf(current_speed_ramp), watch_rt.sense_speed, straight_v_meas)) {
-						watch_rt.ff_fade_from = fabsf(current_speed_ramp);
+						/* The extra feedforward the last tick had (MODE_STRAIGHT
+						   below), to fade out from. */
+						const float sp0 = fabsf(current_speed_ramp);
+						watch_rt.ff_fade_extra = (straight_ff_extra_on() && sp0 > profile->straight_crawl)
+						    ? profile->straight_ff_extra * (sp0 - profile->straight_crawl) : 0.0f;
+						watch_rt.fade_counts0 = accum_counts;
 						watch_rt.slowed = 1u;
 					}
 				}
@@ -1138,7 +1166,16 @@ void control_tick(void)
 			 * the Task 2 profile works it out from the measured speed instead
 			 * (straight_stop_counts / ramp_down_counts at the top). */
 			int32_t brake_counts = straight_stop_counts();
-			if (straight_braking || remaining_counts < DECEL_TICKS || remaining_counts < brake_counts) {
+			/* Kush (15-Oct): a watch with stop_at_trigger keeps its speed to
+			 * the target and brakes there (control.h), instead of slowing to
+			 * the crawl for it: after the trigger, and also on the way to its
+			 * max_mm, which at a high sense speed it used to start slowing for
+			 * before it had even reached what it was looking for (from a sense
+			 * speed of 120 the crawl needs ~55 cm; the obstacle 1 search window
+			 * is 50 cm, so it crawled the whole search). */
+			const uint8_t hold_to_stop = (watch_rt.active && watch_rt.stop_at_trigger) ? 1u : 0u;
+			if (straight_braking ||
+			    (!hold_to_stop && (remaining_counts < DECEL_TICKS || remaining_counts < brake_counts))) {
 				straight_braking = 1u;
 				target_speed = (float)dir_forward * CRAWL_SPEED; /* Crawl speed */
 			}
@@ -1329,15 +1366,16 @@ void control_tick(void)
 				const float sp = fabsf(current_speed_ramp);
 				float extra = 0.0f;
 				if (watch_rt.active && watch_rt.slowed) {
-					/* A sensing phase has taken over: fade the extra out as the
-					 * command falls from where it took over to the sense speed,
-					 * so it is gone (and the phase runs as tuned) by then,
-					 * without a step in the duty. A watch armed from the start
-					 * takes over at 0 and never gets any. */
-					const float hi = watch_rt.ff_fade_from, lo = watch_rt.sense_speed;
-					if (hi > lo + 1.0f && sp > lo) {
-						const float s = (sp < hi) ? sp : hi;
-						extra = profile->straight_ff_extra * (hi - profile->straight_crawl) * (s - lo) / (hi - lo);
+					/* A sensing phase has taken over: fade the extra out by
+					 * distance, over WATCH_FADE_SHARE of the way from where it
+					 * took over to the arm point, so it is gone (and the phase
+					 * runs as tuned) by then, without a step in the duty. A
+					 * watch armed from the start takes over at 0 and never gets
+					 * any. See WATCH_FADE_SHARE for why not with the command. */
+					const float span = WATCH_FADE_SHARE * (float)(watch_rt.arm_counts - watch_rt.fade_counts0);
+					const float done = (float)(accum_counts - watch_rt.fade_counts0);
+					if (watch_rt.ff_fade_extra > 0.0f && span > 0.0f && done < span) {
+						extra = watch_rt.ff_fade_extra * (1.0f - done / span);
 					}
 				} else if (sp > profile->straight_crawl) {
 					extra = profile->straight_ff_extra * (sp - profile->straight_crawl);

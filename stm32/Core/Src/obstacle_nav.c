@@ -324,6 +324,23 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
 #define T2_STANDOFF_OBS2_MM     330     /* and to obstacle 2                         */
 /* No echo at all: obstacle 1 is at least 600 mm out, so 300 still leaves 300. */
 #define T2_NO_ECHO_OBS1_MM      300
+/* Kush (15-Oct): the dodge round obstacle 1 as three turns: T2_DODGE_DEG out
+   towards the arrow, twice that back round obstacle 1, T2_DODGE_DEG out
+   again to straighten, no straight anywhere. It ends where the old dodge did
+   (back on the start line, square), ~10 cm further on, with one stop fewer.
+   The middle turn circles obstacle 1, so its far corner never comes close.
+   Worked out on paper from the 30 cm standoff, car starting centred: the
+   closest the body comes to obstacle 1, as it is / first turn 3 deg short /
+   turns 10 % wider than measured:
+                               left dodge      right dodge
+     old 45/45, 100, 45/45     35               34
+     55 / 110 / 55            105 / 72 / 111    88 / 57 / 81
+     60 / 120 / 60            124 / 124 / 111   94 / 94 / 81
+   Past 60 nothing improves: the first turn itself is then the closest. 60 and
+   120 are big turns to the turn code (the > 45 braking leads, set on 90s), so
+   check FL / FR at TT_ANGLE 60 in turn_test.c. 0 = the old four 45s. */
+#define T2_DODGE_ARC            1
+#define T2_DODGE_DEG            60
 /* Kush (11-Oct): obstacle 2 closer than its standoff after the dodge (at the
    60 cm minimum gap the dodge leaves the nose a few cm from it): back off to
    the standoff, see the OBSTACLE 2 STANDOFF block in task_2_run().
@@ -334,6 +351,10 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    further than this from the standoff (a reading a few cm from the face can
    be off by a few cm). */
 #define T2_OBS2_RECHECK_MM      25
+/* Kush (15-Oct): the most any one ultrasonic reading may send the car forward
+   towards obstacle 2 in the standoff block without a second reading to back
+   it up, and the most the check after a back-off may ever drive forward. */
+#define T2_OBS2_FWD_MAX_MM      100
 /* The approach to obstacle 2 only acts on a reading under this, as the original
    did: anything further is taken as a miss and the car stays where the dodge
    left it. Raised to 250 on 09-Oct and put back the same day: a far echo after
@@ -360,18 +381,24 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    slow), which swings TURN 4 that much closer to the side wall. SIDE made
    no difference: with the end only 10 cm deep, CREEP 2 never moved. */
 #define T2_SENSE_FACE           70.0f   /* along obstacle 2's front face           */
-#define T2_SENSE_BACK           70.0f   /* and its back face (see T2_BACK_AFTER_MM) */
+#define T2_SENSE_BACK           120.0f   /* and its back face (see T2_BACK_AFTER_MM) */
 #define T2_SENSE_SIDE           45.0f   /* along its 10 cm end                     */
-#define T2_SENSE_OBS1           70.0f   /* finding obstacle 1 on the way back (was 30) */
-#define T2_SENSE_PARK           49.0f   /* last ultrasonic approach in the carpark (was 35) */
+#define T2_SENSE_OBS1           120.0f   /* finding obstacle 1 on the way back (was 30) */
+#define T2_SENSE_PARK           120.0f   /* last ultrasonic approach in the carpark (was 35) */
 
 /* CREEP 1: along obstacle 2's front face until the inner IR loses it. */
 #define T2_FRONT_CLEAR_CM       35.0f
-#define T2_FRONT_AFTER_MM       100     /* old: 200 mm steps */
+/* Kush (15-Oct): CREEP 1 and CREEP 2 now keep their sense speed past the
+   edge and brake (stop_at_trigger) instead of slowing to the 15 crawl, which
+   is what made them so slow before TURN 2 and TURN 3. Their *_AFTER_MM are
+   raised so they still stop about where the crawl used to (~15 cm past the
+   edge from T2_SENSE_FACE, ~9.5 cm from T2_SENSE_SIDE). Turn clips obstacle
+   2's corner: raise them 10-20 mm; stops further out than before: lower. */
+#define T2_FRONT_AFTER_MM       140     /* old: 200 mm steps, then 100 */
 #define T2_FRONT_MAX_MM         800
 /* CREEP 2: along its 10 cm end. */
 #define T2_SIDE_CLEAR_CM        45.0f
-#define T2_SIDE_AFTER_MM        50      /* old: 100 mm steps */
+#define T2_SIDE_AFTER_MM        85      /* old: 100 mm steps, then 50 */
 #define T2_SIDE_MAX_MM          300
 /* CREEP 3: along its back face. It must see the face, then lose it.
    Kush (15-Oct): and stops right there. It used to go on T2_BACK_AFTER_MM
@@ -396,7 +423,12 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
                                            it. It stops at the end anyway.          */
 /* Return: obstacle 1 seen then lost, heading home and then across behind it. */
 #define T2_OBS1_CM              55.0f
-#define T2_OBS1_AFTER_MM        10     /* old: 50 mm steps */
+/* Kush (15-Oct): the pass search keeps its speed past obstacle 1 and brakes
+   (stop_at_trigger) instead of slowing to the 15 crawl before the turn behind
+   it, so T2_OBS1_AFTER_MM is now how far it goes on at speed: 100 stops it
+   ~12 cm past the edge, about where it stopped from a sense speed of 70.
+   Turn behind obstacle 1 too close to it: raise; too far out: lower. */
+#define T2_OBS1_AFTER_MM        100    /* old: 50 mm steps, then 10 */
 #define T2_OBS1_MAX_MM          500
 /* Kush (11-Oct): heading home the car passes obstacle 1 at the side, its IR
    ~45 cm from it with a 60 cm wide obstacle 2, further with a wider one or
@@ -453,11 +485,6 @@ uint16_t t2_direct_n = 0u;
 #endif
 #define T2_DIRECT_MIN_N         6u      /* IR samples along obstacle 1's side, at least */
 #define T2_DIRECT_MIN_MM        15      /* a middle straight shorter than this is skipped */
-/* Kush (15-Oct): the car is put down T2_START_OFFSET_MM towards obstacle 1's
-   arrow, so the first dodge turn has more room. accum_left counts it, and
-   the encoder park below parks that much back the other way, on the centre
-   line. */
-#define T2_START_OFFSET_MM      30
 /* Kush (15-Oct): when the pass does not see obstacle 1 (obstacle 2 of
    ~140 cm or more brings the car home too far out for the IR), park from the
    wheel encoders and the gyro instead of searching along obstacle 1's back
@@ -562,6 +589,20 @@ static float t2_front_cm(void)
     if (a > b) { float t = a; a = b; b = t; }
     if (b > c) b = c;
     return (a > b) ? a : b;
+}
+
+/* Kush (15-Oct): t2_front_cm() again, standing still, and the nearer of that
+   and `first` (whichever came back if only one did). t2_front_cm() keeps the
+   one ping that came back when the other two got no echo, and a missed weak
+   echo reads as whatever is further back, so one bad set of pings could say
+   obstacle 2 was a metre away when it was 30 cm off. The nearer of two sets
+   only ever errs short. */
+static float t2_front_cm_nearer(float first)
+{
+    const float again = t2_front_cm();
+    if (again <= 0.0f) return first;
+    if (first <= 0.0f) return again;
+    return (again < first) ? again : first;
 }
 
 /* Tilt from the face the last watch logged: whole degrees, clamped to
@@ -801,15 +842,24 @@ static void task_2_run(void)
 	OLED_ShowString(0, 20, dodge_left ? (const uint8_t *)"Dodging Left" : (const uint8_t *)"Dodging Right");
 	OLED_Refresh_Gram();
 
+#if T2_DODGE_ARC
+	/* Kush (15-Oct): out, round obstacle 1, back (T2_DODGE_ARC). Net: no
+	   turn, no sideways move, 2 (R_FL + R_FR) sin T2_DODGE_DEG forward. */
+	{
+		t2_status("Dodge Arc!      ");
+		const float a = (float)T2_DODGE_DEG * (3.14159f / 180.0f);
+		move_turn_deg(dodge_left,  1, T2_DODGE_DEG);
+		move_turn_deg(!dodge_left, 1, 2 * T2_DODGE_DEG);
+		move_turn_deg(dodge_left,  1, T2_DODGE_DEG);
+		accum_forward += (int32_t)(2.0f * (float)(TURN_RADIUS_FL_MM + TURN_RADIUS_FR_MM) * sinf(a));
+	}
+#else
 	/* ---------------------------------------------------------
 	 * PHASE 1 + 2: Outward S-curve into the side lane
 	 * --------------------------------------------------------- */
 	if (dodge_left){
 		accum_forward += move_straight_measured(100);
-		accum_left += T2_START_OFFSET_MM;
 	}
-	else
-		accum_left -= T2_START_OFFSET_MM;
 	task_2_turn(dodge_left, 1, 45, 0, &accum_forward, &accum_left);
 	/* Kush (11-Oct): the HAL_Delay(100) that was here went with speed step 1
 	   (see task_2_turn): the car is standing still and the next turn waits
@@ -839,6 +889,8 @@ static void task_2_run(void)
 	HAL_Delay(150);
 	task_2_straighten(turn_inward, 45, &accum_forward, &accum_left);
 
+#endif
+
 	/* ---------------------------------------------------------
 	 * OBSTACLE 2 STANDOFF: sit 30 cm (T2_STANDOFF_OBS2_MM) from it to read
 	 * the arrow.
@@ -867,7 +919,7 @@ static void task_2_run(void)
 		const int32_t d = move_straight_measured(-T2_OBS2_BLIND_BACK_MM);
 		accum_forward += d;
 		backed        -= d;
-		us2 = t2_front_cm();
+		us2 = t2_front_cm_nearer(t2_front_cm());   /* Kush (15-Oct): two sets */
 		if (us2 > 0.0f) {
 			d_after_dodge = (int32_t)(us2 * 10.0f) - backed;
 			if (d_after_dodge < 0) d_after_dodge = 0;
@@ -880,9 +932,16 @@ static void task_2_run(void)
 		int32_t d = move_straight_measured(dist_to_target);
 		accum_forward += d;
 		backed        -= d;
-		us2_check = t2_front_cm();
+		/* Kush (15-Oct): one bad reading here could say obstacle 2 was far
+		   away, and the whole difference was then driven at the cruise speed
+		   (the likely cause of the rare runs that drove into it). Now two
+		   sets of pings (the nearer kept), and never more than
+		   T2_OBS2_FWD_MAX_MM forward: it has just backed off to about the
+		   standoff, so a big forward correction can only be a bad reading. */
+		us2_check = t2_front_cm_nearer(t2_front_cm());
 		if (us2_check > 0.0f && us2_check < T2_US_MAX_TRUST_CM) {
-			const int32_t err = (int32_t)(us2_check * 10.0f) - T2_STANDOFF_OBS2_MM;
+			int32_t err = (int32_t)(us2_check * 10.0f) - T2_STANDOFF_OBS2_MM;
+			if (err > T2_OBS2_FWD_MAX_MM) err = T2_OBS2_FWD_MAX_MM;
 			if (err < -T2_OBS2_RECHECK_MM || err > T2_OBS2_RECHECK_MM) {
 				d = move_straight_measured(err);
 				accum_forward += d;
@@ -890,8 +949,14 @@ static void task_2_run(void)
 			}
 		}
 	} else if (dist_to_target > 0 && us2 < T2_US_MAX_TRUST_CM) {
-		/* Further than the standoff: forward to it, as before. */
-		accum_forward += move_straight_measured(dist_to_target);
+		/* Further than the standoff: forward to it, as before.
+		   Kush (15-Oct): more than T2_OBS2_FWD_MAX_MM only on a second set
+		   of pings that agrees (the nearer of the two is used). */
+		if (dist_to_target > T2_OBS2_FWD_MAX_MM) {
+			us2_check = t2_front_cm_nearer(us2);
+			dist_to_target = (int32_t)(us2_check * 10.0f) - T2_STANDOFF_OBS2_MM;
+		}
+		if (dist_to_target > 0) accum_forward += move_straight_measured(dist_to_target);
 	}
 	snprintf(u, sizeof u, "[T2] obs2 us=%.1fcm then=%.1fcm check=%.1fcm backed=%ldmm\r\n",
 	         (double)us2_first, (double)us2, (double)us2_check, (long)backed);
@@ -950,7 +1015,8 @@ static void task_2_run(void)
 	t2_status("Front Face!     ");
 	if (ir_filtered_cm(inner) < T2_FRONT_CLEAR_CM) {   /* already clear: no move, as before */
 		w = (watch_t){ .kind = WATCH_IR_ABOVE, .ir_side = inner, .thresh_cm = T2_FRONT_CLEAR_CM,
-		               .after_mm = T2_FRONT_AFTER_MM, .sense_speed = T2_SENSE_FACE };
+		               .after_mm = T2_FRONT_AFTER_MM, .sense_speed = T2_SENSE_FACE,
+		               .stop_at_trigger = 1u };
 		move_straight_watch(T2_FRONT_MAX_MM, &w);
 		/* Facing West/East: pure lateral movement */
 		accum_left += dodge_left_2 ? w.driven_mm : -w.driven_mm;
@@ -973,7 +1039,8 @@ static void task_2_run(void)
 	t2_status("Side Face!      ");
 	if (ir_filtered_cm(inner) < T2_SIDE_CLEAR_CM) {   /* speed step 2: see the reverse above */
 		w = (watch_t){ .kind = WATCH_IR_ABOVE, .ir_side = inner, .thresh_cm = T2_SIDE_CLEAR_CM,
-		               .after_mm = T2_SIDE_AFTER_MM, .sense_speed = T2_SENSE_SIDE };
+		               .after_mm = T2_SIDE_AFTER_MM, .sense_speed = T2_SENSE_SIDE,
+		               .stop_at_trigger = 1u };
 		move_straight_watch(T2_SIDE_MAX_MM, &w);
 		accum_forward += w.driven_mm;
 		t2_log_watch("side", &w);
@@ -1125,7 +1192,7 @@ static void task_2_run(void)
 	w = (watch_t){ .kind = WATCH_IR_PASS, .ir_side = inner, .thresh_cm = obs1_cm,
 	               .arm_mm = remaining_dist, .after_mm = T2_OBS1_AFTER_MM,
 	               .sense_speed = T2_SENSE_OBS1, .log_face = T2_PARK_DIRECT ? 1u : 0u,
-	               .min_seen_mm = T2_OBS1_MIN_SEEN_MM };
+	               .min_seen_mm = T2_OBS1_MIN_SEEN_MM, .stop_at_trigger = 1u };
 	move_straight_watch(remaining_dist + T2_OBS1_MAX_MM, &w);
 	accum_forward -= w.driven_mm;
 	t2_log_watch("obs1-pass", &w);
@@ -1173,7 +1240,7 @@ static void task_2_run(void)
 		const float d2r    = 3.14159f / 180.0f;
 		const float h0     = start_yaw * d2r;
 		const float side   = -(x - start_x) * sinf(h0) + (y - start_y) * cosf(h0);
-		const float centre = dodge_left ? -(float)T2_START_OFFSET_MM : (float)T2_START_OFFSET_MM;
+		const float centre = 0.0f;   /* the start line: the car starts on the centre line */
 		float head = motion_yaw_deg() - start_yaw;
 		while (head >   180.0f) head -= 360.0f;
 		while (head <= -180.0f) head += 360.0f;

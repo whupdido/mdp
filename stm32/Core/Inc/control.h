@@ -136,10 +136,10 @@ typedef struct {
     int32_t  min_seen_mm;  /* WATCH_IR_PASS: something seen over less than this
                               much driving, then lost, was noise: forget it and
                               keep looking (0 = off, as before)                   */
-    uint8_t  stop_at_trigger; /* Kush (15-Oct): 1 = brake as soon as after_mm is
-                              covered past the trigger, from whatever speed the
-                              car has, instead of first slowing to the crawl
-                              (which takes ~15 cm from a sense speed of 70).
+    uint8_t  stop_at_trigger; /* Kush (15-Oct): 1 = keep the sense speed for
+                              after_mm past the trigger and brake there, instead
+                              of slowing to the crawl first (which takes ~15 cm
+                              and most of a second from a sense speed of 70).
                               0 = the normal stop, as before                      */
     /* --- filled in by the move --- */
     uint8_t  triggered;
