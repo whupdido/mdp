@@ -68,7 +68,7 @@
 
 #define TT_REPEATS        5u
 /* Degrees per test turn. 30 is the planner's turn; 90 gives the old test. */
-#define TT_ANGLE          30
+#define TT_ANGLE          45
 #define TT_START_DELAY_MS 800u   /* after the tap, so your hand is off the car */
 #define TT_SETTLE_MS      700u   /* keep integrating after the move: the coast */
 #define TT_NCASES         4u

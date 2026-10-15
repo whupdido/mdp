@@ -63,8 +63,25 @@ static float left_pid_integral  = 0.0f;
 static float right_pid_integral = 0.0f;
 
 /* PID Gains for speed control (MG513 motors) */
-#define SPEED_KP    120.0f
+#define SPEED_KP    80.0f
 #define SPEED_KI    15.0f
+
+/* Kush (15-Oct): rear wheel sync on forward straights. The left motor is
+   ~6 % stronger (85 against 80 counts/tick at full PWM, calib.h) and the
+   speed loops' integral (SPEED_KI) takes ~20 s to even that out, so for a
+   whole move the left wheel ran faster and turned the car right. The
+   steering only held the heading against it by staying a little off it,
+   so the car drifted right (simulated: 24 mm over 1.5 m, 60 mm over 3 m).
+   This moves duty from the faster wheel to the slower one until they match:
+   half each way, or all of it off the faster one when the slower is already
+   flat out, so at full speed both run at the weaker motor's top (~80).
+   Simulated: 1-2 mm over the same moves, the same response to a knock, and
+   stops a few mm closer. Reversing is left as it was (SERVO_REVERSE_TRIM_US
+   was set with the mismatch in it). KP and KI both 0 switch it off. */
+#define WHEEL_SYNC_KP     40.0f    /* duty per count/tick of left-right speed difference */
+#define WHEEL_SYNC_KI     1500.0f  /* duty per count/tick x s                            */
+#define WHEEL_SYNC_MAX    6000.0f  /* most it may move between the wheels, duty         */
+static float wheel_sync_int = 0.0f;   /* left-right difference x time, reset every move */
 
 /* Kush (08-Oct): straight-line steering.
  *   1 = damping from the gyro's yaw rate, and both gains scaled by
@@ -84,14 +101,63 @@ static float right_pid_integral = 0.0f;
  *   Swings back past the line more than once: raise STEER_V2_KD a little or
  *   lower STEER_V2_KP.  Servo still twitchy on a plain straight: lower
  *   STEER_V2_RATE_SMOOTH a little (more smoothing) and STEER_V2_KP with it.
- * Check with CAL_TRACE (hdg per phase) and CAL_STRAIGHT. */
+ * Check with CAL_TRACE (hdg per phase) and CAL_STRAIGHT.
+ *
+ * Kush (15-Oct): retuned for the Task 2 straights at full speed, ~80
+ * counts/tick, three times the 27 these were first set at. The car turns at
+ * a rate proportional to speed x steering, so the same steering now turns it
+ * three times as fast, while the servo still takes just as long to get
+ * there. Two things had made that oscillate:
+ *  - The speed scaling (scale = STEER_REF_SPEED / speed) is what keeps the
+ *    gains in step with the speed, and it stopped at STEER_SCALE_MIN 0.4,
+ *    i.e. above ~67/tick, so at full speed the gains were ~20 % too strong.
+ *    It now goes down to 0.2 (~135/tick).
+ *  - The damping (KD on the gyro rate) is what stops each swing from
+ *    overshooting into the next, and it had been cut from 10 to 1, with the
+ *    gyro smoothing slowed from 0.35 to 0.1 (~90 ms behind instead of ~20),
+ *    while KP went up.
+ * Simulated (hosttest/world, world_st.c) at ~1.1 m/s after a 3 deg knock,
+ * with the servo taking anywhere from 40 to 260 ms to follow:
+ *   KP 120, KD 1, 0.1, floor 0.4: up to 6 swings; never settled with a slow
+ *     servo, and grew with a very slow one.
+ *   KP 70, KD 8, 0.35, floor 0.2: 1-2 swings, back within 0.3 deg in
+ *     0.3-0.5 s, a little less servo jitter from vibration than KD 10.
+ * Tuning on the floor at full speed (CAL_STRAIGHT with CAL_USE_TASK2_PROFILE
+ * 1 in main.c): knock the nose sideways mid-move.
+ *   Swings past the line more than once: raise KD by 2, or lower KP by 10.
+ *   Comes back slowly, or holds a small angle: raise KP by 10.
+ *   Servo buzzes on a plain straight: lower KD by 2 (or RATE_SMOOTH to 0.25).
+ *   Always ends a little to the same side: STEER_V2_KI 20-40.
+ * Change one value at a time.
+ * Kush (15-Oct, later): STEER_V2_KI 0 -> 30, with WHEEL_SYNC (above) for
+ * the right drift: the sync takes out the motor mismatch, the integral what
+ * is left (a steering a little off centre: simulated 10 us right, 22 mm off
+ * over 3 m without it, 14 mm with it). A knock now overshoots 13 % instead
+ * of 10 %, same 1 swing. If it still ends to one side, check SERVO_CENTRE. */
 #define STRAIGHT_STEER_V2   1
-#define STEER_V2_KP         145.0f  /* us per deg of heading error (was 130)         */
-#define STEER_V2_KD         4.9f   /* us per deg/s of yaw rate, from the gyro       */
-#define STEER_V2_RATE_SMOOTH 0.35f  /* share of each new gyro reading in that rate   */
+#define STEER_V2_KP         70.0f   /* us per deg of heading error (120 before 15-Oct) */
+#define STEER_V2_KD         8.0f    /* us per deg/s of yaw rate, from the gyro (1)   */
+#define STEER_V2_RATE_SMOOTH 0.35f  /* share of each new gyro reading in that rate (0.1) */
+#define STEER_V2_KI         30.0f   /* us per deg*s of heading error, 0 = off. Reset at
+                                       the start of every straight: it used to carry
+                                       over from one move into the next             */
+#define STEER_V2_I_MAX      60.0f   /* most the integral may add, us                 */
 #define STEER_REF_SPEED     27.0f   /* counts/tick the gains hold at: the cruise
                                        speed CAL_TRACE measured on 08-Oct            */
-#define STEER_SCALE_MIN     0.4f    /* gains never cut below this (above ~67/tick)  */
+#define STEER_SCALE_MIN     0.2f    /* gains never cut below this (above ~135/tick; 0.4 before) */
+/* Kush (15-Oct): steering held in while pulling away. At the start of a
+   straight the car is slow, so a heading error asks for a lot of steering
+   (the gains scale up as the speed drops), and the servo only gets there
+   ~100 ms later, by which time the car is going two or three times as fast
+   and that steering turns it two or three times as hard: it swings past and
+   rings for a couple of swings. For the first STEER_LAUNCH_MM of a straight
+   the steering is held to +-STEER_LAUNCH_US instead of +-220. Simulated, a
+   2 deg knock 0.1 s into a move: 92 % overshoot and 3 swings before, 17 %
+   and 1 after (0.2 s in: 46 % / 4 swings before, 20 % / 2 after). At speed
+   and for the drift nothing changes. Still wobbles at the start: lower
+   STEER_LAUNCH_US to 30-40. */
+#define STEER_LAUNCH_MM     150.0f
+#define STEER_LAUNCH_US     50.0f
 #define STEER_SCALE_MAX     2.0f    /* or KP boosted above this (below ~13/tick);
                                        the damping is never boosted, only cut       */
 static float steer_speed_f = 0.0f;  /* smoothed wheel speed for that, counts/tick   */
@@ -103,6 +169,9 @@ static float gz_smooth     = 0.0f;  /* smoothed gyro rate for the damping, deg/s
    wheels have settled at crawl speed when the brake goes on (~14 mm). */
 #define BRAKE_MARGIN_COUNTS 100
 float steer_integral = 0.0f;
+#if STRAIGHT_STEER_V2
+static float steer_v2_int = 0.0f;   /* heading error x time, deg*s (STEER_V2_KI) */
+#endif
 
 /* Accelerates/decelerates the commanded speed by this much per tick. */
 #define STRAIGHT_RAMP_STEP  1.2f
@@ -510,6 +579,10 @@ uint8_t move_straight_mm(int32_t mm)
     enc_left_straight_accum   = 0;
     enc_right_straight_accum  = 0;
     steer_integral            = 0.0f;
+    wheel_sync_int            = 0.0f;
+#if STRAIGHT_STEER_V2
+    steer_v2_int              = 0.0f;
+#endif
     steer_speed_f             = 0.0f;
     left_pid_integral         = 0.0f;
 	right_pid_integral        = 0.0f;
@@ -1101,10 +1174,26 @@ void control_tick(void)
 				float heading_rate = (float)dir_forward * gz_smooth;
 				float d_scale = (scale < 1.0f) ? scale : 1.0f;
 
+				/* Integral (STEER_V2_KI): reset with each move, and held at
+				 * +-STEER_V2_I_MAX us so it cannot wind up past it. */
+				float i_term = 0.0f;
+				if (STEER_V2_KI > 0.0f) {
+					steer_v2_int += heading_error * dt;
+					i_term = steer_v2_int * STEER_V2_KI * scale;
+					if (i_term > STEER_V2_I_MAX || i_term < -STEER_V2_I_MAX) {
+						i_term = (i_term > 0.0f) ? STEER_V2_I_MAX : -STEER_V2_I_MAX;
+						steer_v2_int = i_term / (STEER_V2_KI * scale);
+					}
+				}
+
 				float steer_f = heading_error * STEER_V2_KP * scale
-				              + heading_rate  * STEER_V2_KD * d_scale;
-				if (steer_f >  220.0f) steer_f =  220.0f;   /* MAX_STEER_TRIM, as before */
-				if (steer_f < -220.0f) steer_f = -220.0f;
+				              + heading_rate  * STEER_V2_KD * d_scale
+				              + i_term;
+				/* MAX_STEER_TRIM as before, less while pulling away (STEER_LAUNCH_*). */
+				const float steer_max = (accum_counts < (int32_t)(STEER_LAUNCH_MM / MM_PER_COUNT))
+				                        ? STEER_LAUNCH_US : 220.0f;
+				if (steer_f >  steer_max) steer_f =  steer_max;
+				if (steer_f < -steer_max) steer_f = -steer_max;
 				int16_t steer_correction = (int16_t)steer_f;
 #else
 				/* 2. Position Error (Ticks) */
@@ -1210,6 +1299,27 @@ void control_tick(void)
 			int32_t duty_l = ff + (int32_t)(SPEED_KP * err_l + SPEED_KI * left_pid_integral);
 			int32_t duty_r = ff + (int32_t)(SPEED_KP * err_r + SPEED_KI * right_pid_integral);
 
+			/* Kush (15-Oct): rear wheel sync, forward only (WHEEL_SYNC_* at the top). */
+			if (!is_small_distance && dir_forward == 1 &&
+			    (WHEEL_SYNC_KP > 0.0f || WHEEL_SYNC_KI > 0.0f)) {
+				const float dv = (float)(left_delta - right_delta);   /* + = left faster */
+				wheel_sync_int += dv * dt;
+				float sy = WHEEL_SYNC_KP * dv + WHEEL_SYNC_KI * wheel_sync_int;
+				if (sy > WHEEL_SYNC_MAX || sy < -WHEEL_SYNC_MAX) {
+					const float lim = (sy > 0.0f) ? WHEEL_SYNC_MAX : -WHEEL_SYNC_MAX;
+					if (WHEEL_SYNC_KI > 0.0f) wheel_sync_int = (lim - WHEEL_SYNC_KP * dv) / WHEEL_SYNC_KI;
+					sy = lim;
+				}
+				if (duty_l > PWM_MAX) duty_l = PWM_MAX;
+				if (duty_r > PWM_MAX) duty_r = PWM_MAX;
+				const int32_t half = (int32_t)(0.5f * sy);
+				duty_l -= half;
+				duty_r += half;
+				/* The slower wheel already flat out: take the rest off the faster one. */
+				if (duty_r > PWM_MAX) { duty_l -= duty_r - PWM_MAX; duty_r = PWM_MAX; }
+				if (duty_l > PWM_MAX) { duty_r -= duty_l - PWM_MAX; duty_l = PWM_MAX; }
+			}
+
 			motor_left(duty_l);
 			motor_right(duty_r);
 
@@ -1245,12 +1355,14 @@ void control_tick(void)
 			/* 2. Direction-Aware Inertia Lead:
 			 * Forward coasts ~2.5 deg on momentum.
 			 * Reverse has heavy tire scrub and zero coast, so lead must be much smaller. */
-			float braking_lead = 5.0f;
+			float braking_lead = 2.9f;
+			if(turn_left) braking_lead = 3.5f;
+			else braking_lead = 2.9f;
 			if (target_deg_total <= 45){
 				if (turn_left)
-					braking_lead = (dir_forward == 1) ? 4.7f : 4.4f;
+					braking_lead = (dir_forward == 1) ? 5.3f : 4.4f;
 				else
-					braking_lead = (dir_forward == 1) ? 4.0f : 3.3f;
+					braking_lead = (dir_forward == 1) ? 3.7f : 3.3f;
 			}
 			float remaining_deg = target_deg_total - accum_deg;
 

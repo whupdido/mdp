@@ -190,8 +190,17 @@
 #define T2_FEWER_PAUSES         1
 #endif
 
-#define T2_SPEED_STRAIGHT   120      /* Task 2 cruise (60 as tested; 80 since 11-Oct) */
-#define T2_SPEED_CRAWL      50      /* Task 2 crawl, as tested (pre-0c37bfe)     */
+/* Kush (15-Oct): 95, not 120. The wheels top out at ~85 / 80 counts/tick
+   (full PWM, note above), and with T2_STRAIGHT_FF_EXTRA 250 a command of ~95
+   already gets them there. Above that both motors sit at full PWM, so the
+   speed loops can no longer keep the two wheels level (the faster one pushes
+   the car round and the steering has to fight it), and the brake point, which
+   expects ~112/tick from a command of 120, starts slowing ~30 cm early and
+   crawls the rest. Simulated at the measured top speeds: 1.0 m in 1.52 s at
+   95 against 1.87 s at 120, 1.5 m in 1.99 s against 2.23 s, 3 m in 3.25 s
+   against 3.42 s. Same top speed either way. */
+#define T2_SPEED_STRAIGHT   95      /* Task 2 cruise (60 as tested; 80 since 11-Oct; 120 on 14-Oct) */
+#define T2_SPEED_CRAWL      40      /* Task 2 crawl, as tested (pre-0c37bfe)     */
 /* Extra feedforward for Task 2's forward straights, in duty per count/tick of
    command above the crawl (see MODE_STRAIGHT in control.c). 0 = off, as in
    the original. 250 made the wheels really do the command (0.82 m/s at 60
