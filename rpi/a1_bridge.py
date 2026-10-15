@@ -518,6 +518,7 @@ def run_task2(stm, android, on_scan=task2_scan):
     """The tablet's START2: zero the gyro, hand Task 2 to the board, answer
     its SCANs, then send the images for the collage. test_task2_no_tablet.py
     runs exactly this, with a stand-in for the tablet."""
+    # None when the bridge already warmed it on connect: then it stays on.
     camera = start_warm_camera()
     try:
         if TASK2_ZERO_GYRO:
@@ -545,19 +546,23 @@ def run_task2(stm, android, on_scan=task2_scan):
     show_task2_images(android)
 
 
-# Denzel: open the camera at START2 and keep it reading for the whole run,
-# so a SCAN does not pay ~0.6 s to open it and wait for its first frame.
-# It starts before the gyro zero, so it warms up during those ~2 s.
+# Denzel: keep the camera open and reading, so a SCAN does not pay ~0.6 s to
+# open it and wait for its first frame. The bridge starts it when the tablet
+# connects, before any clock runs -- that is also when cv2 is first imported,
+# which on the Pi takes seconds and used to land on the first START.
 TASK2_WARM_CAMERA = True
 
 
 def start_warm_camera():
-    """The started capture_and_report.warm_camera, or None if it could not
-    start -- then each scan opens the camera itself, as before."""
+    """Start capture_and_report.warm_camera. Returns it if this call started
+    it, so the caller stops it again; None if it was already running, or
+    could not start -- then each scan opens the camera itself, as before."""
     if not TASK2_WARM_CAMERA:
         return None
     try:
         from capture_and_report import warm_camera
+        if warm_camera.running:
+            return None
         warm_camera.start()
     except Exception as exc:  # no camera, no cv2: scans fall back
         print(f"[TASK2] Warm camera not started ({exc}); each scan opens its own")
@@ -576,6 +581,10 @@ def main(on_face_known=None, on_scan=task2_scan):
     with serial.Serial(STM_DEVICE, BAUD_RATE, timeout=STM_POLL_SECONDS) as stm:
         print(f"Waiting for Android RFCOMM device {BT_DEVICE}")
         with serial.Serial(BT_DEVICE, BAUD_RATE, timeout=1) as android:
+            # Denzel: not with on_face_known -- integration_loop.py's
+            # captures open the camera themselves, and only one can hold it.
+            if on_face_known is None:
+                start_warm_camera()
             send_line(android, "STATUS,RPi bridge ready")
             pose = PoseTracker()
             print("Bridge ready")
