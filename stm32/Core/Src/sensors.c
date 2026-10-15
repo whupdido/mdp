@@ -31,7 +31,7 @@ volatile uint16_t ir_adc_buffer[2u * IR_OVERSAMPLE];
 /* Make sure you have access to your ADC handle (defined in adc.c) */
 extern ADC_HandleTypeDef hadc1;
 extern DMA_HandleTypeDef hdma_adc1;
-
+int inc = 0;
 /**
  * @brief Start the ADC free-running into ir_adc_buffer, with the DMA interrupt
  *        kept masked.
@@ -447,8 +447,10 @@ uint8_t check_front_collision(void)
 
     const uint32_t now = HAL_GetTick();
     if ((now - t1) > 100u || (t1 - t0) > 100u) return 0;   /* not two fresh, consecutive pings */
-
-    if (d1 < 15.0f && d0 < 15.0f) {
+    float k = 15.0f;
+    if(inc)
+    	k = 35.0f;
+    if (d1 < k && d0 < k) {
     	OLED_Clear();
     	char buf[32];
     	snprintf(buf, sizeof(buf), "Object %fcm away!", d1);

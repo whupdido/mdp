@@ -14,6 +14,7 @@
 #define PILLAR_HALF_WIDTH   50
 
 extern uint8_t t2_no_collision;
+extern uint8_t inc;
 /* ------------------------------------------------------------------------- */
 /* The Box Bypass Maneuver                                                */
 /* ------------------------------------------------------------------------- */
@@ -429,7 +430,7 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    ~12 cm past the edge, about where it stopped from a sense speed of 70.
    Turn behind obstacle 1 too close to it: raise; too far out: lower. */
 #define T2_OBS1_AFTER_MM        100    /* old: 50 mm steps, then 10 */
-#define T2_OBS1_MAX_MM          500
+#define T2_OBS1_MAX_MM          300
 /* Kush (11-Oct): heading home the car passes obstacle 1 at the side, its IR
    ~45 cm from it with a 60 cm wide obstacle 2, further with a wider one or
    if the car has turned a few degrees away; at 55 cm it could miss it. So
@@ -521,8 +522,8 @@ uint16_t t2_direct_n = 0u;
    creep stopped anywhere from 7 to 10 cm). One move, never more than
    T2_PARK_MAX_MM, T2_PARK_NO_ECHO_MM if there is no echo at all, and the
    ultrasonic stops it early below T2_PARK_GUARD_CM. */
-#define T2_PARK_STOP_CM         9.0f
-#define T2_PARK_GUARD_CM        10.0f
+#define T2_PARK_STOP_CM         15.0f
+#define T2_PARK_GUARD_CM        15.0f
 #define T2_PARK_MAX_MM          400
 #define T2_PARK_NO_ECHO_MM      150
 
@@ -1008,7 +1009,7 @@ static void task_2_run(void)
 		int32_t d = move_straight_measured(-100);
 		accum_left += dodge_left_2 ? d : -d;
 	}*/
-	t2_no_collision = 0;
+
 	/* ---------------------------------------------------------
 	 * CREEP 1: The Front Face -- now one move, until the inner IR loses it
 	 * --------------------------------------------------------- */
@@ -1210,7 +1211,6 @@ static void task_2_run(void)
 	move_turn_deg(turn_in, 1, 90);
 	accum_forward -= R_in; /* Sweeps South */
 	accum_left    += dodge_left_2 ? R_in : -R_in;
-
 	int final_turn_angle = 90;
 	if (direct) {
 		/* The rear-axle centre's distance from obstacle 1's centre line, less
@@ -1320,6 +1320,7 @@ static void task_2_run(void)
 
 	/* Turn to face the carpark (East/West -> South) using the CORRECTED angle! */
 	move_turn_deg(turn_out, 1, final_turn_angle);
+	t2_no_collision = 0;
 
 	/* We maintain the standard 90-degree R_out footprint for the grid tracker.
 	 * A 5-degree shift creates virtually zero lateral error, and the forward
@@ -1335,6 +1336,7 @@ static void task_2_run(void)
 	OLED_Refresh_Gram();
 
 	/* Drive the bulk of the distance, leaving a 25cm buffer for precision sensing */
+	inc = 1;
 	int32_t final_approach = accum_forward - 250;
 	if (final_approach > 0) {
 		move_straight_measured(final_approach);
@@ -1368,6 +1370,7 @@ static void task_2_run(void)
 
 	/* Precision ultrasonic stop at the back wall: one move to T2_PARK_STOP_CM
 	 * instead of 30 mm creeps, with the ultrasonic as a guard. */
+	inc = 0;
 	float usp = t2_front_cm();
 	int32_t go = (usp > 0.0f) ? (int32_t)((usp - T2_PARK_STOP_CM) * 10.0f) : T2_PARK_NO_ECHO_MM;
 	if (go > T2_PARK_MAX_MM) go = T2_PARK_MAX_MM;
@@ -1393,6 +1396,7 @@ static void task_2_run(void)
 	OLED_Clear();
 	OLED_ShowString(0, 0, (const uint8_t *)"PARKED!");
 	OLED_Refresh_Gram();
+
 }
 
 /**
