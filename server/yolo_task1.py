@@ -14,6 +14,11 @@ from server.utils import recv_pickle, send_json, send_pickle
 from server.detection_labels import BULLSEYE_ID, draw_detection_annotations
 from server.collage import Task1CollageCollector
 
+# Denzel: how long one Pi connection may sit silent before it is dropped.
+# Every client sends one request per connection, well inside this.
+CLIENT_TIMEOUT_SECONDS = 15
+
+
 class Server:
     def __init__(self, config):
 
@@ -153,11 +158,13 @@ class Server:
     # ==========================================================
     def handle_client(self, conn: socket.socket):
         try:
-            # Explicitly keep the accepted connection blocking.  The
-            # listening socket has a one-second accept timeout, but inference
-            # and frame transfer can legitimately take longer than that.
-            conn.setblocking(True)
-            conn.settimeout(None)
+            # The listening socket has a one-second accept timeout, which
+            # must not leak onto this one. But not None either (Denzel): this
+            # server takes one client at a time, so a Pi that lost power
+            # mid-request left it waiting forever on a dead connection, and
+            # every later scan failed until the server was restarted. The
+            # timeout covers only waiting on the network, not inference.
+            conn.settimeout(CLIENT_TIMEOUT_SECONDS)
             # Send class names metadata immediately upon connection
             metadata = {"names": self.main_model.names}
             send_json(conn, metadata)
@@ -328,12 +335,7 @@ class Server:
                 except socket.timeout:
                     continue
                 print(f"[SERVER] Connected from {addr}")
-                # The listening socket uses a short timeout so the outer loop
-                # can remain interruptible.  Do not let that timeout leak onto
-                # the client socket: YOLO inference can take longer than one
-                # second, and the Pi must be allowed to wait for the result.
-                conn.settimeout(None)
-
+                # handle_client() sets this connection's own timeout.
                 self.handle_client(conn)
 
             except KeyboardInterrupt:
