@@ -285,6 +285,19 @@ static void handle_stop(void)
 #define GC_MAX_SPAN_DPS     6.0f   /* highest minus lowest reading. Still car: ~2   */
 #define GC_MAX_WHEEL_COUNTS 2      /* both encoders together                         */
 
+/* Kush (15-Oct): the zero is set on SW1 in the prep time and START keeps it.
+   The Pi sends GC before every START2 (a1_bridge.zero_gyro), when the clock
+   is already running, so measuring there cost ~2 s of run time (up to 6 s
+   with retries). A SW1 long press now runs this same checked zero once SW1
+   is let go (main.c), and a GC within GC_KEEP_SW1_MS of a good one answers
+   DONE at once and keeps it. With no SW1 zero, or an older one, GC measures
+   as before, so a forgotten long press costs time, not accuracy. The long
+   press itself always measures. */
+#define GC_KEEP_SW1_MS      (5u * 60u * 1000u)  /* the 2 min prep, with room to spare */
+
+static uint8_t  sw1_zero_kept = 0u;  /* a SW1 long press set a good zero ... */
+static uint32_t sw1_zero_ms   = 0u;  /* ... at this HAL_GetTick()            */
+
 extern int calibrated;             /* main.c: a gyro zero has been set */
 
 typedef struct {
@@ -358,14 +371,28 @@ static uint8_t gc_try(gc_window_t *w)
 
 /* The whole GC. reply = 1 answers DONE / ERR as the Pi expects; a Task 2 run
    started on the car (command_gyro_zero) passes 0, since nobody asked over
-   the UART. Returns 1 if a new zero was kept. */
-static uint8_t gyro_zero(uint8_t reply)
+   the UART. always_measure = 1 for the SW1 long press; otherwise a recent
+   SW1 zero is kept (GC_KEEP_SW1_MS). Returns 1 if a new zero was kept, or
+   the SW1 one. */
+static uint8_t gyro_zero(uint8_t reply, uint8_t always_measure)
 {
     char u[128];
     char row[24];
     gc_window_t w = { 0 };
     uint8_t ok = 0u;
     int tries = 0;
+
+    /* Kush (15-Oct): the SW1 zero from the prep time. Nothing on the OLED:
+       this runs on the clock, and the SW1 result is still showing. */
+    if (!always_measure && sw1_zero_kept &&
+        (HAL_GetTick() - sw1_zero_ms) <= GC_KEEP_SW1_MS) {
+        snprintf(u, sizeof u, "[GC] kept the SW1 zero from %lu s ago\r\n",
+                 (unsigned long)((HAL_GetTick() - sw1_zero_ms) / 1000u));
+        command_send(u);
+        gc_status = "DONE";
+        if (reply) command_send("DONE\r\n");
+        return 1u;
+    }
 
     OLED_Clear();
     OLED_ShowString(0, 0,  (const uint8_t *)"GYRO ZERO");
@@ -435,12 +462,27 @@ static uint8_t gyro_zero(uint8_t reply)
 
 static void gyro_zero_command(void)
 {
-    (void)gyro_zero(1u);
+    (void)gyro_zero(1u, 0u);
 }
 
 uint8_t command_gyro_zero(void)
 {
-    return gyro_zero(0u);
+    return gyro_zero(0u, 0u);
+}
+
+/* Kush (15-Oct): the SW1 long press (main.c). Always measures, and a good
+   zero is then kept by GC / START for GC_KEEP_SW1_MS. A tablet STOP stays
+   latched until the next command, and would end this zero before it began,
+   so it is cleared first: the car is standing still here anyway. */
+uint8_t command_gyro_zero_sw1(void)
+{
+    motion_abort_clear();
+    const uint8_t ok = gyro_zero(0u, 1u);
+    if (ok) {
+        sw1_zero_kept = 1u;
+        sw1_zero_ms   = HAL_GetTick();
+    }
+    return ok;
 }
 
 /* Kush (09-Oct): Task 2 started on the car (see command.h). Takes START2's

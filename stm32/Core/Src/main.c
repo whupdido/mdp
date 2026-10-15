@@ -56,10 +56,13 @@
 #define SELFTEST 0
 
 /* SW1 calibration programs. Pick one with CAL_PROGRAM and flash. Hold SW1 for
-   2 s to lock the gyro bias, then tap SW1 to step through it. Results go to
-   the OLED and to USART3. Details at the top of cal_programs.c / turn_test.c.
+   2 s and let go to zero the gyro, hands off, then tap SW1 to step through
+   it. Results go to the OLED and to USART3. Details at the top of
+   cal_programs.c / turn_test.c.
 
-     CAL_OFF        normal runs: a tap shows the IR sensors.
+     CAL_OFF        normal runs: a tap shows the IR sensors. Long-press in
+                    the prep time: the START that follows within 5 minutes
+                    keeps that zero instead of taking ~2 s of the run for one.
      CAL_STRAIGHT   FW/BW 10 cm and 100 cm, 5 of each: where every move stops,
                     and how much it turns and drifts sideways on the way.
                     Sets BRAKE_LEAD_COUNTS and the straight steering trim
@@ -85,8 +88,9 @@
      CAL_TASK2      the whole Task 2 with no Pi and no image recognition. The
                     arrows come from CAL_T2_ARROW_OBS1 / _OBS2 below. A tap
                     waits 0.8 s, zeroes the gyro hands-off (as the Pi's GC
-                    does), then runs; SW1 again stops the car. The OLED shows
-                    the run time at the end. No long press needed first.
+                    does, so a long press in the last 5 minutes is kept
+                    instead), then runs; SW1 again stops the car. The OLED
+                    shows the run time at the end. No long press needed first.
      CAL_IR         the side IRs, nothing drives: a board at 10-70 cm on each
                     side in turn (fits the IR_*_M/_B/_K in calib.h), then the
                     car in the carpark (IR_TO_CENTRE_MM), then a live view.
@@ -327,19 +331,13 @@ int main(void)
                   {
                       long_press_triggered = 1; /* Prevent multiple calibrations */
 
+                      /* Kush (15-Oct): the zero now waits until SW1 is let go
+                         (below), so no hand is on the car while it measures. */
                       OLED_Clear();
-                      OLED_ShowString(0, 0, (const uint8_t *)"STABILIZING...");
+                      OLED_ShowString(0, 0,  (const uint8_t *)"GYRO ZERO");
+                      OLED_ShowString(0, 20, (const uint8_t *)"let go of SW1");
+                      OLED_ShowString(0, 30, (const uint8_t *)"and hands off");
                       OLED_Refresh_Gram();
-                      HAL_Delay(1500);
-
-                      command_send("\r\n[IMU] Calibrating Gyro Zero Bias (stationary)...\r\n");
-                      OLED_ShowString(0, 20, (const uint8_t *)"Calibrating Gyro...");
-                      OLED_Refresh_Gram();
-
-                      icm20948_calib_gyro_bias();
-                      command_send("[IMU] Gyro bias locked.\r\n");
-                      calibrated = 1;
-                      cal_ready_screen();
                   }
                   HAL_Delay(10); /* Small delay to prevent starving the CPU */
               }
@@ -353,6 +351,24 @@ int main(void)
                       high_since = HAL_GetTick();
                   }
                   HAL_Delay(2);
+              }
+
+              /* Kush (15-Oct): a long press zeroes the gyro once SW1 is let go,
+                 with the same checks as the Pi's GC (command.c). It replaces
+                 the zero that START used to take on the clock: the GC the Pi
+                 sends before START2 keeps a SW1 zero from the last 5 minutes
+                 (GC_KEEP_SW1_MS) instead of measuring again. The OLED says OK
+                 or why not; a failed zero keeps the old one, so long-press
+                 again. */
+              if (long_press_triggered)
+              {
+                  command_send("\r\n[IMU] SW1 gyro zero, hands off\r\n");
+                  HAL_Delay(500);                  /* the hand away from the car */
+                  (void)command_gyro_zero_sw1();
+#if CAL_PROGRAM != CAL_OFF
+                  HAL_Delay(1500);                 /* time to read the result     */
+                  cal_ready_screen();
+#endif
               }
 
               /* If it was just a quick press (< 2 seconds), do the normal action */

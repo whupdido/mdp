@@ -112,8 +112,9 @@ int32_t move_straight_measured(int32_t mm);
 /* Drives forward up to max_mm while the 100 Hz tick watches one sensor. When
    the condition holds for WATCH_CONFIRM_TICKS ticks in a row the move is
    retargeted to stop after_mm further on (or later, if the car needs more room
-   than that to slow to its crawl, so it always stops the normal way). Replaces
-   the old stop / read IR / move 50-200 mm / repeat loops.                     */
+   than that to slow to its crawl, so it always stops the normal way; not with
+   stop_at_trigger). Replaces the old stop / read IR / move 50-200 mm / repeat
+   loops.                                                                      */
 typedef enum {
     WATCH_IR_ABOVE = 1,   /* IR reads >= thresh: the face beside the car ended  */
     WATCH_IR_BELOW,       /* IR reads <= thresh: something came into view       */
@@ -135,6 +136,11 @@ typedef struct {
     int32_t  min_seen_mm;  /* WATCH_IR_PASS: something seen over less than this
                               much driving, then lost, was noise: forget it and
                               keep looking (0 = off, as before)                   */
+    uint8_t  stop_at_trigger; /* Kush (15-Oct): 1 = brake as soon as after_mm is
+                              covered past the trigger, from whatever speed the
+                              car has, instead of first slowing to the crawl
+                              (which takes ~15 cm from a sense speed of 70).
+                              0 = the normal stop, as before                      */
     /* --- filled in by the move --- */
     uint8_t  triggered;
     uint8_t  seen;         /* WATCH_IR_PASS: it did see something                 */

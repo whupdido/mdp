@@ -320,7 +320,7 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
  */
 
 /* --- Approaches ---------------------------------------------------------- */
-#define T2_STANDOFF_OBS1_MM     330     /* front ultrasonic to obstacle 1 to read it */
+#define T2_STANDOFF_OBS1_MM     300     /* front ultrasonic to obstacle 1 to read it */
 #define T2_STANDOFF_OBS2_MM     330     /* and to obstacle 2                         */
 /* No echo at all: obstacle 1 is at least 600 mm out, so 300 still leaves 300. */
 #define T2_NO_ECHO_OBS1_MM      300
@@ -359,7 +359,8 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    ending the back face ~35 mm further out (from 60 the car needs ~135 mm to
    slow), which swings TURN 4 that much closer to the side wall. SIDE made
    no difference: with the end only 10 cm deep, CREEP 2 never moved. */
-#define T2_SENSE_FACE           70.0f   /* along obstacle 2's front and back faces */
+#define T2_SENSE_FACE           70.0f   /* along obstacle 2's front face           */
+#define T2_SENSE_BACK           70.0f   /* and its back face (see T2_BACK_AFTER_MM) */
 #define T2_SENSE_SIDE           45.0f   /* along its 10 cm end                     */
 #define T2_SENSE_OBS1           70.0f   /* finding obstacle 1 on the way back (was 30) */
 #define T2_SENSE_PARK           49.0f   /* last ultrasonic approach in the carpark (was 35) */
@@ -372,9 +373,21 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
 #define T2_SIDE_CLEAR_CM        45.0f
 #define T2_SIDE_AFTER_MM        50      /* old: 100 mm steps */
 #define T2_SIDE_MAX_MM          300
-/* CREEP 3: along its back face. It must see the face, then lose it. */
+/* CREEP 3: along its back face. It must see the face, then lose it.
+   Kush (15-Oct): and stops right there. It used to go on T2_BACK_AFTER_MM
+   (100) and then slow to its crawl, which from T2_SENSE_BACK takes ~15 cm,
+   so it stopped ~15 cm past where the IR lost the face, and TURN 4 from
+   there swung out past the clearance; a 15 cm reverse before TURN 4 had been
+   added to pull it back. Now the move brakes as soon as the IR loses the
+   face (stop_at_trigger), from the sense speed. Simulated: it stops within
+   ~1 cm of where the reverse used to leave it, ~1.6 s sooner. The log line
+   "[T2] back ... at=A drove=D" shows it: D - A is how far it went on after
+   the IR lost the face (~15 cm before, now a few cm).
+   If TURN 4 now clips the corner of obstacle 2, raise T2_BACK_AFTER_MM 20-30
+   mm at a time. If it still swings too wide, lower T2_SENSE_BACK a little
+   (less speed to stop from). */
 #define T2_BACK_CM              50.0f
-#define T2_BACK_AFTER_MM        100     /* old: 200 mm steps */
+#define T2_BACK_AFTER_MM        0       /* old: 200 mm steps, then 100 */
 #define T2_BACK_MAX_MM          1200
 /* Return: obstacle 1 seen then lost, heading home and then across behind it. */
 #define T2_OBS1_CM              55.0f
@@ -763,6 +776,12 @@ static void task_2_run(void)
 	/* ---------------------------------------------------------
 	 * PHASE 1 + 2: Outward S-curve into the side lane
 	 * --------------------------------------------------------- */
+	if (dodge_left){
+		accum_forward += move_straight_measured(100);
+		accum_left += 30;
+	}
+	else
+		accum_left -= 30;
 	task_2_turn(dodge_left, 1, 45, 0, &accum_forward, &accum_left);
 	/* Kush (11-Oct): the HAL_Delay(100) that was here went with speed step 1
 	   (see task_2_turn): the car is standing still and the next turn waits
@@ -779,7 +798,8 @@ static void task_2_run(void)
 	 * move_straight_mm() centres it again and waits 150 ms before driving.
 	 * Kush (11-Oct, speed step 2): the servo_us(SERVO_CENTRE);
 	 * HAL_Delay(150) that was here only added 150 ms to that. */
-	accum_forward += move_straight_measured(100);
+	if (!dodge_left)
+		accum_forward += move_straight_measured(100);
 
 	/* ---------------------------------------------------------
 	 * PHASE 4: Tightly Hook back to the Center Line
@@ -949,7 +969,8 @@ static void task_2_run(void)
 	 * --------------------------------------------------------- */
 	t2_status("Back Face!      ");
 	w = (watch_t){ .kind = WATCH_IR_PASS, .ir_side = inner, .thresh_cm = T2_BACK_CM,
-	               .after_mm = T2_BACK_AFTER_MM, .sense_speed = T2_SENSE_FACE, .log_face = 1u };
+	               .after_mm = T2_BACK_AFTER_MM, .sense_speed = T2_SENSE_BACK, .log_face = 1u,
+	               .stop_at_trigger = 1u };   /* Kush (15-Oct): see T2_BACK_AFTER_MM */
 	move_straight_watch(T2_BACK_MAX_MM, &w);
 	t2_log_watch("back", &w);
 
@@ -981,6 +1002,8 @@ static void task_2_run(void)
 	 * lead of a big turn, not the 3.3-4.7 deg one that stopped the pivot).
 	 * --------------------------------------------------------- */
 	t2_status("Turn 4!         ");
+	/* Kush (15-Oct): no 150 mm reverse here any more: CREEP 3 now stops
+	   where it used to leave the car (T2_BACK_AFTER_MM). */
 	const int turn4_deg = 90 + tilt_back;   /* tilt_back is clamped to +-5 */
 	snprintf(u, sizeof u, "[T2] turn4=%d (back tilt %d)\r\n", turn4_deg, tilt_back);
 	command_send(u);
@@ -1150,7 +1173,7 @@ static void task_2_run(void)
 			if (extra > T2_OBS1_EXTRA_MAX_MM) extra = T2_OBS1_EXTRA_MAX_MM;
 		}
 		{
-			int32_t d = move_straight_measured(-((R_out - PILLAR_HALF_WIDTH) + extra));
+			int32_t d = move_straight_measured(-((R_out - PILLAR_HALF_WIDTH) + extra - 100));
 			accum_left += dodge_left_2 ? d : -d;
 		}
 		snprintf(u, sizeof u, "[T2] park turn=%d extra_back=%ldmm\r\n", final_turn_angle, (long)extra);

@@ -138,7 +138,7 @@ static float wheel_sync_int = 0.0f;   /* left-right difference x time, reset eve
 #define STEER_V2_KP         70.0f   /* us per deg of heading error (120 before 15-Oct) */
 #define STEER_V2_KD         8.0f    /* us per deg/s of yaw rate, from the gyro (1)   */
 #define STEER_V2_RATE_SMOOTH 0.35f  /* share of each new gyro reading in that rate (0.1) */
-#define STEER_V2_KI         30.0f   /* us per deg*s of heading error, 0 = off. Reset at
+#define STEER_V2_KI         40.0f   /* us per deg*s of heading error, 0 = off. Reset at
                                        the start of every straight: it used to carry
                                        over from one move into the next             */
 #define STEER_V2_I_MAX      60.0f   /* most the integral may add, us                 */
@@ -160,6 +160,26 @@ static float wheel_sync_int = 0.0f;   /* left-right difference x time, reset eve
 #define STEER_LAUNCH_US     50.0f
 #define STEER_SCALE_MAX     2.0f    /* or KP boosted above this (below ~13/tick);
                                        the damping is never boosted, only cut       */
+/* Kush (15-Oct): hold the line, not only the heading. The steering above
+   keeps the car pointing where the straight started, but any stretch spent
+   pointing off that (pulling away, a knock, the integral still learning a
+   steering offset) moves the car sideways, and pointing straight again does
+   not undo it: the car ended square but off to one side. The ISR's odometry
+   (motion_odometry_mm) says how far the rear-axle centre is off the line the
+   straight started on, and this aims the car back at that line, at
+   atan(off / STEER_LINE_MM), held to +-STEER_LINE_MAX_DEG. It lets go once
+   the straight starts braking, so the car still ends square.
+   Simulated over 1.5 m / 3 m with the steering 25 us off centre: 18 / 28 mm
+   to the side before, 7 / 3 mm after, and still square at the end. A knock
+   swings the same and ends ~1 mm off the line instead of ~4. It only
+   sees what the gyro and encoders see: a car that slides sideways while
+   pointing straight is SERVO_CENTRE or the tyres. Smaller STEER_LINE_MM
+   pulls back harder (300: a little closer, a little livelier after a
+   knock); 0 switches it off. */
+#define STEER_LINE_MM       400.0f  /* closes a sideways gap over about this, mm */
+#define STEER_LINE_MAX_DEG  2.0f    /* most it aims off the start heading, deg   */
+static float line_x0 = 0.0f, line_y0 = 0.0f;   /* odometry where the straight began */
+static float line_cos = 1.0f, line_sin = 0.0f; /* and the heading it holds          */
 static float steer_speed_f = 0.0f;  /* smoothed wheel speed for that, counts/tick   */
 #if STRAIGHT_STEER_V2
 static float gz_smooth     = 0.0f;  /* smoothed gyro rate for the damping, deg/s    */
@@ -170,7 +190,7 @@ static float gz_smooth     = 0.0f;  /* smoothed gyro rate for the damping, deg/s
 #define BRAKE_MARGIN_COUNTS 100
 float steer_integral = 0.0f;
 #if STRAIGHT_STEER_V2
-static float steer_v2_int = 0.0f;   /* heading error x time, deg*s (STEER_V2_KI) */
+static float steer_v2_int = 0.0f;   /* what STEER_V2_KI has added up, us         */
 #endif
 
 /* Accelerates/decelerates the commanded speed by this much per tick. */
@@ -254,6 +274,7 @@ typedef struct {
     int32_t  after_counts;
     int32_t  l0, r0;        /* encoder totals at the start of the move         */
     int32_t  min_seen_mm;
+    uint8_t  stop_at_trigger;
     uint8_t  blips;
     int32_t  seen_mm;       /* positions reported back are encoder distance:   */
     int32_t  trigger_mm;    /*  accum_counts halves (L+R) in integers and runs */
@@ -478,11 +499,14 @@ static void straight_watch_tick(void)
 
     /* Confirmed. Stop after_counts from here -- or further, if the car needs
        more room than that to slow to its crawl, so it always stops the
-       normal way instead of braking hard from speed. */
+       normal way instead of braking hard from speed.
+       Kush (15-Oct): stop_at_trigger brakes once after_counts is covered,
+       from whatever speed the car has (MODE_STRAIGHT stops the move as soon
+       as accum_counts reaches the target, this tick if after_counts is 0). */
     watch_rt.triggered      = 1u;
     watch_rt.trigger_mm     = mm;
     watch_rt.trigger_speed  = straight_v_meas;
-    int32_t room = straight_stop_counts();
+    int32_t room = watch_rt.stop_at_trigger ? 0 : straight_stop_counts();
     if (room < watch_rt.after_counts) room = watch_rt.after_counts;
     if (pos + room < target_counts_total) target_counts_total = pos + room;
 }
@@ -593,6 +617,15 @@ uint8_t move_straight_mm(int32_t mm)
     stall_ticks_count         = 0;
     locked_heading_deg        = global_yaw_deg;
     last_result               = MOVE_NONE; /* Zhenxi: this move has no verdict yet */
+    /* Kush (15-Oct): the line this straight holds (STEER_LINE_MM). */
+    {
+        float x0, y0;
+        motion_odometry_mm(&x0, &y0);
+        line_x0  = x0;
+        line_y0  = y0;
+        line_cos = cosf(locked_heading_deg * (3.14159265f / 180.0f));
+        line_sin = sinf(locked_heading_deg * (3.14159265f / 180.0f));
+    }
 
     reset_speed_pid();
     if (!start_move(MODE_STRAIGHT)) return 0;   /* stopped during the wait above */
@@ -681,6 +714,7 @@ uint8_t move_straight_watch(int32_t max_mm, watch_t *w)
     watch_rt.side          = w->ir_side;
     watch_rt.log_face      = w->log_face;
     watch_rt.min_seen_mm   = (w->kind == WATCH_IR_PASS) ? w->min_seen_mm : 0;
+    watch_rt.stop_at_trigger = w->stop_at_trigger;
     watch_rt.blips         = 0u;
     watch_rt.thresh_cm     = w->thresh_cm;
     watch_rt.sense_speed   = w->sense_speed;
@@ -1156,6 +1190,18 @@ void control_tick(void)
 				}
 
 #if STRAIGHT_STEER_V2
+				/* Kush (15-Oct): back onto the line (STEER_LINE_MM at the top).
+				 * off = how far left (+) of it the rear-axle centre is. The same
+				 * sign works reversing: heading_error is already flipped there. */
+				if (STEER_LINE_MM > 0.0f && !straight_braking) {
+					const float lx  = odo_x_mm - line_x0;
+					const float ly  = odo_y_mm - line_y0;
+					const float off = -lx * line_sin + ly * line_cos;
+					float aim = atanf(off / STEER_LINE_MM) * (180.0f / 3.14159265f);
+					if (aim >  STEER_LINE_MAX_DEG) aim =  STEER_LINE_MAX_DEG;
+					if (aim < -STEER_LINE_MAX_DEG) aim = -STEER_LINE_MAX_DEG;
+					heading_error += aim;
+				}
 				/* Kush (08-Oct), see STRAIGHT_STEER_V2 at the top. The car turns
 				 * at a rate proportional to speed x steering angle, so scaling
 				 * the gains by REF/speed keeps the correction the same at every
@@ -1175,16 +1221,19 @@ void control_tick(void)
 				float d_scale = (scale < 1.0f) ? scale : 1.0f;
 
 				/* Integral (STEER_V2_KI): reset with each move, and held at
-				 * +-STEER_V2_I_MAX us so it cannot wind up past it. */
-				float i_term = 0.0f;
-				if (STEER_V2_KI > 0.0f) {
-					steer_v2_int += heading_error * dt;
-					i_term = steer_v2_int * STEER_V2_KI * scale;
-					if (i_term > STEER_V2_I_MAX || i_term < -STEER_V2_I_MAX) {
-						i_term = (i_term > 0.0f) ? STEER_V2_I_MAX : -STEER_V2_I_MAX;
-						steer_v2_int = i_term / (STEER_V2_KI * scale);
-					}
+				 * +-STEER_V2_I_MAX us so it cannot wind up past it.
+				 * Kush (15-Oct): added up in us. It used to be deg*s multiplied
+				 * by the scale of the moment, so slowing for the target (scale
+				 * going up) grew it and turned the car a little at the end of a
+				 * straight; what it learns is a steering offset, the same at any
+				 * speed. Nothing is added while pulling away (STEER_LAUNCH_MM):
+				 * that is a passing kick, and it would keep it for the whole move. */
+				if (STEER_V2_KI > 0.0f && accum_counts >= (int32_t)(STEER_LAUNCH_MM / MM_PER_COUNT)) {
+					steer_v2_int += heading_error * STEER_V2_KI * scale * dt;
+					if (steer_v2_int >  STEER_V2_I_MAX) steer_v2_int =  STEER_V2_I_MAX;
+					if (steer_v2_int < -STEER_V2_I_MAX) steer_v2_int = -STEER_V2_I_MAX;
 				}
+				const float i_term = steer_v2_int;
 
 				float steer_f = heading_error * STEER_V2_KP * scale
 				              + heading_rate  * STEER_V2_KD * d_scale

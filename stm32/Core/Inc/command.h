@@ -18,8 +18,14 @@ void command_send(const char *s);
 
 /* GC (hands-off gyro zero, see command.c) without its DONE / ERR reply.
    1 if a new zero was kept, 0 if the car moved or a STOP / motion_stop()
-   came in while it measured (the old zero is kept). */
+   came in while it measured (the old zero is kept).
+   Kush (15-Oct): like GC, keeps a SW1 zero from the last few minutes
+   instead of measuring (1). */
 uint8_t command_gyro_zero(void);
+
+/* Kush (15-Oct): the SW1 long press. The same zero, but always measured, and
+   kept by the next GC / START2 for a few minutes (GC_KEEP_SW1_MS). */
+uint8_t command_gyro_zero_sw1(void);
 
 /* task_2_with_arrows() under START2's re-entry guard, with no ACK / DONE.
    Does nothing if a Task 2 is already running. */
