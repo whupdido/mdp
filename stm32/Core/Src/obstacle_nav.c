@@ -388,7 +388,12 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    (less speed to stop from). */
 #define T2_BACK_CM              50.0f
 #define T2_BACK_AFTER_MM        0       /* old: 200 mm steps, then 100 */
-#define T2_BACK_MAX_MM          1200
+#define T2_BACK_MAX_MM          2000    /* Kush (15-Oct): was 1200. Simulated, the IR
+                                           passes the far end after ~1.19 m of a
+                                           120 cm back face and ~1.39 m of a 140 cm
+                                           one, so at 1200 the run stopped beside a
+                                           140 cm obstacle 2 and TURN 4 turned into
+                                           it. It stops at the end anyway.          */
 /* Return: obstacle 1 seen then lost, heading home and then across behind it. */
 #define T2_OBS1_CM              55.0f
 #define T2_OBS1_AFTER_MM        10     /* old: 50 mm steps */
@@ -439,7 +444,7 @@ void navigate_and_inspect_obstacle(int32_t target_x_mm, int32_t target_y_mm)
    over 200 layouts: ~4.5 s quicker, same clearances, parked closer to the
    centre line (3 cm off on average against 4.5). It needs the side IRs
    right at 40-70 cm and IR_TO_CENTRE_MM (calib.h); CAL_IR measures both.
-   If the pass did not see obstacle 1 it searches as before. */
+   If the pass did not see obstacle 1: T2_FALLBACK_ENCODER below. */
 #ifndef T2_PARK_DIRECT
 #define T2_PARK_DIRECT          1
 uint8_t  t2_direct_used = 0u;
@@ -448,6 +453,25 @@ uint16_t t2_direct_n = 0u;
 #endif
 #define T2_DIRECT_MIN_N         6u      /* IR samples along obstacle 1's side, at least */
 #define T2_DIRECT_MIN_MM        15      /* a middle straight shorter than this is skipped */
+/* Kush (15-Oct): the car is put down T2_START_OFFSET_MM towards obstacle 1's
+   arrow, so the first dodge turn has more room. accum_left counts it, and
+   the encoder park below parks that much back the other way, on the centre
+   line. */
+#define T2_START_OFFSET_MM      30
+/* Kush (15-Oct): when the pass does not see obstacle 1 (obstacle 2 of
+   ~140 cm or more brings the car home too far out for the IR), park from the
+   wheel encoders and the gyro instead of searching along obstacle 1's back
+   face, which only drives T2_OBS1_MAX_MM across and from that far out can
+   run out before it finds it. control.c keeps the rear axle's position all
+   run (motion_odometry_mm); against where the run started that says how far
+   the car is from the centre line, so it drives to R_out short of it and
+   the parking turn ends on it, squared to the start heading. This counts
+   what the wheels and the gyro really did (a turn that ended 2 deg off, a
+   wider radius at speed), which accum_left cannot: it adds the nominal
+   radius for every turn and takes every straight as exactly on its axis.
+   0 = the search along obstacle 1's back face, as before. */
+#define T2_FALLBACK_ENCODER     1
+#define T2_ENC_PARK_MAX_MM      1200    /* most it drives across to the centre line */
 /* Behind obstacle 1, where the car stops sets where it lines up with the
    carpark. The old creep stopped 0-50 mm past the edge (25 on average),
    judged at a standstill. The watch confirms the edge a little late (sensor
@@ -752,6 +776,10 @@ static void task_2_run(void)
 	watch_t w;
 
 	command_send("[T2] start\r\n");
+	/* Kush (15-Oct): where the run starts, for the encoder park (T2_FALLBACK_ENCODER). */
+	float start_x, start_y;
+	motion_odometry_mm(&start_x, &start_y);
+	const float start_yaw = motion_yaw_deg();
 
 	/* ======================================================================
 	 * OBSTACLE 1 (10x10cm) - The "Reverse Corridor" Dodge
@@ -778,10 +806,10 @@ static void task_2_run(void)
 	 * --------------------------------------------------------- */
 	if (dodge_left){
 		accum_forward += move_straight_measured(100);
-		accum_left += 30;
+		accum_left += T2_START_OFFSET_MM;
 	}
 	else
-		accum_left -= 30;
+		accum_left -= T2_START_OFFSET_MM;
 	task_2_turn(dodge_left, 1, 45, 0, &accum_forward, &accum_left);
 	/* Kush (11-Oct): the HAL_Delay(100) that was here went with speed step 1
 	   (see task_2_turn): the car is standing still and the next turn waits
@@ -1131,6 +1159,49 @@ static void task_2_run(void)
 		command_send(u);
 		if (mid >= T2_DIRECT_MIN_MM || mid <= -T2_DIRECT_MIN_MM) {
 			int32_t d = move_straight_measured(mid);
+			accum_left += dodge_left_2 ? d : -d;
+		}
+	} else if (T2_FALLBACK_ENCODER) {
+		/* Kush (15-Oct): obstacle 1 not seen: park from the odometry
+		   (T2_FALLBACK_ENCODER). side is how far left (+) of the line the run
+		   started on the rear axle is, centre where the course's centre line
+		   is on the same scale, head the heading from the start (+ = left;
+		   about +90 or -90 now, heading across behind obstacle 1). */
+		t2_status("Park Encoder!   ");
+		float x, y;
+		motion_odometry_mm(&x, &y);
+		const float d2r    = 3.14159f / 180.0f;
+		const float h0     = start_yaw * d2r;
+		const float side   = -(x - start_x) * sinf(h0) + (y - start_y) * cosf(h0);
+		const float centre = dodge_left ? -(float)T2_START_OFFSET_MM : (float)T2_START_OFFSET_MM;
+		float head = motion_yaw_deg() - start_yaw;
+		while (head >   180.0f) head -= 360.0f;
+		while (head <= -180.0f) head += 360.0f;
+		/* The parking turn squares the car to the start heading turned round
+		   (straight into the carpark), within T2_TILT_MAX_DEG of a 90. */
+		int sq = (int)floorf((turn_out ? 180.0f - head : 180.0f + head) + 0.5f);
+		if (sq > 90 + T2_TILT_MAX_DEG) sq = 90 + T2_TILT_MAX_DEG;
+		if (sq < 90 - T2_TILT_MAX_DEG) sq = 90 - T2_TILT_MAX_DEG;
+		final_turn_angle = sq;
+		/* How far across that turn carries the rear axle: R_out from dead
+		   across, less when the car is a few degrees off it (simulated, 3-6 deg
+		   off left it 2-4 cm short of the line). The straight before it covers
+		   the rest; across is how much of each mm of it goes sideways. */
+		const float p1     = head * d2r;
+		const float p2     = (turn_out ? head + (float)sq : head - (float)sq) * d2r;
+		const float turn_y = (float)R_out * (turn_out ? (cosf(p1) - cosf(p2)) : (cosf(p2) - cosf(p1)));
+		const float across = sinf(p1);
+		int32_t go = 0;
+		if (fabsf(across) > 0.5f) {
+			go = (int32_t)((centre - side - turn_y) / across);
+			if (go >  T2_ENC_PARK_MAX_MM) go =  T2_ENC_PARK_MAX_MM;
+			if (go < -T2_ENC_PARK_MAX_MM) go = -T2_ENC_PARK_MAX_MM;
+		}
+		snprintf(u, sizeof u, "[T2] encoder park: axle %+.0fmm, centre %+.0f, heading %+.1f, drive %ldmm, turn %d\r\n",
+		         (double)side, (double)centre, (double)head, (long)go, sq);
+		command_send(u);
+		if (go >= T2_DIRECT_MIN_MM || go <= -T2_DIRECT_MIN_MM) {
+			int32_t d = move_straight_measured(go);
 			accum_left += dodge_left_2 ? d : -d;
 		}
 	} else {
